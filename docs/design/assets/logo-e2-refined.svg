@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>PH.SwiftEdit logo E2 — refined outline triangle, reference feather</title>
+  <defs>
+    <linearGradient id="feather" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C4B5FD"/>
+      <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="#0B0614"/>
+  <path d="M56 96 H456 L256 460 Z" fill="none" stroke="#A78BFA" stroke-width="16" stroke-linejoin="round"/>
+  <g transform="translate(262 250) scale(0.74) translate(-300 -305)">
+    <path d="M282 470 L290 432 C322 402 330 330 326 262 C322 222 340 192 372 178 C350 148 300 126 265 160 C240 185 240 260 244 330 C246 368 254 400 268 420 L264 458 L260 472 Z" fill="url(#feather)"/>
+    <path d="M292 160 C294 250 294 350 290 432" fill="none" stroke="#0B0614" stroke-width="7" stroke-linecap="round"/>
+    <g fill="none" stroke="#0B0614" stroke-width="9" stroke-linecap="round">
+      <path d="M292 186 L262 174 M292 204 L260 192 M292 222 L258 210 M292 240 L258 228 M292 258 L258 246 M292 276 L258 264 M292 294 L259 282 M292 312 L261 300 M292 330 L262 318 M292 348 L264 336 M292 366 L268 354"/>
+      <path d="M292 204 L318 194 M292 222 L320 212 M292 240 L322 230 M292 258 L322 248 M292 276 L320 266 M292 294 L316 284 M292 312 L313 302 M292 330 L310 320"/>
+    </g>
+  </g>
+</svg>
