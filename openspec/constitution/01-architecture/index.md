@@ -11,6 +11,6 @@ owners: ["swift-macos-expert", "oop-architecture-expert"]
 
 | Micro-File | Rule IDs | Scope & Inspection Triggers |
 | :--- | :--- | :--- |
-| `module-topology.md` | `AR-001..AR-005` | 2-target SwiftPM (`SwiftEditCore`, `SwiftEditUI`), `.macOS(.v26)` Swift 6 baseline, `swiftlang/swift-markdown` ceiling |
-| `dependency-and-layering.md` | `AR-006..AR-010` | Inward dependency graph, pure `Foundation` `SwiftEditCore`, `Sendable` value types, `Rule of Three >= 3` |
-| `host-and-sagas.md` | `AR-011..AR-014` | `FileSystemProviding` & Swift `Clock` seams, `@MainActor` UI confinement, cooperative cancellation, typed errors |
+| `module-topology.md` | `AR-001..AR-005` | `SwiftEditCore` (`.macOS(.v26), .iOS(.v26)`), `SwiftEditUI` (`#if os`), Swift 6, `swift-markdown`, value types |
+| `dependency-and-layering.md` | `AR-006..AR-010` | Inward dependency graph, pure `Foundation` `SwiftEditCore`, `Sendable` seams, `Rule of Three >= 3`, `MainActor.assumeIsolated` |
+| `host-and-sagas.md` | `AR-011..AR-014` | Offline Markdown lint/format, `Cmd+D` & `(){}[]` engine, App Sandbox zero-network, `nbgv` `Info.plist` stamping |

@@ -11,6 +11,6 @@ owners: ["ddd-expert", "swift-macos-expert", "spec-sdlc-expert"]
 
 | Micro-File | Rule IDs | Scope & Inspection Triggers |
 | :--- | :--- | :--- |
-| `bounded-context-ownership.md` | `BC-001..BC-004` | 4 Bounded Contexts inside `SwiftEditCore`, `Core`/`Supporting`/`Generic` tiers, `DocumentSession` invariants |
-| `negative-ownership-and-refs.md` | `BC-005..BC-008` | Anti-IDE/LSP/DB negative ownership, immutable `(DocumentID, BufferRevision)` refs, `ACL`, Value Objects |
-| `ubiquitous-language-and-policy.md` | `BC-009..BC-012` | Ubiquitous Language glossary, `[NEEDS CLARIFICATION]` gate, `10 MiB`/`64 MiB` & regex/AST caps, typed `DomainError` |
+| `bounded-context-ownership.md` | `BC-001..BC-004` | `DocumentCore` (`Cmd+D`), `MarkdownLintAndFormat`, `SearchDiffAndBracketEngine`, `WorkspaceAndTabSession` |
+| `negative-ownership-and-refs.md` | `BC-005..BC-008` | Anti-IDE/LSP/DB negative ownership, immutable `(DocumentID, BufferRevision)` refs, `SessionRecovery` & binary exclusion |
+| `ubiquitous-language-and-policy.md` | `BC-009..BC-012` | Ubiquitous Language glossary, `[NEEDS CLARIFICATION]`, diff/lint/regex caps, `DomainError.binaryFileSaveForbidden` |

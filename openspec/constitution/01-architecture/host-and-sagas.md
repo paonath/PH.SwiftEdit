@@ -7,11 +7,11 @@ rules: ["AR-011", "AR-012", "AR-013", "AR-014"]
 # 01-architecture/host-and-sagas (AR-011..AR-014)
 
 ## Context
-- io_seams: `FileSystemProviding, PreferencesProviding`
-- clock_abstraction: `Swift Clock (ContinuousClock / TestClock)`
+- markdown_and_edit_engine: `Offline swift-markdown AST Lint/Format, Cmd+D Smart Duplication, (){}[] Bracket Balancing, Myers Diff`
+- version_stamping: `Nerdbank.GitVersioning (nbgv) from version.json into Info.plist`
 
 ## Rules
-- **AR-011**: The `SwiftEditCore` target SHALL isolate non-deterministic filesystem, preference, and time access behind narrow `Sendable` seams (`FileSystemProviding`, `PreferencesProviding`, and Swift `Clock`).
-- **AR-012**: The `SwiftEditUI` target SHALL confine all `AppKit` `NSTextView`, TextKit 2 layout, and `SwiftUI` view-state mutations to `@MainActor`, recovering unannotated main-thread AppKit overrides solely via `MainActor.assumeIsolated`.
-- **AR-013**: WHEN syntax tokenization, search evaluation, or Markdown AST parsing executes off `@MainActor`, the worker SHALL enforce cooperative `Task` cancellation deadlines against an injected Swift `Clock`.
-- **AR-014**: Diagnostic `os.Logger` adapters outside domain types SHALL mark dynamic interpolations `.private` by default without recording raw document buffers or `NSPasteboard` payloads.
+- **AR-011**: The `SwiftEditCore` Markdown engine SHALL execute CommonMark and GitHub Flavored Markdown parsing, AST linting, `Format Section`, and `Format Document` transformations 100% offline via `swiftlang/swift-markdown` without network access.
+- **AR-012**: The `SwiftEditCore` editing engine SHALL implement `Cmd+D` duplication (duplicating the current line when unselected or inserting selected text on a new line immediately after the cursor), live `(){}[]` bracket balancing, and Myers file diffing as pure deterministic functions.
+- **AR-013**: WHEN syntax tokenization, regex search, `(){}[]` bracket matching, Markdown lint/format, or Myers diffing executes off `@MainActor`, the worker SHALL enforce cooperative `Task` cancellation deadlines against an injected Swift `Clock`.
+- **AR-014**: The Xcode build pipeline SHALL stamp `CFBundleShortVersionString` and `CFBundleVersion` into `Info.plist` deterministically from `version.json` using Nerdbank.GitVersioning (`nbgv`) without dirtying tracked source files.

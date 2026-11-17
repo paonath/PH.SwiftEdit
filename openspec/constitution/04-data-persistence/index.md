@@ -5,11 +5,11 @@ status: "active"
 owners: ["swift-macos-expert", "cyber-security-expert"]
 ---
 
-# Atomic File Persistence & Preferences Mini-Index (`04-data-persistence/`)
+# Atomic File Persistence, SessionRecovery & Binary Guard Mini-Index (`04-data-persistence/`)
 
 ## Micro-Files
 
 | Micro-File | Rule IDs | Scope & Inspection Triggers |
 | :--- | :--- | :--- |
-| `storage-and-migrations.md` | `DATA-001..DATA-004` | Flat-file-only persistence (zero SQL/CoreData/SwiftData), `10 MiB`/`64 MiB` stat gate, BOM/CRLF round-trip fidelity |
-| `write-read-separation.md` | `DATA-005..DATA-008` | Explicit `Cmd+S` `.atomic` writes (`autosavesInPlace = false`), `NSFilePresenter` conflict safety, scoped bookmarks, `UserDefaults` |
+| `storage-and-migrations.md` | `DATA-001..DATA-004` | Flat-file-only persistence (zero SQL/ORM), `10 MiB`/`64 MiB` stat gate, `8 KiB` `0x00` binary save/tab ban, explicit `Cmd+S` |
+| `write-read-separation.md` | `DATA-005..DATA-008` | `SessionRecovery/` (`session-manifest.json` + unbacked snapshots), close unlink & startup orphan GC, scoped bookmarks, `UserDefaults` |
