@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "001-swifteditcore-document-and-binary-guard"
+    status: "draft"
+    date: "2026-11-17"
+    capabilities: ["document-core-and-spm-scaffold"]
+    path: "openspec/changes/001-swifteditcore-document-and-binary-guard"
+    summary: "Scaffold Swift 6 Package.swift (.macOS(.v26)/.iOS(.v26)) and DocumentCore (BOM/CRLF, Cmd+D, 8 KiB binary guard)."
   - id: "000-promote-design-and-app-icons-to-docs"
     status: "implemented"
     date: "2026-11-17"
