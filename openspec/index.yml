@@ -5,8 +5,8 @@ always_read:
   - "openspec/Constitution.md"
 specs:
   - id: "000-promote-design-and-app-icons-to-docs"
-    status: "draft"
+    status: "implemented"
     date: "2026-11-17"
     capabilities: ["design-assets-promotion"]
-    path: "openspec/changes/000-promote-design-and-app-icons-to-docs"
-    summary: "Promote Concept E2 brand icons, AppIcon sets, color schemes, and UI previews to docs/design/ with Swift verification."
+    path: "openspec/changes/archive/2026-11-17-000-promote-design-and-app-icons-to-docs"
+    summary: "Promote Concept E2 Brand Icons, AppIcon Sets, Color Schemes, and UI Previews to docs/design/"
