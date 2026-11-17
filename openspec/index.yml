@@ -3,4 +3,10 @@
 # Planning skills MUST always read documents in `always_read` and consult `specs` first.
 always_read:
   - "openspec/Constitution.md"
-specs: []
+specs:
+  - id: "000-promote-design-and-app-icons-to-docs"
+    status: "draft"
+    date: "2026-11-17"
+    capabilities: ["design-assets-promotion"]
+    path: "openspec/changes/000-promote-design-and-app-icons-to-docs"
+    summary: "Promote Concept E2 brand icons, AppIcon sets, color schemes, and UI previews to docs/design/ with Swift verification."
