@@ -71,3 +71,4 @@ specs/**/.env*
 
 tokensave/**
 reasoning/**
+.openspec/**
