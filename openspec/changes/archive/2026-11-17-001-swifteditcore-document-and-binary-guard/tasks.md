@@ -57,11 +57,11 @@
 ## 4. Unit: Convergence_DumpPackageJsonFitness
 <!-- Append-only convergence remediation for REQ-001 P1 & TEST-006 -->
 
-- [ ] 4.1 [RED] [CONVERGENCE: partial] TASK-006-RED: Write failing `Swift Testing` assertions in `Tests/SwiftEditTests/ArchitectureFitnessTests.swift` parsing `swift package dump-package` JSON (`platforms`, `dependencies`, and `SwiftEditCore` target dependencies) instead of plain-text `Package.swift` substring checks [Const: TEST-006 (06-testing-fitness/architecture-fitness-and-quality.md)]
+- [x] 4.1 [RED] [CONVERGENCE: partial] TASK-006-RED: Write failing `Swift Testing` assertions in `Tests/SwiftEditTests/ArchitectureFitnessTests.swift` parsing `swift package dump-package` JSON (`platforms`, `dependencies`, and `SwiftEditCore` target dependencies) instead of plain-text `Package.swift` substring checks [Const: TEST-006 (06-testing-fitness/architecture-fitness-and-quality.md)]
   - paths: [P1, N1]
-- [ ] 4.2 [GREEN] [CONVERGENCE: partial] TASK-006-GREEN: Implement `PackageManifestDumpValidator` in `Sources/SwiftEditCore/ArchitectureFitness/ArchitectureImportScanner.swift` decoding `swift package dump-package` JSON and validating `.macOS` `26.0`, `.iOS` `26.0`, allowlisted `swift-markdown`, and `SwiftEditCore` target isolation [Const: TEST-006 (06-testing-fitness/architecture-fitness-and-quality.md)]
+- [x] 4.2 [GREEN] [CONVERGENCE: partial] TASK-006-GREEN: Implement `PackageManifestDumpValidator` in `Sources/SwiftEditCore/ArchitectureFitness/ArchitectureImportScanner.swift` decoding `swift package dump-package` JSON and validating `.macOS` `26.0`, `.iOS` `26.0`, allowlisted `swift-markdown`, and `SwiftEditCore` target isolation [Const: TEST-006 (06-testing-fitness/architecture-fitness-and-quality.md)]
   - paths: [P1, N1]
-- [ ] 4.3 [REFACTOR] [CONVERGENCE: partial] TASK-006-REFACTOR: Consolidate `Codable` manifest dump models in `ArchitectureImportScanner` while keeping `swift test --parallel` green and coverage `>= 85%` [Const: AR-005 (01-architecture/module-topology.md)]
+- [x] 4.3 [REFACTOR] [CONVERGENCE: partial] TASK-006-REFACTOR: Consolidate `Codable` manifest dump models in `ArchitectureImportScanner` while keeping `swift test --parallel` green and coverage `>= 85%` [Const: AR-005 (01-architecture/module-topology.md)]
   - paths: [P1, N1]
-- [ ] 4.4 [DOC] TASK-006-DOC: Write concise English Swift Markup (`///`) documentation for `PackageManifestDumpValidator` and `Codable` dump-package DTOs
+- [x] 4.4 [DOC] TASK-006-DOC: Write concise English Swift Markup (`///`) documentation for `PackageManifestDumpValidator` and `Codable` dump-package DTOs
   - paths: [P1, N1]
