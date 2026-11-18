@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "006-core-cr-lineending-mru-batch-search-and-sidebar-fs"
+    status: "draft"
+    date: "2026-11-18"
+    capabilities: ["core-cr-lineending-mru-batch-search-and-sidebar-fs", "document-core-and-spm-scaffold"]
+    path: "openspec/changes/006-core-cr-lineending-mru-batch-search-and-sidebar-fs"
+    summary: "SwiftEditCore: CR LineEnding, cursor metrics, 10-entry MRU, shallow batch open, literal search, confined sidebar FS ops"
   - id: "005-constitution-v1-3-lineending-cr-and-workspace-handoff"
     status: "implemented"
     date: "2026-11-18"
