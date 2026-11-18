@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "005-constitution-v1-3-lineending-cr-and-workspace-handoff"
+    status: "draft"
+    date: "2026-11-18"
+    capabilities: ["constitution-v1-3-governance-and-fitness"]
+    path: "openspec/changes/005-constitution-v1-3-lineending-cr-and-workspace-handoff"
+    summary: "Sync Constitution.md v1.3.0 (UI-001, DATA-004, SEC-004) and add ConstitutionGovernanceValidator fitness tests"
   - id: "004-swifteditui-purple-zed-layout-textkit2-and-appicons"
     status: "implemented"
     date: "2026-11-18"
