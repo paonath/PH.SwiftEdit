@@ -35,12 +35,12 @@ struct XcodeAppShellAndPackagingFitnessTests {
         let repoInfoPlistVersions = try InfoPlistVersionStamper.readStampedVersions(from: Data(contentsOf: infoPlistURL))
         let stampedVersions = try InfoPlistVersionStamper.readStampedVersions(from: stampedPlistData)
 
-        // THEN all AppIcon slots exist, both entitlements have zero violations, and Info.plist matches version.json (0.0.1 / 0.0.1-alpha1)
+        // THEN all AppIcon slots exist, both entitlements have zero violations, and Info.plist matches version.json (0.0.1 / 0.0.1-alpha2)
         #expect(macIconsValid == true)
         #expect(iosIconsValid == true)
         #expect(macViolations.isEmpty)
         #expect(iosViolations.isEmpty)
-        #expect(versionDescriptor == VersionStampDescriptor(shortVersionString: "0.0.1", fullBuildVersionString: "0.0.1-alpha1"))
+        #expect(versionDescriptor == VersionStampDescriptor(shortVersionString: "0.0.1", fullBuildVersionString: "0.0.1-alpha2"))
         #expect(repoInfoPlistVersions == versionDescriptor)
         #expect(stampedVersions == versionDescriptor)
     }
@@ -50,7 +50,7 @@ struct XcodeAppShellAndPackagingFitnessTests {
         // GIVEN malformed version.json and malformed Info.plist data
         let missingVersionJSON = Data(#"{"cloudBuild":true}"#.utf8)
         let brokenPlist = Data("not-a-plist".utf8)
-        let validDescriptor = VersionStampDescriptor(shortVersionString: "0.0.1", fullBuildVersionString: "0.0.1-alpha1")
+        let validDescriptor = VersionStampDescriptor(shortVersionString: "0.0.1", fullBuildVersionString: "0.0.1-alpha2")
 
         // WHEN / THEN parsing or stamping fails closed with PackagingFitnessError
         #expect(throws: PackagingFitnessError.invalidVersionManifest) {
