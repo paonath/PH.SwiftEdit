@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - 2026-11-18 UTC
+Branch: feature/FirstStub | Commit: 6c45dd6
+
+### Added
+- Implemented `MarkdownLintAndFormatEngine` (`lint`, `formatDocument`, `formatSection`) using `swiftlang/swift-markdown` 100% offline in `SwiftEditCore` to detect `missingHeadingSpace`, `emptyLinkTarget`, `unsafeLinkScheme`, and `unbalancedFencedCodeBlock` and emit `TextEdit` batches preserving fenced code blocks (`openspec/specs/markdown-lint-format-bracket-and-diff/spec.md`, archived at `openspec/changes/archive/2026-11-18-002-markdown-lint-format-bracket-and-diff/`).
+- Added atomic `DocumentSession.applyTextEdits(_:expectedRevision:)` advancing `BufferRevision` once per batch (`DomainEvent.formatBatchApplied`) and rejecting stale revisions (`DomainError.staleBufferRevision`) or overlapping/out-of-bounds ranges (`DomainError.invalidTextRange`) without buffer mutation (`[BC-003]`, `[BC-004]`).
+- Implemented `SearchDiffAndBracketEngine.evaluateBrackets(in:caretLocation:)` for nested `()`, `{}`, and `[]` matching, active caret pair resolution, and unbalanced delimiter reporting, alongside `computeMyersDiff(lhs:rhs:clock:)` for stateless line-level Myers shortest-edit-script diffs (`DiffHunk`, `FileCompareDiffResult`) (`[AR-012]`, `[BC-006]`).
+
+### Security
+- Enforced Markdown link URI scheme allowlisting (`https`, `http`, `mailto`, relative/fragment paths) flagging `javascript:`, `file:`, and `data:` links as `.unsafeLinkScheme`, iterative `128`-level AST depth caps, and `250 ms` `ElapsedTimeProviding` cooperative deadlines returning `.degradedOrTimedOut` (`[AR-013]`, `[BC-011]`, `[SEC-004]`, `[SEC-012]`).
+- Enforced `4096` UTF-16 code-unit per-line caps in `evaluateBrackets`, `10 MiB` (`10_485_760` UTF-8 bytes) and `500 ms` cooperative deadlines in `computeMyersDiff`, and fail-closed binary/degraded snapshot rejection across both engines (`[BC-011]`, `[SEC-012]`).
+
 ## [Unreleased] - 2026-11-17 UTC
 Branch: feature/FirstStub | Commit: bca0e90
 

@@ -5,11 +5,11 @@ always_read:
   - "openspec/Constitution.md"
 specs:
   - id: "002-markdown-lint-format-bracket-and-diff"
-    status: "draft"
-    date: "2026-11-17"
+    status: "implemented"
+    date: "2026-11-18"
     capabilities: ["markdown-lint-format-bracket-and-diff"]
-    path: "openspec/changes/002-markdown-lint-format-bracket-and-diff"
-    summary: "Implement MarkdownLintAndFormat (swift-markdown AST) and SearchDiffAndBracketEngine (() {} [] and Myers diff)."
+    path: "openspec/changes/archive/2026-11-18-002-markdown-lint-format-bracket-and-diff"
+    summary: "Implement MarkdownLintAndFormat (swift-markdown AST) and SearchDiffAndBracketEngine (() {} [] & Myers Diff)"
   - id: "001-swifteditcore-document-and-binary-guard"
     status: "implemented"
     date: "2026-11-17"
