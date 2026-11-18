@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "004-swifteditui-purple-zed-layout-textkit2-and-appicons"
+    status: "draft"
+    date: "2026-11-18"
+    capabilities: ["swifteditui-purple-zed-layout-textkit2-and-appicons"]
+    path: "openspec/changes/004-swifteditui-purple-zed-layout-textkit2-and-appicons"
+    summary: "Build SwiftEditUI (Purple chrome, B/W TextKit 2 canvas, 50..300% zoom, diff view) and XcodeApp shell (AppIcon, nbgv)."
   - id: "003-notepadpp-tabs-session-recovery-and-dotfiles"
     status: "implemented"
     date: "2026-11-18"
