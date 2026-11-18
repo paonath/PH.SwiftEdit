@@ -98,6 +98,10 @@ public enum DomainError: Error, Equatable, Sendable {
     case unsupportedEncoding
     case invalidTextRange(TextRange)
     case staleBufferRevision(expected: BufferRevision, actual: BufferRevision)
+    case tabNotFound(DocumentID)
+    case pinnedTabCloseForbidden(DocumentID)
+    case sessionRecoveryQuotaExceeded(byteCount: UInt64)
+    case corruptedRecoveryManifest
     case securityScopeViolation(path: String)
     case ioFailure(String)
 }
