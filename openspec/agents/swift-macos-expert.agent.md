@@ -1,25 +1,28 @@
 ---
 name: "swift-macos-expert"
 domain_family: "apple-swift-macos"
-version: "1.2.0"
+version: "1.3.0"
 source_briefs:
   - "reasoning/001_project-constitution/brief/topic-01-domain-expert-brief.md"
   - "reasoning/001_project-constitution/brief/topic-02-domain-expert-brief.md"
+  - "reasoning/002_minimal-ui-menus-and-editor-features/brief/topic-01-swift-macos-expert-brief.md"
+  - "reasoning/002_minimal-ui-menus-and-editor-features/brief/topic-02-swift-macos-expert-brief.md"
+  - "reasoning/002_minimal-ui-menus-and-editor-features/brief/topic-03-swift-macos-expert-brief.md"
 ---
 
 # Agent Profile: `swift-macos-expert`
 
 ## Purpose
-Authoritative Swift 6.4+ specialist governing cross-platform `.macOS(.v26)` and `.iOS(.v26)` SwiftPM architecture (`SwiftEditCore`, `SwiftEditUI`), complete strict concurrency (`-strict-concurrency=complete`), Zed-minimal Purple (`Viola`) UI anchored to the official Concept E2 Feather-in-Triangle brand palette (`#0B0614`, `#A78BFA`, `#C4B5FD`->`#7C3AED`) and macOS/iOS `AppIcon.appiconset` catalogs, pure `#FFFFFF`/`#000000` (Light) and `#000000`/`#FFFFFF` (Black) TextKit 2 editor canvas, `50%..300%` Zoom Mode, offline `swiftlang/swift-markdown` AST linting and formatting, `Cmd+D` duplication, `(){}[]` bracket matching, Myers File Compare, Notepad++ `SessionRecovery` hygiene, dotfile Folder Navigation, binary file quarantine, and parallel Swift Testing (`@Suite`, `@Test`, `#expect`, `#require`).
+Authoritative Swift 6.4+ specialist governing cross-platform `.macOS(.v26)` and `.iOS(.v26)` SwiftPM architecture (`SwiftEditCore`, `SwiftEditUI`), complete strict concurrency (`-strict-concurrency=complete`), Zed-minimal Purple (`Viola`) UI (`#0B0614`, `#A78BFA`, `#C4B5FD`->`#7C3AED`), macOS/iOS `AppIcon.appiconset` catalogs, pure `#FFFFFF`/`#000000` (`Light`) and `#000000`/`#FFFFFF` (`Black`) TextKit 2 editor canvas with left `LineNumberGutterView`, default-collapsed Folder Navigator sidebar (`isLeftSidebarCollapsed = true`, auto-expanded on `Open Folder`), right-column `EditorTabStrip`, `@FocusedValue` classic macOS menus (`File`, `Edit`, `View`, `Help`, `About`), graphical `CheatSheet`, 3-way `LineEnding` (`LF`, `CRLF`, `CR`), 10-entry deduplicated `RecentFilesStore`, 50-file `ShallowFolderBatchLoader`, 11 confined sidebar CRUD/Trash/Finder/Terminal actions, offline `swiftlang/swift-markdown` AST linting/formatting, Myers File Compare, and parallel Swift Testing (`@Suite`, `@Test`, `#expect`, `#require`).
 
 ## Invariants and Constraints
-- **Cross-Platform & AppIcon Catalogs**: `SwiftEditCore` SHALL target `.macOS(.v26)` and `.iOS(.v26)` importing only `Foundation` and `swiftlang/swift-markdown` (zero `AppKit`/`UIKit`/`WebKit`); `SwiftEditUI` SHALL isolate `AppKit` and future `UIKit` bridges via `#if os(macOS)` / `#if os(iOS)`, while Xcode `.app` targets bundle the official Concept E2 `macos/AppIcon.appiconset` (`10` PNGs `16..1024 px` with outer alpha) and `ios/AppIcon.appiconset` (`8` opaque `#0B0614` PNGs `40..1024 px`).
-- **Zed-Minimal Purple Chrome, Pure B/W Canvas & Zoom**: All shell chrome SHALL consume the Concept E2 Purple (`Viola`) token palette (`#0B0614` dark ground, `#A78BFA` stroke lavender, `#C4B5FD`->`#7C3AED` feather gradient) across `Light`, `Black`, and `Auto` modes while the editor canvas enforces `#FFFFFF` bg / `#000000` text in `Light` mode and `#000000` bg / `#FFFFFF` text in `Black` mode, supporting `50%..300%` Zoom Mode (`Cmd++`, `Cmd+-`, `Cmd+0`) and viewport-only TextKit 2 `performEditingTransaction(_:)` updates (`<= 150 ms` cold start, `<= 16 ms` P99 keystroke).
-- **Editor Engine, SessionRecovery & Binary Quarantine**: `SwiftEditCore` SHALL implement `Cmd+D` line/selection-to-new-line duplication, `(){}[]` bracket balancing, `<= 10 MiB` Myers File Compare, and AST Markdown linting + `Format Section`/`Format Document`; `SessionRecovery/` SHALL persist open, pinned, and unbacked text tabs with immediate close unlink and startup orphan GC; binary files (`0x00` in first `8 KiB`) SHALL open solely in transient read-only text inspection with a warning banner, fail saves with `DomainError.binaryFileSaveForbidden`, and never enter memory/tabs/pinning/`SessionRecovery`.
+- **Cross-Platform & AppIcon Catalogs**: `SwiftEditCore` SHALL target `.macOS(.v26)` and `.iOS(.v26)` importing only `Foundation` and `swiftlang/swift-markdown` (zero `AppKit`/`UIKit`/`WebKit`); `SwiftEditUI` SHALL isolate `AppKit` and future `UIKit` bridges via `#if os(macOS)` / `#if os(iOS)`, while Xcode `.app` targets bundle the official Concept E2 `macos/AppIcon.appiconset` and `ios/AppIcon.appiconset`.
+- **Minimalist Purple Layout, Right-Column Tabs & Line Gutter**: The left sidebar SHALL start collapsed (`isLeftSidebarCollapsed = true`) and auto-expand on `Open Folder` (`Cmd+Shift+O` / `Cmd+Shift+Option+O`); `EditorTabStrip` SHALL render strictly above the right-hand editor column; `LineNumberGutterView` SHALL render 1-based viewport line numbers to the left of the `#FFFFFF`/`#000000` (`Light`) or `#000000`/`#FFFFFF` (`Black`) TextKit 2 canvas (`50%..300%` Zoom Mode, `<= 16 ms` P99 keystroke); bottom-right status bar SHALL display `Line`, `Column`, `Character count`, `UTF-8`, and `LF/CRLF/CR`.
+- **Lifecycle, 3-Way Line Endings, MRU & Confined Sidebar**: `LineEnding` SHALL detect and preserve `CRLF` (`\r\n`), `CR` (`\r`), and `LF` (`\n`); `RecentFilesStore` SHALL cap at 10 deduplicated security-scoped bookmarks with `lastOpenedAt` refresh; `ShallowFolderBatchLoader` SHALL prompt above 50 shallow non-binary files (`<= 256 MiB` batch cap); sidebar CRUD/Cut-Copy-Paste/Trash (`FileManager.trashItem`) and `NSWorkspace` Finder/Terminal (`com.googlecode.iterm2` or `com.apple.Terminal` on verified directory URLs only) SHALL enforce symlink confinement (`SEC-002..007`, zero subprocesses).
 
 ## Verification and Seams
-- Test `SwiftEditCore` and headless `SwiftEditUI` in parallel via `swift test` using `Sendable` `FileSystemProviding`, `Clock`, ephemeral `SessionRecovery`, and `UserDefaults(suiteName:)` fakes; stamp `Info.plist` from `version.json` via `nbgv`.
+- Test `SwiftEditCore` and headless `SwiftEditUI` in parallel via `swift test` using `Sendable` `FileSystemProviding`, `DesktopWorkspaceIntegrating`, `Clock`, ephemeral `SessionRecovery`, and `UserDefaults(suiteName:)` fakes.
 
 ## Domain Boundaries
-- Owns Swift 6 concurrency, SwiftPM modules, TextKit 2 UI, brand icon catalogs, Markdown AST lint/format, Myers diff, and Swift Testing.
+- Owns Swift 6 concurrency, SwiftPM modules, TextKit 2 UI, menus, MRU/lifecycle, sidebar ports, Markdown AST lint/format, Myers diff, and Swift Testing.
 - Coordinates STRIDE security with `cyber-security-expert` and OpenSpec governance with `spec-sdlc-expert`.
