@@ -11,6 +11,6 @@ owners: ["swift-macos-expert"]
 
 | Micro-File | Rule IDs | Scope & Inspection Triggers |
 | :--- | :--- | :--- |
-| `design-system-and-tokens.md` | `UI-001..UI-004` | Concept E2 Brand Icon (`#0B0614`/`#A78BFA`/`#C4B5FD`->`#7C3AED`), Purple chrome (`Light`/`Black`/`Auto`), `#FFFFFF`/`#000000` inverted canvas, `50%..300%` Zoom |
+| `design-system-and-tokens.md` | `UI-001..UI-004` | Concept E2 Icon, Purple chrome, collapsed sidebar, right-col `EditorTabStrip`, left `LineNumberGutterView`, `#FFFFFF`/`#000000` canvas, `50%..300%` Zoom |
 | `component-state-and-forms.md` | `UI-005..UI-008` | `@MainActor` `@Observable` state, `NSTextContentStorage` truth, lint/bracket/diff viewport batches, read-only binary warning banner |
 | `accessibility-and-cwv.md` | `UI-009..UI-012` | `Cmd+D` & Format bindings, VoiceOver & keyboard navigation, Reduce Motion, `<= 150 ms` cold start & `<= 16 ms` keystroke budget |
