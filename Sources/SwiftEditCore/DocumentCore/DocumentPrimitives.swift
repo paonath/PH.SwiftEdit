@@ -80,12 +80,24 @@ public struct TextRange: Hashable, Codable, Sendable {
     }
 }
 
+/// Single UTF-16 replacement span produced by `Format Document` or `Format Section` (`BC-004`).
+public struct TextEdit: Hashable, Codable, Sendable {
+    public let range: TextRange
+    public let replacement: String
+
+    public init(range: TextRange, replacement: String) {
+        self.range = range
+        self.replacement = replacement
+    }
+}
+
 /// Typed domain error contract enforced fail-closed across `SwiftEditCore` (`BC-012`, `DATA-002`, `DATA-003`, `SEC-012`).
 public enum DomainError: Error, Equatable, Sendable {
     case fileTooLarge(byteCount: UInt64)
     case binaryFileSaveForbidden
     case unsupportedEncoding
     case invalidTextRange(TextRange)
+    case staleBufferRevision(expected: BufferRevision, actual: BufferRevision)
     case securityScopeViolation(path: String)
     case ioFailure(String)
 }
@@ -94,6 +106,7 @@ public enum DomainError: Error, Equatable, Sendable {
 public enum DomainEvent: Equatable, Sendable {
     case textEdited(DocumentID, BufferRevision, TextRange)
     case commandDDuplicated(DocumentID, BufferRevision, TextRange)
+    case formatBatchApplied(DocumentID, BufferRevision, editCount: Int)
 }
 
 /// Immutable point-in-time projection of a `DocumentSession` consumed off `@MainActor` by lint, bracket, and diff engines (`BC-004`, `BC-006`).

@@ -114,6 +114,52 @@ public struct DocumentSession: Equatable, Sendable {
         return .commandDDuplicated(id, revision, insertedSelection)
     }
 
+    /// Applies a non-overlapping batch of `TextEdit` replacements atomically in a single `BufferRevision` transition (`BC-003`, `BC-004`).
+    /// - Throws: `DomainError.binaryFileSaveForbidden` on binary read-only buffers, `DomainError.staleBufferRevision` when `expectedRevision` differs from `revision`, or `DomainError.invalidTextRange` when any edit range is out of bounds or overlaps another edit.
+    @discardableResult
+    public mutating func applyTextEdits(_ edits: [TextEdit], expectedRevision: BufferRevision) throws -> DomainEvent {
+        try ensureEditable()
+        guard expectedRevision == revision else {
+            throw DomainError.staleBufferRevision(expected: expectedRevision, actual: revision)
+        }
+
+        for edit in edits {
+            _ = try resolveStringRange(for: edit.range)
+        }
+
+        let sortedEdits = edits.sorted { lhs, rhs in
+            if lhs.range.location != rhs.range.location {
+                return lhs.range.location < rhs.range.location
+            }
+            return lhs.range.length < rhs.range.length
+        }
+
+        if sortedEdits.count > 1 {
+            for index in 1..<sortedEdits.count {
+                let previous = sortedEdits[index - 1]
+                let current = sortedEdits[index]
+                let overlaps = current.range.location < previous.range.upperBound
+                    || (current.range.length == 0 && previous.range.length == 0 && current.range.location == previous.range.location)
+                if overlaps {
+                    throw DomainError.invalidTextRange(current.range)
+                }
+            }
+        }
+
+        var updatedText = text
+        for edit in sortedEdits.reversed() {
+            guard let swiftRange = Range(NSRange(location: edit.range.location, length: edit.range.length), in: updatedText) else {
+                throw DomainError.invalidTextRange(edit.range)
+            }
+            updatedText.replaceSubrange(swiftRange, with: edit.replacement)
+        }
+
+        text = updatedText
+        revision = revision.next()
+        isDirty = true
+        return .formatBatchApplied(id, revision, editCount: edits.count)
+    }
+
     private static func lineContentBounds(containingUTF16Offset offset: Int, in units: [UInt16]) -> (start: Int, end: Int) {
         var lineStart = offset
         while lineStart > 0 && units[lineStart - 1] != 0x0A && units[lineStart - 1] != 0x0D {
