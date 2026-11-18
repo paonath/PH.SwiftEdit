@@ -5,14 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-18 UTC
-Branch: feature/FirstStub | Commit: 6c45dd6
+Branch: feature/FirstStub | Commit: 56e5507
 
 ### Added
+- Implemented `WorkspaceTabSession` (`TabDescriptor`) in `SwiftEditCore` with Notepad++ pinned-first tab ordering, active tab fallback, and pinned-tab close protection (`DomainError.pinnedTabCloseForbidden`, `DomainError.tabNotFound`) (`openspec/specs/notepadpp-tabs-session-recovery-and-dotfiles/spec.md`, archived at `openspec/changes/archive/2026-11-18-003-notepadpp-tabs-session-recovery-and-dotfiles/`).
+- Implemented `SessionRecoveryStore` (`SessionRecoveryManifest`, `RecoveredDocumentSnapshot`) for atomic `session-manifest.json` and `<UUID>.recovery` persistence with immediate unlink on tab closure and deterministic startup orphan garbage collection (`[DATA-005]`, `[DATA-006]`).
+- Implemented `DotfileFolderNavigator` (`SecurityScopedResourceAccessing`, `FolderEntryDescriptor`) for shallow directory enumeration including hidden dotfiles (`.env`, `.gitignore`) sorted directories-first, alongside `EditorPreferencesStore` (`AppearanceMode`, `50%..300%` clamped zoom) on isolated `UserDefaults` suites (`[DATA-007]`, `[DATA-008]`).
 - Implemented `MarkdownLintAndFormatEngine` (`lint`, `formatDocument`, `formatSection`) using `swiftlang/swift-markdown` 100% offline in `SwiftEditCore` to detect `missingHeadingSpace`, `emptyLinkTarget`, `unsafeLinkScheme`, and `unbalancedFencedCodeBlock` and emit `TextEdit` batches preserving fenced code blocks (`openspec/specs/markdown-lint-format-bracket-and-diff/spec.md`, archived at `openspec/changes/archive/2026-11-18-002-markdown-lint-format-bracket-and-diff/`).
 - Added atomic `DocumentSession.applyTextEdits(_:expectedRevision:)` advancing `BufferRevision` once per batch (`DomainEvent.formatBatchApplied`) and rejecting stale revisions (`DomainError.staleBufferRevision`) or overlapping/out-of-bounds ranges (`DomainError.invalidTextRange`) without buffer mutation (`[BC-003]`, `[BC-004]`).
 - Implemented `SearchDiffAndBracketEngine.evaluateBrackets(in:caretLocation:)` for nested `()`, `{}`, and `[]` matching, active caret pair resolution, and unbalanced delimiter reporting, alongside `computeMyersDiff(lhs:rhs:clock:)` for stateless line-level Myers shortest-edit-script diffs (`DiffHunk`, `FileCompareDiffResult`) (`[AR-012]`, `[BC-006]`).
 
 ### Security
+- Enforced `0700`/`0600` POSIX permissions, iOS `FileProtectionType.complete`, `isExcludedFromBackup = true`, `64 MiB` (`67_108_864` bytes) aggregate quota (`DomainError.sessionRecoveryQuotaExceeded`), binary buffer non-retention (`DomainError.binaryFileSaveForbidden`), and symlink rejection across `WorkspaceTabSession` and `SessionRecoveryStore` (`[BC-008]`, `[DATA-003]`, `[SEC-007]`, `[SEC-011]`).
+- Enforced balanced `startAccessing`/`defer { stopAccessing }` security-scoped resource bracketing and `resolvingSymlinksInPath()` confinement (`DomainError.securityScopeViolation`, `CWE-22`) in `DotfileFolderNavigator` (`[SEC-002]`, `[SEC-003]`, `[SEC-012]`).
 - Enforced Markdown link URI scheme allowlisting (`https`, `http`, `mailto`, relative/fragment paths) flagging `javascript:`, `file:`, and `data:` links as `.unsafeLinkScheme`, iterative `128`-level AST depth caps, and `250 ms` `ElapsedTimeProviding` cooperative deadlines returning `.degradedOrTimedOut` (`[AR-013]`, `[BC-011]`, `[SEC-004]`, `[SEC-012]`).
 - Enforced `4096` UTF-16 code-unit per-line caps in `evaluateBrackets`, `10 MiB` (`10_485_760` UTF-8 bytes) and `500 ms` cooperative deadlines in `computeMyersDiff`, and fail-closed binary/degraded snapshot rejection across both engines (`[BC-011]`, `[SEC-012]`).
 

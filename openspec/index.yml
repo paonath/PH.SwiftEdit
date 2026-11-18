@@ -5,11 +5,11 @@ always_read:
   - "openspec/Constitution.md"
 specs:
   - id: "003-notepadpp-tabs-session-recovery-and-dotfiles"
-    status: "draft"
+    status: "implemented"
     date: "2026-11-18"
     capabilities: ["notepadpp-tabs-session-recovery-and-dotfiles"]
-    path: "openspec/changes/003-notepadpp-tabs-session-recovery-and-dotfiles"
-    summary: "Implement WorkspaceAndTabSession (Notepad++ tabs, SessionRecovery GC 0700/0600 <=64MiB, and Dotfile Navigator)."
+    path: "openspec/changes/archive/2026-11-18-003-notepadpp-tabs-session-recovery-and-dotfiles"
+    summary: "Implement WorkspaceAndTabSession (Notepad++ Pin, SessionRecovery GC, Dotfiles & EditorPreferences)"
   - id: "002-markdown-lint-format-bracket-and-diff"
     status: "implemented"
     date: "2026-11-18"
