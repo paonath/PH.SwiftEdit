@@ -1,12 +1,12 @@
 # Capability: ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions
 
 ## Purpose
-Defines the user-facing `SwiftEditUI` and `XcodeApp` contracts for `TASK-03`: the default-collapsed left sidebar with auto-expand on folder open, the `...` parent-folder up-navigation control under user permissions, the right-column `EditorTabStrip`, the left 1-based `LineNumberGutterView`, the bottom-right live `Line`/`Column`/`Character count`/`UTF-8`/`LF`/`CRLF`/`CR` status bar, `Find`/`Replace`/`Go to Line`, dirty close and quit confirmation, `@FocusedValue` classic macOS menus (`File`, `Edit`, `View`, `Help`, `About`), the graphical keyboard-shortcut `CheatSheet`, and the 11 confined sidebar file/folder and `Finder`/`Terminal`/`iTerm2` actions.
+Extends `REQ-001`, `REQ-004`, and `REQ-005` of `ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions` additively for percentage-only sidebar resizing (`12%..65%`) with manual `pin` collapse, sidebar zoom and disabled binary rows, hover-revealed top-bar commands beside a Concept E2 vector logo, `Help -> About PH.SwiftEdit` with MIT License link, tab left/right reordering, and interactive empty-area plus row right-click file/folder creation.
 
 ## Requirements
 
 ### Requirement: REQ-001 Default-Collapsed Sidebar Right-Column Tabs Left Line Gutter and Live Status Counter
-WHEN initializing a workspace window, opening a folder, or moving the caret, the workbench model and layout projection SHALL default `isLeftSidebarCollapsed` to `true`, auto-expand the sidebar when opening a folder, render `EditorTabStrip` strictly above the right editor column, project 1-based line numbers for `LineNumberGutterView`, and update live `Line`, `Column`, `Character count`, `UTF-8`, and `LF`/`CRLF`/`CR` status counters [DATA-004][UI-001][UI-002][UI-004][UI-005][UI-012].
+WHEN initializing a workspace, opening a folder, pinning or resizing the sidebar, or moving the caret, the workbench SHALL default `isLeftSidebarCollapsed` to `true`, auto-expand on folder open, support manual `pin` collapse with percentage-only width (`12%..65%`) and zoom scaling, disable clicks on binary entries, place `EditorTabStrip` above the editor, project 1-based line numbers, and update status counters [DATA-003][DATA-004][UI-001][UI-002][UI-004][UI-005][UI-012].
 
 #### Scenario: P1 Default-Collapsed Sidebar Auto-Expand on Folder Open Right-Column Tabs and 1-Based Line Gutter
 - **Path**: P1
@@ -21,6 +21,20 @@ WHEN initializing a workspace window, opening a folder, or moving the caret, the
 - **GIVEN** an empty document buffer `""` and an out-of-range caret offset `99`
 - **WHEN** `LineNumberGutterProjection.evaluate(text:caretLocation:)` and the workbench status metrics run
 - **THEN** the gutter projection returns `[1]` with active line `1` and the status metrics clamp the caret to line `1`, column `1`, `0` characters without throwing or mutating the buffer
+
+#### Scenario: P6 Percentage Sidebar Width Pin Collapse and Disabled Binary Sidebar Click
+- **Path**: P6
+- **Trait**: positive
+- **GIVEN** an open sidebar with `sidebarWidthRatio == 0.35`, container widths `1000pt` and `2000pt`, and a binary `FolderEntryDescriptor` (`isBinary == true`)
+- **WHEN** `SidebarLayoutGeometry` evaluates widths, `toggleSidebarPinCollapse()` runs, and `openFolderEntry` is invoked on the binary entry
+- **THEN** computed widths equal `350pt` and `700pt`, unpinning sets `isLeftSidebarCollapsed == true`, and clicking the binary entry opens no tab
+
+#### Scenario: N8 Out-of-Range Sidebar Width Ratio Clamps Into 12 to 65 Percent
+- **Path**: N8
+- **Trait**: negative
+- **GIVEN** candidate sidebar ratios `0.05` and `0.90`
+- **WHEN** `updateSidebarWidthRatio(_:)` runs
+- **THEN** `sidebarWidthRatio` clamps to `0.12` and `0.65` respectively
 
 ### Requirement: REQ-002 Left Sidebar Parent-Folder Dot-Dot-Dot Up-Navigation Within User Permissions
 WHEN the user activates the `...` parent-folder control in the left sidebar navigator, the workbench navigator SHALL ascend from the current folder to its parent directory whenever the current folder is not the filesystem root `"/"` and user permissions allow reading the parent directory within symlink-verified scope [BC-007][DATA-007][SEC-002][SEC-003][UI-001].
@@ -64,7 +78,7 @@ WHEN the user executes Find, Replace, Go to Line, switches line endings, reopens
 - **THEN** the dirty tab stays open with its text intact, application termination is canceled (`false`), and the `52` files are not opened until `confirmPendingBatchOpen()` is called
 
 ### Requirement: REQ-004 Classic FocusedValue Menus Graphical CheatSheet and Guarded About Dialog
-WHEN the user invokes menu commands, opens the Keyboard Shortcuts CheatSheet from the Help menu or toolbar button, or opens About PH.SwiftEdit, the UI command catalog SHALL expose all categorized keyboard shortcuts (`File`, `Edit`, `View`, `Navigation`, `Sidebar` including `...` parent navigation), display the `nbgv` bundle version, and validate the GitHub link through `InspectionSafetyBannerState.prepareExternalURIConfirmation` [AR-014][SEC-004][UI-008][UI-009][UI-010].
+WHEN rendering the top bar, invoking menu commands, or opening `Help -> About PH.SwiftEdit`, the UI shell SHALL show the Concept E2 vector logo beside `PH.SwiftEdit`, reveal middle command buttons only on top-bar hover while keeping Zoom and Light/Dark/Auto controls always visible, expose `About PH.SwiftEdit` in the `Help` menu, and validate both GitHub repository and MIT License links through `ExternalURIConfirmationPrompt` [AR-014][SEC-004][UI-001][UI-008][UI-009][UI-010][UI-011].
 
 #### Scenario: P4 Complete Keyboard Shortcuts CheatSheet Catalog and Validated About GitHub Link
 - **Path**: P4
@@ -80,8 +94,22 @@ WHEN the user invokes menu commands, opens the Keyboard Shortcuts CheatSheet fro
 - **WHEN** `AboutSheetDescriptor.prepareRepositoryLinkConfirmation(rawURI:)` evaluates each URI
 - **THEN** all three calls return `nil` and prevent external link opening
 
+#### Scenario: P7 Hover-Revealed Topbar Concept E2 Logo Help About Entry and Validated License Link
+- **Path**: P7
+- **Trait**: positive
+- **GIVEN** `SwiftEditWorkbenchModel`, `SwiftEditBrandLogoGeometry`, and `AboutSheetDescriptor.resolve(versionManifestData:)`
+- **WHEN** top-bar hover transitions `false -> true` and `AboutSheetDescriptor` prepares repository and license links
+- **THEN** middle command buttons stay hidden until hover while Logo, Zoom, and Theme remain always visible, and both `"https://github.com/paoloinnocenti/PH.SwiftEdit"` and `"https://github.com/paoloinnocenti/PH.SwiftEdit/blob/main/LICENSE"` produce valid HTTPS confirmation prompts
+
+#### Scenario: N9 Non-HTTPS License URI Is Rejected by ExternalLinkGuard
+- **Path**: N9
+- **Trait**: security
+- **GIVEN** tampered license URIs `"http://example.com/LICENSE"` and `"file:///etc/passwd"`
+- **WHEN** `AboutSheetDescriptor.prepareExternalLinkConfirmation(rawURI:)` evaluates each URI
+- **THEN** both calls return `nil`
+
 ### Requirement: REQ-005 Confined 11 Sidebar File/Folder Actions and Directory-Only Finder/Terminal/iTerm2 Handoff
-WHEN the user triggers any of the 11 sidebar actions, the workbench and desktop workspace adapter SHALL execute CRUD, Cut/Copy/Paste, and Trash within symlink-verified workspace scope, reconcile open tabs, and hand off verified directory-only URLs to `Finder`, `com.googlecode.iterm2` (when installed/default), or `com.apple.Terminal` via `NSWorkspace` with zero subprocesses [AR-003][AR-007][BC-012][SEC-002][SEC-003][SEC-004].
+WHEN triggering sidebar actions on an entry or empty background or reordering tabs, the workbench and desktop adapter SHALL execute prompted Create File/Folder, CRUD, Cut/Copy/Paste, and Trash inside symlink-verified scope, reorder tabs within pinned or unpinned partitions, and launch verified directory-only URLs in `Finder`, `com.googlecode.iterm2`, or `com.apple.Terminal` with zero subprocesses [AR-003][AR-007][BC-008][BC-012][SEC-002][SEC-003][SEC-004].
 
 #### Scenario: P5 Sidebar CRUD Cut/Copy/Paste Confirmed Trash Tab Sync and Directory-Only iTerm2/Terminal Resolution
 - **Path**: P5
@@ -103,3 +131,17 @@ WHEN the user triggers any of the 11 sidebar actions, the workbench and desktop 
 - **GIVEN** a workspace containing `"deploy.command"`, a symlink escaping the workspace scope, and an unallowlisted terminal bundle identifier `"com.evil.shell"`
 - **WHEN** `openInTerminal` is called on `"deploy.command"`, on the escaping symlink, and with `"com.evil.shell"`
 - **THEN** `"deploy.command"` is never passed as a file URL to the terminal (only its verified parent directory URL is eligible), while the escaping symlink and `"com.evil.shell"` both throw `DomainError.securityScopeViolation` with zero workspace launches
+
+#### Scenario: P8 Empty-Area Sidebar Create Target Resolution and Workbench Tab Reorder
+- **Path**: P8
+- **Trait**: positive
+- **GIVEN** a mounted workspace folder `"/tmp/ws"` with subfolder `"/tmp/ws/docs"`, file `"/tmp/ws/readme.md"`, and three open unpinned tabs `[A, B, C]`
+- **WHEN** `resolveSidebarCreationDirectory` evaluates `nil` (empty area), `"docs"`, and `"readme.md"`, creates `"draft.md"` in `"/tmp/ws"`, and runs `moveTabLeft(id: C)`
+- **THEN** creation targets resolve to `"/tmp/ws"`, `"/tmp/ws/docs"`, and `"/tmp/ws"` respectively, `"draft.md"` is created inside scope, and tabs reorder to `[A, C, B]`
+
+#### Scenario: N10 Traversal Name in Prompted Sidebar Create Fails Closed
+- **Path**: N10
+- **Trait**: security
+- **GIVEN** an interactive sidebar Create File or Create Folder name `"../outside.md"`
+- **WHEN** `sidebarCreateFile(named: "../outside.md", in:)` runs
+- **THEN** the operation fails closed with `DomainError.invalidItemName` and creates no file on disk

@@ -1,7 +1,7 @@
 # Capability: markdown-lint-format-bracket-and-diff
 
 ## Purpose
-Implements the offline `MarkdownLintAndFormat` (`swiftlang/swift-markdown` AST linting, `Format Document`, `Format Section`, and single-revision atomic `TextEdit` batch application) and `SearchDiffAndBracketEngine` (`(){}[]` bracket balancing and two-snapshot Myers File Compare diffing) bounded contexts with deterministic complexity and clock deadline guards.
+Extends `REQ-003` of `markdown-lint-format-bracket-and-diff` additively so every matched `BracketPairSpan` carries its 0-based `nestingDepth` and `BracketBalanceResult` exposes `enclosingPairs` for visual nested bracket highlighting while preserving the `4096` UTF-16 line-length and binary guards.
 
 ## Requirements
 
@@ -40,7 +40,7 @@ IF a `DocumentSnapshot` contains a link outside `https`, `http`, `mailto`, fragm
 - **THEN** dangerous links produce `.unsafeLinkScheme` diagnostics and depth, degraded, binary, or clock-exceeded inputs return `.degradedOrTimedOut` without mutating state
 
 ### Requirement: REQ-003 Deterministic Bracket Balancing and Line-Length Guard
-WHEN evaluating `()`, `{}`, and `[]` delimiters in a `DocumentSnapshot`, the bracket matching engine SHALL return matched `BracketPairSpan` pairs, identify the enclosing or adjacent pair at the caret offset, report unbalanced brackets, and refuse lines exceeding `4096` UTF-16 code units [AR-004][AR-012][BC-011][SEC-012][TEST-005].
+WHEN evaluating `()`, `{}`, and `[]` delimiters in a `DocumentSnapshot`, the bracket matching engine SHALL return matched `BracketPairSpan` pairs with 0-based `nestingDepth`, identify `activePair` and `enclosingPairs` at the caret offset, report unbalanced brackets, and refuse lines exceeding `4096` UTF-16 code units [AR-004][AR-012][BC-011][SEC-012][TEST-005].
 
 #### Scenario: P2 Nested Balanced Brackets and Active Caret Pair Resolution
 - **Path**: P2
@@ -62,6 +62,20 @@ WHEN evaluating `()`, `{}`, and `[]` delimiters in a `DocumentSnapshot`, the bra
 - **GIVEN** a `DocumentSnapshot` containing a single line of `4097` UTF-16 code units or `isBinaryReadOnly == true`
 - **WHEN** `SearchDiffAndBracketEngine.evaluateBrackets` inspects the snapshot
 - **THEN** the engine aborts full-line delimiter scanning and returns `.degradedOrTimedOut`
+
+#### Scenario: P4 Nested Depth Indexing Across Braces Brackets and Parentheses
+- **Path**: P4
+- **Trait**: positive
+- **GIVEN** a `DocumentSnapshot` containing `"scrivo{ho le graffe, le quadre[dentro le quadre ho le tonde(qua) e (pure qua)]}"` with caret inside `"(qua)"`
+- **WHEN** `SearchDiffAndBracketEngine.evaluateBrackets` inspects the snapshot
+- **THEN** `{}` has `nestingDepth == 0`, `[]` has `nestingDepth == 1`, both `()` pairs have `nestingDepth == 2`, and `enclosingPairs` contains the outer-to-inner chain `[{}, [], ()]`
+
+#### Scenario: N7 Unbalanced Deeply Nested Delimiters Retain Depth of Valid Pairs Without Overflow
+- **Path**: N7
+- **Trait**: negative
+- **GIVEN** a `DocumentSnapshot` containing `"{[ ( ] }"` with a stray unmatched `"("`
+- **WHEN** `SearchDiffAndBracketEngine.evaluateBrackets` inspects the snapshot
+- **THEN** unmatched delimiters are reported in `unbalancedBrackets` with exact UTF-16 offsets and matched pairs retain non-negative `nestingDepth`
 
 ### Requirement: REQ-004 Stateless Two-Snapshot Myers File Compare Diff with Resource Caps
 WHEN comparing two `DocumentSnapshot` values, the file compare diff engine SHALL compute line-level Myers `DiffHunk` sequences (`.unchanged`, `.inserted`, `.removed`) while returning a degraded or timed-out outcome if either input exceeds `10 MiB`, is binary read-only, or exceeds the `500` millisecond clock deadline [AR-004][AR-012][AR-013][BC-006][BC-011][SEC-012][TEST-005].

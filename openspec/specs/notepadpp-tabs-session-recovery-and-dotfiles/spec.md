@@ -1,12 +1,12 @@
 # Capability: notepadpp-tabs-session-recovery-and-dotfiles
 
 ## Purpose
-Implements the `WorkspaceAndTabSession` bounded context in `SwiftEditCore`: Notepad++ multi-tab management with tab pinning and binary exclusion (`WorkspaceTabSession`), crash-safe `SessionRecovery` manifest and draft persistence (`0700`/`0600` permissions, `isExcludedFromBackup`, `<= 64 MiB` quota, immediate close unlink, and startup orphan GC), shallow dotfile-inclusive folder navigation with balanced security-scoped resource lifecycle and symlink confinement (`DotfileFolderNavigator`), and schema-clamped `Light`/`Black`/`Auto` + `50%..300%` zoom preferences (`EditorPreferencesStore`).
+Extends `REQ-001` and `REQ-004` of `notepadpp-tabs-session-recovery-and-dotfiles` additively to support within-partition left/right tab reordering in `WorkspaceTabSession` and confined `8 KiB` binary classification (`isBinary`) in `DotfileFolderNavigator`.
 
 ## Requirements
 
 ### Requirement: REQ-001 Notepad++ Tab Ordering Pinning and Binary Tab Exclusion
-WHEN managing open document tabs, the workspace tab session SHALL order pinned text tabs ahead of unpinned text tabs, preserve active tab selection and caret offsets, block unforced closure of pinned tabs, and reject binary read-only snapshots from persistent tabs and pinning [AR-004][BC-006][BC-008][BC-012][DATA-003][SEC-011][SEC-012].
+WHEN managing open document tabs, the workspace tab session SHALL order pinned text tabs ahead of unpinned text tabs, support reordering tabs left or right within their pinned or unpinned partition, preserve active tab selection and caret offsets, block unforced closure of pinned tabs, and reject binary read-only snapshots from persistent tabs and pinning [AR-004][BC-006][BC-008][BC-012][DATA-003][SEC-011][SEC-012].
 
 #### Scenario: P1 Opening Activating Pinning and Reordering Text Tabs
 - **Path**: P1
@@ -28,6 +28,20 @@ WHEN managing open document tabs, the workspace tab session SHALL order pinned t
 - **GIVEN** a binary read-only `DocumentSnapshot` (`isBinaryReadOnly == true`)
 - **WHEN** `WorkspaceTabSession.openOrActivate(snapshot:title:fileURL:)` is called with the binary snapshot
 - **THEN** the call throws `DomainError.binaryFileSaveForbidden` and never records the binary document in `tabs`
+
+#### Scenario: P4 Reordering Tabs Left and Right Within Pinned and Unpinned Partitions
+- **Path**: P4
+- **Trait**: positive
+- **GIVEN** a `WorkspaceTabSession` holding pinned `[P1, P2]` and unpinned `[U1, U2, U3]`
+- **WHEN** `moveTabLeft(id: U3)` and `moveTabRight(id: P1)` execute
+- **THEN** `tabs` becomes `[P2, P1, U1, U3, U2]` preserving pinned-first ordering and `activeTabID`
+
+#### Scenario: N7 Cross-Partition Tab Move Clamps Within Partition and Unknown Tab Throws
+- **Path**: N7
+- **Trait**: negative
+- **GIVEN** a `WorkspaceTabSession` holding pinned `[P1]` and unpinned `[U1, U2]`
+- **WHEN** `moveTabRight(id: P1)` runs and `moveTabLeft(id: unknownID)` runs
+- **THEN** `P1` stays in the pinned partition and `unknownID` throws `DomainError.tabNotFound`
 
 ### Requirement: REQ-002 Atomic SessionRecovery Persistence Immediate Close Unlink and Startup Orphan GC
 WHEN persisting or restoring workspace recovery state, the session recovery store SHALL write `session-manifest.json` and dirty or unbacked text snapshots inside `SessionRecovery/` with `0700` directory and `0600` file permissions and backup exclusion, unlink snapshots immediately on tab close, and delete unreferenced orphan snapshot files at startup [BC-007][BC-008][DATA-001][DATA-005][DATA-006][SEC-007][SEC-011][TEST-005].
@@ -64,7 +78,7 @@ IF a recovery operation targets a binary read-only snapshot, exceeds the `64 MiB
 - **THEN** the store aborts before committing and throws `DomainError.binaryFileSaveForbidden`, `DomainError.sessionRecoveryQuotaExceeded`, or `DomainError.securityScopeViolation`
 
 ### Requirement: REQ-004 Shallow Dotfile Folder Navigation Security-Scope Lifecycle and Clamped Preferences
-WHEN listing a workspace directory or updating editor preferences, the folder navigator and preferences store SHALL return shallow directory entries including hidden dotfiles sorted directories-first within symlink-verified scope using balanced security-scoped resource calls and persist `Light`, `Black`, or `Auto` appearance and `50%..300%` clamped zoom in isolated `UserDefaults` [BC-007][DATA-007][DATA-008][SEC-002][SEC-003][TEST-003][TEST-005].
+WHEN listing a workspace directory or updating editor preferences, the folder navigator and preferences store SHALL return shallow directory entries including hidden dotfiles and `8 KiB`-probed `isBinary` flags sorted directories-first within symlink-verified scope using balanced security-scoped resource calls and persist `Light`, `Black`, or `Auto` appearance and `50%..300%` clamped zoom in isolated `UserDefaults` [BC-007][DATA-003][DATA-007][DATA-008][SEC-002][SEC-003][TEST-003][TEST-005].
 
 #### Scenario: P3 Shallow Dotfile Enumeration and Schema-Clamped Preferences Round-Trip
 - **Path**: P3
@@ -86,3 +100,17 @@ WHEN listing a workspace directory or updating editor preferences, the folder na
 - **GIVEN** a workspace directory containing a symbolic link pointing outside the granted workspace scope
 - **WHEN** `DotfileFolderNavigator.listEntries(in:withinScope:)` inspects the directory
 - **THEN** the call throws `DomainError.securityScopeViolation` and still executes `stopAccessing` in `defer` (`startCount == stopCount`)
+
+#### Scenario: P5 Shallow Listing Marks NUL-Bearing Binary Files While Keeping Directories and Text False
+- **Path**: P5
+- **Trait**: positive
+- **GIVEN** a granted directory containing subfolder `src`, UTF-8 `README.md`, and binary `image.png` containing `0x00` within its first `8 KiB`
+- **WHEN** `DotfileFolderNavigator.listEntries(in:withinScope:)` runs
+- **THEN** `image.png` reports `isBinary == true`, `README.md` and `src` report `isBinary == false`, and `startCount == stopCount`
+
+#### Scenario: N8 Escaping Symlink Target Is Rejected Prior to Binary Prefix Probing
+- **Path**: N8
+- **Trait**: security
+- **GIVEN** a granted directory containing a symbolic link pointing to an external binary file outside the workspace scope
+- **WHEN** `DotfileFolderNavigator.listEntries(in:withinScope:)` runs
+- **THEN** the call aborts with `DomainError.securityScopeViolation` before probing bytes and releases scope in `defer`

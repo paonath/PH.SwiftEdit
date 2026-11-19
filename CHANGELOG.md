@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-19 UTC
+Branch: feature/FirstStub | Commit: 6dbdc90
+
+### Added
+- Added `MarkdownSmartNewlineEngine` in `SwiftEditCore` and wired `NSTextViewDelegate` `insertNewline:` interception to continue Markdown unordered bullets (`-`, `*`, `+`), task checkboxes (`- [ ]`), incremented ordered lists (`N.`, `N)`), and blockquotes (`>`) while clearing empty list markers to exit lists and suppressing continuation inside fenced code blocks (`openspec/specs/editor-ux-highlighting-sidebar-pin-tabs-and-about/spec.md`, archived at `openspec/changes/archive/2026-11-19-008-editor-ux-highlighting-sidebar-pin-tabs-and-about/`).
+- Added linear `BacktickHighlightScanner` (`inlineCode` and `fencedMultiline` spans) and extended `BracketMatcher` (`BracketPairSpan.nestingDepth`, `BracketBalanceResult.enclosingPairs`) with non-mutating TextKit 2 visual highlighting in `SwiftEditNSTextView` for full-width current-line background (`#161224` Dark / `#F3F0FA` Light), nested depth-colored brackets, active pair emphasis, unbalanced bracket highlights, and inline/multiline backtick spans (`[AR-012]`, `[UI-002]`, `[UI-005]`).
+- Added `WorkspaceTabSession` partition-preserving tab reordering (`moveTab`, `moveTabLeft`, `moveTabRight`) wired to drag-and-drop and left/right controls in `EditorTabStrip` (`[BC-008]`).
+- Added pure SwiftUI vector `SwiftEditBrandLogoView` (Concept E2 `logo-e2-refined.svg`) beside `PH.SwiftEdit` in the top bar and large inside `AboutSheetView`, added `About PH.SwiftEdit` to the `Help` menu, and added the MIT License link (`AboutSheetDescriptor.officialLicenseURL`) alongside the GitHub repository link (`[AR-014]`, `[UI-001]`).
+- Added percentage-only `SidebarLayoutGeometry` (`12%..65%` of container width with draggable proportional divider across displays), manual sidebar `pin`/collapse control with left-edge reopen handle, sidebar typography zoom scaling (`EditorZoomController.sidebarScaledFontSizePoints`), disabled gray binary file entries (`FolderEntryDescriptor.isBinary`), and interactive right-click `New File…`/`New Folder…` name prompts on both sidebar entries and empty sidebar background (`[UI-001]`, `[UI-004]`).
+
+### Changed
+- Hid middle top-bar command buttons right of `PH.SwiftEdit` until mouse hover over the top bar area (honoring `Reduce Motion`) while keeping the Concept E2 logo, title, zoom controls, and appearance selector permanently visible (`[UI-001]`, `[UI-011]`).
+- Synchronized `XcodeApp/Info.plist` (`CFBundleVersion`) with `version.json` (`0.0.1-alpha3`) and updated `XcodeAppShellAndPackagingFitnessTests` to validate dynamically against `version.json` as the `nbgv` source of truth (`[AR-014]`).
+
+### Fixed
+- Replaced the clipped segmented theme `Picker` stuck on `Auto` with an always-visible 3-way `Light | Dark | Auto` pill selector and synchronized `.auto` dynamically with live macOS `@Environment(\.colorScheme)` instead of hardcoded `systemPrefersDark: true` (`[UI-003]`).
+
+### Security
+- Enforced symlink confinement prior to bounded `8 KiB` binary probing in `DotfileFolderNavigator.listEntries` (`CWE-22`, `CWE-400`, `[SEC-002]`, `[SEC-003]`), `4096` UTF-16 line caps and binary guards across `BacktickHighlightScanner`, `BracketMatcher`, and `MarkdownSmartNewlineEngine` (`[BC-011]`, `[SEC-012]`), single-segment `SidebarItemNameValidator` validation on interactive right-click creation prompts, and `https`-only host validation with explicit confirmation on both GitHub repository and MIT License links in `AboutSheetDescriptor` (`[SEC-004]`, `[UI-008]`).
+
+## [Unreleased] - 2026-11-19 UTC
 Branch: feature/FirstStub | Commit: ec1cac8
 
 ### Added

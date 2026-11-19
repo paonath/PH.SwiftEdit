@@ -1,12 +1,12 @@
 # Capability: swifteditui-purple-zed-layout-textkit2-and-appicons
 
 ## Purpose
-Extends `REQ-001` of `swifteditui-purple-zed-layout-textkit2-and-appicons` to align with Constitution `v1.3.0` (`UI-001`): the left Folder Navigator sidebar starts collapsed by default until a folder is opened, `EditorTabStrip` sits strictly above the right-hand editor column, `LineNumberGutterView` renders 1-based line numbers to the left of the `#FFFFFF`/`#000000` canvas, and the status bar exposes live `Line`, `Column`, `Character count`, `UTF-8`, and `LF`/`CRLF`/`CR`.
+Extends `REQ-001` and `REQ-003` of `swifteditui-purple-zed-layout-textkit2-and-appicons` additively to synchronize `Light`/`Dark`/`Auto` with live system appearance, define current-line, nested-bracket, backtick, and disabled-binary theme tokens, scale left sidebar typography with `50%..300%` zoom, and render non-mutating TextKit 2 visual highlights and Markdown smart newlines.
 
 ## Requirements
 
 ### Requirement: REQ-001 Concept E2 Purple Chrome Inverted B/W Canvas and 50..300 Percent Zoom
-WHEN resolving theme tokens, layout state, or zoom commands across `Light`, `Black`, and `Auto` modes, the theme and zoom controller SHALL expose the Concept E2 Purple palette (`#0B0614`, `#7C3AED`, `#A78BFA`, `#C4B5FD`), default the left sidebar to collapsed, place `EditorTabStrip` above the right editor column with a left 1-based `LineNumberGutterView`, invert the `#FFFFFF`/`#000000` canvas at `21:1` contrast, and scale zoom across `50%..300%` [UI-001][UI-002][UI-003][UI-004][UI-009].
+WHEN resolving theme tokens, layout state, or zoom commands across `Light`, `Black`, and `Auto` modes, the theme and zoom controller SHALL expose the Concept E2 Purple palette (`#0B0614`, `#7C3AED`, `#A78BFA`, `#C4B5FD`) plus current-line, nested-bracket, backtick, and disabled-binary tokens, invert the `#FFFFFF`/`#000000` canvas at `21:1` contrast, sync `.auto` to live system appearance, and scale both editor and sidebar zoom across `50%..300%` [UI-001][UI-002][UI-003][UI-004][UI-009].
 
 #### Scenario: P1 Purple Chrome Tokens Inverted B/W Canvas and Zoom Scaling
 - **Path**: P1
@@ -36,6 +36,20 @@ WHEN resolving theme tokens, layout state, or zoom commands across `Light`, `Bla
 - **WHEN** `zoomOut()` is called at `50%`, `zoomIn()` is called at `300%`, and `LineNumberGutterProjection.evaluate(text:caretLocation:)` evaluates `""`
 - **THEN** `zoomPercent` remains clamped at `50` and `300` respectively and the gutter projection returns `[1]`
 
+#### Scenario: P4 Highlight Tokens Live Auto Sync and Proportional Sidebar Zoom Scaling
+- **Path**: P4
+- **Trait**: positive
+- **GIVEN** `PurpleThemePalette` resolved for `.light`, `.black`, and `.auto` (with `systemPrefersDark: false` and `true`) and `EditorZoomController` at `150%`
+- **WHEN** highlight tokens and `sidebarScaledFontSizePoints` are evaluated
+- **THEN** current-line resolves `#161224` in Black and `#F3F0FA` in Light, disabled binary resolves `#9CA3AF` in Black and `#52525B` in Light, nested bracket depth colors and backtick tint tokens are populated, and `sidebarScaledFontSizePoints` equals `19.5`
+
+#### Scenario: N7 Sidebar Zoom Clamps at 50 and 300 Percent Boundaries
+- **Path**: N7
+- **Trait**: negative
+- **GIVEN** `EditorZoomController` clamped at `50%` and `300%`
+- **WHEN** `sidebarScaledFontSizePoints` is evaluated at both boundaries
+- **THEN** sidebar typography clamps cleanly at `6.5pt` and `39.0pt`
+
 ### Requirement: REQ-002 Binary Read-Only Lockout BiDi Trojan Source Badges and URI Gate
 IF a document snapshot is marked binary read-only, contains Unicode bidirectional control characters, or triggers an external URI handoff, THEN the safety banner evaluator SHALL disable mutating UI commands on binary buffers, emit inline BiDi control-character warnings, and require user confirmation on allowlisted `https`, `http`, or `mailto` URIs while blocking unsafe schemes [DATA-003][SEC-004][SEC-012][UI-008][UI-009].
 
@@ -54,7 +68,7 @@ IF a document snapshot is marked binary read-only, contains Unicode bidirectiona
 - **THEN** the binary snapshot sets `isBinaryReadOnlyBannerVisible == true` and `canSave == false` / `canFormat == false` / `canPinTab == false`, the BiDi snapshot reports exact UTF-16 offsets and scalar codes in `bidiWarnings`, and `javascript:` / `file:` links return `nil`
 
 ### Requirement: REQ-003 MainActor TextKit 2 Scoped Transactions Diff Coordinator and Inert Preview
-WHEN coordinating buffer edits, theme switches, Markdown previews, or Myers diffs on `@MainActor`, the workspace editor and diff coordinator SHALL keep live text in `NSTextContentStorage` with scoped `performEditingTransaction` updates, execute `Cmd+D` and formatting without reloading buffers on theme changes, project Side-by-Side diff rows, and render raw HTML in previews as inert plain text [AR-003][SEC-004][UI-003][UI-005][UI-006][UI-007][UI-009][UI-010][UI-011][UI-012].
+WHEN coordinating edits, theme switches, visual highlights, Markdown smart newlines, previews, or Myers diffs on `@MainActor`, the editor and diff coordinators SHALL keep live text in `NSTextContentStorage`, render current-line, nested bracket, and backtick highlights without mutating text, project Side-by-Side diff rows, and render raw HTML previews as inert plain text [AR-003][SEC-004][UI-003][UI-005][UI-006][UI-007][UI-009][UI-010][UI-011][UI-012].
 
 #### Scenario: P2 Scoped TextKit 2 Transactions Cmd+D Format Theme Switch and Side-by-Side Diff
 - **Path**: P2
@@ -76,6 +90,20 @@ WHEN coordinating buffer edits, theme switches, Markdown previews, or Myers diff
 - **GIVEN** a Markdown `DocumentSnapshot` containing `"# Heading\n\n<script>alert(1)</script>\n\n<iframe src=\"https://evil.example\"></iframe>"`
 - **WHEN** `WorkspaceEditorCoordinator.projectMarkdownPreview(from:)` builds preview blocks
 - **THEN** raw HTML nodes are marked `isInertPlainTextHTML == true` and preserved as literal plain text without script execution
+
+#### Scenario: P5 Non-Mutating Visual Highlight Projection for Current Line Nested Brackets and Backticks
+- **Path**: P5
+- **Trait**: positive
+- **GIVEN** a `@MainActor` `SwiftEditWorkbenchModel` holding `"scrivo{a[b(c)]} `code`"` with caret inside `"(c)"`
+- **WHEN** visual highlight state is projected for TextKit 2 rendering
+- **THEN** active line, depth-colored bracket spans, and backtick ranges are projected without incrementing `BufferRevision` or mutating `session.text`
+
+#### Scenario: N8 Binary Read-Only Buffer Suppresses Smart Newline and Visual Edit Mutation
+- **Path**: N8
+- **Trait**: negative
+- **GIVEN** a `@MainActor` `SwiftEditWorkbenchModel` holding a binary read-only snapshot
+- **WHEN** `handleSmartNewline(at:)` is invoked
+- **THEN** the call returns `false` and leaves the binary buffer unmodified
 
 ### Requirement: REQ-004 XcodeApp AppIcon Catalogs Sandbox Entitlements and nbgv Info.plist Stamping
 WHEN validating or stamping the `XcodeApp/` application shell, the packaging fitness validator SHALL verify the bundled Concept E2 macOS and iOS `AppIcon.appiconset` catalogs, enforce least-privilege App Sandbox `.entitlements` without network or `files.all` keys, and stamp `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist` deterministically from `version.json` [AR-001][AR-014][SEC-001][SEC-004][SEC-008][TEST-007][TEST-008][UI-001].
