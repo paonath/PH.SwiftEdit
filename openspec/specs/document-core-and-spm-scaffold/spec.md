@@ -1,7 +1,7 @@
 # Capability: document-core-and-spm-scaffold
 
 ## Purpose
-Establishes the cross-platform Swift 6 `Package.swift` topology (`SwiftEditCore`, `SwiftEditUI`, `SwiftEditTests` across `.macOS(.v26)` and `.iOS(.v26)`) and implements the `DocumentCore` Bounded Context governing lossless `UTF-8`/`UTF-16` BOM and `LF`/`CRLF` codecs, `10 MiB`/`64 MiB` size gates, `8 KiB` `0x00` binary quarantine (`DomainError.binaryFileSaveForbidden`), and deterministic `Cmd+D` line/selection duplication.
+Extends the `DocumentCore` lossless line-ending contract from `LF` and `CRLF` to the three-way set `LF`, `CRLF`, and Classic Mac `CR`, evaluating `\r\n` before bare `\r` so no document is misclassified or rewritten on save.
 
 ## Requirements
 
@@ -23,7 +23,7 @@ The Swift package manifest SHALL declare `.macOS(.v26)` and `.iOS(.v26)` platfor
 - **THEN** the scanner returns a non-empty list of architecture fitness violations identifying the forbidden import or package
 
 ### Requirement: REQ-002 Lossless Encoding BOM and Line-Ending Round-Trip with Size Gates
-WHEN loading or saving a text document through `FileSystemProviding`, the document codec and loader SHALL preserve `UTF-8`, `UTF-8 BOM`, `UTF-16LE BOM`, and `UTF-16BE BOM` encodings alongside `LF` and `CRLF` line endings while activating degraded plain-text mode above `10 MiB` and throwing `DomainError.fileTooLarge` above `64 MiB` [BC-007][BC-011][BC-012][DATA-002][DATA-004][TEST-005].
+WHEN loading or saving a text document through `FileSystemProviding`, the document codec and loader SHALL preserve `UTF-8`, `UTF-8 BOM`, `UTF-16LE BOM`, and `UTF-16BE BOM` encodings alongside `LF`, `CRLF`, and Classic Mac `CR` line endings, evaluating `\r\n` before bare `\r`, while activating degraded plain-text mode above `10 MiB` and throwing `DomainError.fileTooLarge` above `64 MiB` [BC-007][BC-011][BC-012][DATA-002][DATA-004][TEST-005].
 
 #### Scenario: P2 Lossless Encoding and Line-Ending Round-Trip Plus Degraded Mode Activation
 - **Path**: P2
@@ -38,6 +38,20 @@ WHEN loading or saving a text document through `FileSystemProviding`, the docume
 - **GIVEN** an inbound file whose size is `64 MiB + 1` byte (`67_108_865` bytes) or a byte buffer `[0xFF, 0xFE, 0xC3, 0x28]` with invalid UTF-8 bytes and no valid UTF-16 code unit sequence
 - **WHEN** `DocumentLoader` or `DocumentCodec` attempts to load or decode the input
 - **THEN** the `> 64 MiB` file fails pre-allocation with `DomainError.fileTooLarge` and the malformed byte buffer fails closed with `DomainError.unsupportedEncoding`
+
+#### Scenario: P1 Three-Way LF CRLF and CR Detection with Byte-Exact Round-Trip
+- **Path**: P1
+- **Trait**: positive
+- **GIVEN** three UTF-8 files in `InMemoryFileSystemFake` whose lines are separated by `\n`, `\r\n`, and `\r` respectively
+- **WHEN** `DocumentLoader` loads each file, applies one text edit, and saves it atomically
+- **THEN** the sessions report `LineEnding.lf`, `LineEnding.crlf`, and `LineEnding.cr`, and each saved byte buffer uses only its own separator without introducing either of the other two
+
+#### Scenario: N1 CRLF Is Never Misclassified as CR and Mixed Endings Resolve Deterministically
+- **Path**: N1
+- **Trait**: negative
+- **GIVEN** the texts `"x\r\ny\r\nz"` and `"a\nb\r\nc\rd"`
+- **WHEN** `LineEnding.detect(in:)` and `LineEnding.normalizeToLF(_:)` evaluate them using unicode-scalar scanning
+- **THEN** both texts are classified `LineEnding.crlf` rather than `LineEnding.cr`, and normalization yields `"x\ny\nz"` and `"a\nb\nc\nd"` without duplicated blank lines
 
 ### Requirement: REQ-003 Eight-Kilobyte NUL Binary Quarantine and Symlink Confinement
 IF an inbound file contains a `0x00` byte within its first `8 KiB` outside a valid `UTF-16` BOM stream or resolves via symbolic link outside the granted workspace scope, THEN the document loader SHALL quarantine binary files as read-only (`DomainError.binaryFileSaveForbidden` on save) and reject symlink escapes with `DomainError.securityScopeViolation` [BC-008][BC-012][DATA-003][SEC-003][SEC-011][SEC-012].

@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - 2026-11-19 UTC
+Branch: feature/FirstStub | Commit: f6f700a
+
+### Added
+- Extended `LineEnding` in `DocumentCore` with Classic Mac `CR` (`\r`) using Unicode scalar scanning (`crlf > cr > lf` precedence) for byte-exact `LF`/`CRLF`/`CR` round-trips (`openspec/specs/document-core-and-spm-scaffold/spec.md`, archived at `openspec/changes/archive/2026-11-19-006-core-cr-lineending-mru-batch-search-and-sidebar-fs/`).
+- Implemented `CursorMetricsCalculator` (`line`, UTF-16 `column`, Unicode scalar `characterCount`), `RecentFilesStore` (10-entry path-deduplicated MRU list with `SecurityScopedBookmarkCoding` and `clear()`), `ShallowFolderBatchLoader` (first-level regular non-binary files, `> 50` confirmation gate, `256 MiB` batch cap), `DocumentSearchEngine` (`find`, `replaceAll`, `goToLine` with literal-only matching), and `WorkspaceTabSession.applyRename`/`applyTrash` (`openspec/specs/core-cr-lineending-mru-batch-search-and-sidebar-fs/spec.md`).
+- Extended `FileSystemProviding` (`LocalFileSystemAdapter`, `InMemoryFileSystemFake`) with confined sidebar `createDirectory`, `createFile`, `renameItem`, `pasteItem` (`cut`/`copy` with non-overwriting `copy` / `copy N` suffixes), and `trashItem` via `ItemTrashing` (`FileManager.trashItem`).
+
+### Security
+- Enforced single-segment `SidebarItemNameValidator` checks (rejecting `.`, `..`, `/`, `:`, NUL/control bytes, BiDi overrides, and `> 255` UTF-8 bytes), `resolvingSymlinksInPath()` confinement, scope-root mutation refusal, symlink-free `1000`-item / `256 MiB` copy pre-scans, and Trash-only deletion detaching dirty tabs without losing unsaved edits (`[SEC-002]`, `[SEC-003]`, `[SEC-012]`).
+- Enforced `RecentFilesStore` binary-file exclusion, balanced `startAccessing`/`defer stopAccessing` bookmark resolution with path-parity checks and fail-closed `<= 1 MiB` decoding, `ShallowFolderBatchLoader` escaping-symlink abort, and `DocumentSearchEngine` `1024`-unit query / `100,000`-match caps (`[BC-011]`, `[SEC-011]`, `[SEC-012]`).
+
 ## [Unreleased] - 2026-11-18 UTC
 Branch: feature/FirstStub | Commit: a227d9a
 
