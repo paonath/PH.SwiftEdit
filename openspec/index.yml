@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "008-editor-ux-highlighting-sidebar-pin-tabs-and-about"
+    status: "draft"
+    date: "2026-11-19"
+    capabilities: ["editor-ux-highlighting-sidebar-pin-tabs-and-about", "markdown-lint-format-bracket-and-diff", "notepadpp-tabs-session-recovery-and-dotfiles", "swifteditui-purple-zed-layout-textkit2-and-appicons", "ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions"]
+    path: "openspec/changes/008-editor-ux-highlighting-sidebar-pin-tabs-and-about"
+    summary: "Light/Dark/Auto Fix, Markdown Auto-List, Line/Bracket/Backtick Highlight, %-Sidebar Pin/Zoom/Binary, Tab Reorder & About"
   - id: "007-ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions"
     status: "implemented"
     date: "2026-11-19"
