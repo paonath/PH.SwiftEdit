@@ -1,7 +1,7 @@
 # Capability: editor-ux-highlighting-sidebar-pin-tabs-and-about
 
 ## Purpose
-Defines the 13 cross-cutting `SwiftEditCore` and `SwiftEditUI` capabilities for `PH.SwiftEdit`: live 3-way `Light`/`Dark`/`Auto` appearance selection, Markdown smart Enter list continuation, subtle current-line background highlighting, nested depth-colored bracket highlighting, inline and multiline backtick highlighting, a percentage-resized `pin`-collapsible and zoom-scaled left sidebar with disabled binary entries and interactive right-click New File/Folder creation, left/right tab reordering, hover-revealed top-bar commands beside a Concept E2 vector logo, and a `Help -> About` dialog with large logo and validated repository and MIT License links.
+Extends `REQ-005` of `editor-ux-highlighting-sidebar-pin-tabs-and-about` additively to synchronize `NSApp.appearance` and `TextKit2EditorView` selection, caret, and scroller appearance across `Light`, `Dark`, and `Auto` switches using an unmasked macOS interface style detector that prevents `.auto` feedback loops and cold-start flashes.
 
 ## Requirements
 
@@ -88,7 +88,7 @@ WHEN enumerating shallow workspace entries for the left sidebar, the folder navi
 - **THEN** the call throws `DomainError.securityScopeViolation` before any `8 KiB` probe occurs and `startCount == stopCount`
 
 ### Requirement: REQ-005 Live Light Dark Auto Selector Current-Line Highlighting and Sidebar Zoom Scaling
-WHEN switching appearance modes, syncing system `colorScheme`, or adjusting zoom across `50%..300%`, the workbench and theme controller SHALL update `Light`, `Dark`, and `Auto` palettes dynamically, expose subtle current-line and nested-bracket/backtick tokens, and scale both editor and left sidebar typography proportionally [UI-001][UI-002][UI-003][UI-004][UI-005].
+WHEN switching appearance modes, syncing unmasked system appearance, or adjusting zoom across `50%..300%`, the workbench and theme controller SHALL update `Light`, `Dark`, and `Auto` semantic palettes, synchronize `NSApp.appearance` and `TextKit2EditorView` selection, caret, and scroller styling without reloading buffers or poisoning `systemPrefersDark`, and scale editor and left sidebar typography proportionally [UI-001][UI-002][UI-003][UI-004][UI-005].
 
 #### Scenario: P5 Three-Way Appearance Switch System Auto Sync Highlight Tokens and Sidebar Zoom
 - **Path**: P5
@@ -103,6 +103,20 @@ WHEN switching appearance modes, syncing system `colorScheme`, or adjusting zoom
 - **GIVEN** an `EditorZoomController` stepped below `50%` and above `300%`
 - **WHEN** `sidebarScaledFontSizePoints` and `scaledFontSizePoints` are read at both limits
 - **THEN** `zoomPercent` clamps at `50` (`6.5pt` sidebar) and `300` (`39.0pt` sidebar) without mutating open document text
+
+#### Scenario: P8 Unmasked System Appearance Detector Restores Light Mode After Forced Black Override
+- **Path**: P8
+- **Trait**: positive
+- **GIVEN** a `SwiftEditWorkbenchModel` initialized with `systemDarkDetector: { false }` in `.auto` mode
+- **WHEN** `appearanceMode` switches `.auto -> .black`, a forced dark container `colorScheme` signal arrives, and `appearanceMode` switches back to `.auto`
+- **THEN** initial Frame 0 mode is `.light`, `.black` resolves `.black`, and returning to `.auto` restores `.light` immediately
+
+#### Scenario: N11 Forced Light or Black Mode Ignores Tainted Container ColorScheme Signals
+- **Path**: N11
+- **Trait**: negative
+- **GIVEN** `SwiftEditWorkbenchModel` initialized with `systemDarkDetector: { true }` and switched explicitly to `.light`
+- **WHEN** SwiftUI emits a light container `colorScheme` change (`prefersDark: false`) while `appearanceMode == .light` and the user then switches to `.auto`
+- **THEN** `systemPrefersDark` remains `true` and `.auto` resolves `.black`
 
 ### Requirement: REQ-006 Percentage-Based Collapsible Pinned Sidebar Hover Topbar and Confined Right-Click Create
 WHEN laying out the left sidebar, hovering over the top bar, or right-clicking the sidebar to create a file or folder, the workbench SHALL size sidebar width strictly as a clamped percentage ratio (`0.12...0.65`) of container width, support manual pin/collapse, hide top-bar command buttons until hover while keeping Logo, Zoom, and Theme always visible, and validate prompted creation names inside scope [BC-012][SEC-003][SEC-012][UI-001][UI-005][UI-011].

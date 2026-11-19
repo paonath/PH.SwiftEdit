@@ -1,12 +1,12 @@
 # Capability: swifteditui-purple-zed-layout-textkit2-and-appicons
 
 ## Purpose
-Extends `REQ-001` and `REQ-003` of `swifteditui-purple-zed-layout-textkit2-and-appicons` additively to synchronize `Light`/`Dark`/`Auto` with live system appearance, define current-line, nested-bracket, backtick, and disabled-binary theme tokens, scale left sidebar typography with `50%..300%` zoom, and render non-mutating TextKit 2 visual highlights and Markdown smart newlines.
+Updates `REQ-001` and `REQ-002` of `swifteditui-purple-zed-layout-textkit2-and-appicons` so `PurpleThemePalette` replaces `public let brandGround` with contrast-verified role-specific semantic Light and Black tokens across all chrome, gutter, tab, sheet, and security-warning surfaces while preserving `21:1` `#FFFFFF`/`#000000` editor contrast and all binary quarantine and Trojan Source BiDi controls.
 
 ## Requirements
 
 ### Requirement: REQ-001 Concept E2 Purple Chrome Inverted B/W Canvas and 50..300 Percent Zoom
-WHEN resolving theme tokens, layout state, or zoom commands across `Light`, `Black`, and `Auto` modes, the theme and zoom controller SHALL expose the Concept E2 Purple palette (`#0B0614`, `#7C3AED`, `#A78BFA`, `#C4B5FD`) plus current-line, nested-bracket, backtick, and disabled-binary tokens, invert the `#FFFFFF`/`#000000` canvas at `21:1` contrast, sync `.auto` to live system appearance, and scale both editor and sidebar zoom across `50%..300%` [UI-001][UI-002][UI-003][UI-004][UI-009].
+WHEN resolving theme tokens, layout state, or zoom commands across `Light`, `Black`, and `Auto` modes, the theme and zoom controller SHALL expose role-specific Concept E2 Purple surface, foreground, accent, gutter, tab, sheet, highlight, and disabled-binary tokens without `brandGround`, invert the `#FFFFFF`/`#000000` canvas at `21:1` contrast, sync `.auto` to unmasked OS appearance, and scale editor and sidebar zoom across `50%..300%` [UI-001][UI-002][UI-003][UI-004][UI-009].
 
 #### Scenario: P1 Purple Chrome Tokens Inverted B/W Canvas and Zoom Scaling
 - **Path**: P1
@@ -50,8 +50,22 @@ WHEN resolving theme tokens, layout state, or zoom commands across `Light`, `Bla
 - **WHEN** `sidebarScaledFontSizePoints` is evaluated at both boundaries
 - **THEN** sidebar typography clamps cleanly at `6.5pt` and `39.0pt`
 
+#### Scenario: P6 Role-Specific Semantic Chrome Tokens Eliminate Light-Mode Dark-Ground Leakage
+- **Path**: P6
+- **Trait**: positive
+- **GIVEN** `PurpleThemePalette` resolved in `.light` and `.black` modes
+- **WHEN** `topBarSurface`, `sheetSurface`, `sidebarSurface`, `tabBarSurface`, `gutterSurface`, `statusBarSurface`, `secondaryForeground`, and `nestedBracketPalette` are inspected
+- **THEN** `.light` resolves `#F3E8FF`, `#F3E8FF`, `#EDE0FF`, `#E9D5FF`, `#F5F3FF`, `#7C3AED`, and `#5B21B6` with every `.light` nested bracket color achieving at least `4.5:1` contrast on `#FFFFFF`, while `.black` resolves `#0B0614`, `#0B0614`, `#140A24`, `#180C2C`, `#0B0614`, `#2E1065`, and `#C4B5FD`
+
+#### Scenario: N9 Unbalanced Bracket Pill Satisfies WCAG 2.2 AA Contrast in Both Modes
+- **Path**: N9
+- **Trait**: negative
+- **GIVEN** `PurpleThemePalette` resolved in `.light` and `.black` modes
+- **WHEN** `unbalancedBracketHighlight` is compared against `unbalancedBracketBackground`
+- **THEN** `contrastRatio` is at least `4.5` in both `.light` (`#991B1B` on `#FEE2E2`) and `.black` (`#FCA5A5` on `#450A0A`)
+
 ### Requirement: REQ-002 Binary Read-Only Lockout BiDi Trojan Source Badges and URI Gate
-IF a document snapshot is marked binary read-only, contains Unicode bidirectional control characters, or triggers an external URI handoff, THEN the safety banner evaluator SHALL disable mutating UI commands on binary buffers, emit inline BiDi control-character warnings, and require user confirmation on allowlisted `https`, `http`, or `mailto` URIs while blocking unsafe schemes [DATA-003][SEC-004][SEC-012][UI-008][UI-009].
+IF a document snapshot is binary read-only, contains Unicode BiDi control characters, or triggers an external URI handoff, THEN `InspectionSafetyBannerState` and `PurpleThemePalette` SHALL disable mutating commands on binary buffers, emit BiDi, Binary Quarantine, and Inert HTML `RGBAColorToken` triples at `>= 4.5:1` text and `>= 3.0:1` border contrast across `.light` and `.black`, and require confirmation on allowlisted `https`/`http`/`mailto` URIs [DATA-003][SEC-004][SEC-012][UI-008][UI-009].
 
 #### Scenario: P1 Clean Text Snapshot and Confirmed HTTPS Link
 - **Path**: P1
@@ -66,6 +80,13 @@ IF a document snapshot is marked binary read-only, contains Unicode bidirectiona
 - **GIVEN** a binary read-only `DocumentSnapshot`, a text snapshot containing `U+202E` (`RLO`) and `U+2066` (`LRI`), and links `"javascript:alert(1)"` and `"file:///etc/passwd"`
 - **WHEN** `InspectionSafetyBannerState.evaluate(snapshot:)` and `prepareExternalURIConfirmation(rawURI:)` evaluate the inputs
 - **THEN** the binary snapshot sets `isBinaryReadOnlyBannerVisible == true` and `canSave == false` / `canFormat == false` / `canPinTab == false`, the BiDi snapshot reports exact UTF-16 offsets and scalar codes in `bidiWarnings`, and `javascript:` / `file:` links return `nil`
+
+#### Scenario: N10 Security Banner Foreground and Border Tokens Pass Contrast Thresholds in Light and Black Modes
+- **Path**: N10
+- **Trait**: security
+- **GIVEN** `PurpleThemePalette` resolved in `.light` and `.black` modes
+- **WHEN** BiDi warning, Binary Quarantine warning, and Inert Raw HTML foreground, background, and border tokens are evaluated
+- **THEN** each foreground-to-background ratio is at least `4.5` and each border-to-`chromeSurface` ratio is at least `3.0`
 
 ### Requirement: REQ-003 MainActor TextKit 2 Scoped Transactions Diff Coordinator and Inert Preview
 WHEN coordinating edits, theme switches, visual highlights, Markdown smart newlines, previews, or Myers diffs on `@MainActor`, the editor and diff coordinators SHALL keep live text in `NSTextContentStorage`, render current-line, nested bracket, and backtick highlights without mutating text, project Side-by-Side diff rows, and render raw HTML previews as inert plain text [AR-003][SEC-004][UI-003][UI-005][UI-006][UI-007][UI-009][UI-010][UI-011][UI-012].

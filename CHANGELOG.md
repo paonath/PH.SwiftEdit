@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-19 UTC
+Branch: feature/FirstStub | Commit: c4340b5
+
+### Added
+- Added exhaustive semantic Light/Black/Auto role tokens (`topBarSurface`, `sheetSurface`, `sidebarSurface`, `tabBarSurface`, `tabActiveSurface`, `pinnedTabBadge`, `findBarSurface`, `submenuTranslucentSurface` with `1.0` alpha clamping under `reduceTransparency`/`increasedContrast`, `gutterSurface`, `gutterForeground`, `gutterActiveForeground`, `statusBarSurface`, `statusBarForeground`, `secondaryForeground`, `chromeAccent`, `activeControlFill`, `activeControlForeground`, `badgeSurface`, `hairlineBorder`, `selectionBackground`, `diffInsertedBackground`, `diffRemovedBackground`) and centralized `RGBAColorToken.swiftUIColor` / `nsColor` bridges in `PurpleThemeAndZoom.swift` (`openspec/specs/full-app-semantic-theming-and-window-sync/spec.md`, archived at `openspec/changes/archive/2026-11-19-009-full-app-semantic-theming-and-window-sync/`).
+- Added `#if os(macOS)` `@MainActor` `MacOSAppearanceSynchronizer` (`NSApp.appearance` `.aqua`/`.darkAqua`/`nil` synchronization), injectable `systemDarkDetector` reading unmasked `AppleInterfaceStyle` + `DistributedNotificationCenter` `"AppleInterfaceThemeChangedNotification"`, and `O(viewport)` `TextKit2EditorView` scroller/selection/caret live restyling without incrementing `BufferRevision` (`[AR-003]`, `[BC-006]`, `[UI-003]`, `[UI-007]`, `[UI-012]`).
+- Added static UI theme token fitness scanner `ArchitectureImportScanner.scanSwiftEditUIThemeTokens` and `scanSwiftEditUIViewsDirectory` in `SwiftEditCore` (`[AR-006]`, `[TEST-006]`).
+- Added `Scripts/stamp-info-plist.sh`, Xcode `PBXShellScriptBuildPhase`, and `InfoPlistVersionStamper.synchronizeInfoPlistIfNeeded` so `XcodeApp/Info.plist` (`CFBundleShortVersionString` / `CFBundleVersion`) always stays synchronized with `version.json` during both builds and tests (`[AR-014]`, `[TEST-008]`).
+
+### Changed
+- Removed `public let brandGround` from `PurpleThemePalette` (preserving `#0B0614` in `SwiftEditBrandLogoGeometry.groundHex` and `.black` surfaces) and migrated all 12 workspace, gutter, find-bar, preview, diff, status-bar, banner, and modal sheet views to semantic `PurpleThemePalette` tokens (`[UI-001]`, `[UI-002]`, `[UI-009]`).
+
+### Fixed
+- Fixed Light-mode `1.10:1` dark-ground leaks across `AboutSheetView`, `KeyboardShortcutsCheatSheetView`, `FindReplaceGoToLineBar`, `LineNumberGutterView`, `toolbarBar`, `sidebarView`, `collapsedSidebarEdgeHandle`, and `statusBar`, and darkened Light-mode `nestedBracketPalette` colors to `>= 4.5:1` on `#FFFFFF` (`[UI-001]`, `[UI-009]`).
+- Guarded `SwiftEditRootView.onChange(of: systemColorScheme)` behind `appearanceMode == .auto` so forced Light/Black `.preferredColorScheme` overrides cannot poison subsequent `.auto` restoration (`[UI-003]`).
+
+### Security
+- Enforced explicit `RGBAColorToken` foreground/background/border triples verified at `>= 4.5:1` text and `>= 3.0:1` border contrast for Trojan Source BiDi warnings (`CVE-2021-42574`), Binary Quarantine banners (`DATA-003`), Unbalanced Brackets (`#991B1B`/`#FEE2E2` Light, `#FCA5A5`/`#450A0A` Black), and Inert Raw HTML preview blocks (`CWE-451`, `[SEC-004]`, `[SEC-009]`, `[UI-008]`), alongside fail-closed static view token auditing (`scanSwiftEditUIThemeTokens`).
+
+## [Unreleased] - 2026-11-19 UTC
 Branch: feature/FirstStub | Commit: 6dbdc90
 
 ### Added
