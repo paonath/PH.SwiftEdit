@@ -54,8 +54,30 @@ public struct PurpleThemePalette: Equatable, Sendable {
     public let chromeForeground: RGBAColorToken
     public let editorCanvasBackground: RGBAColorToken
     public let editorCanvasText: RGBAColorToken
+    /// Subtle full-width current-line highlight (`#F3F0FA` in Light, `#161224` slightly lighter than `#000000` in Black) (`UI-002`).
+    public let currentLineHighlight: RGBAColorToken
+    /// High-contrast nested bracket pair colors indexed modulo `nestingDepth` (`AR-012`, `UI-002`).
+    public let nestedBracketPalette: [RGBAColorToken]
+    /// Background highlight pill applied behind the active caret bracket pair (`UI-002`).
+    public let activeBracketHighlight: RGBAColorToken
+    /// Error foreground color applied to unbalanced bracket delimiters (`UI-002`).
+    public let unbalancedBracketHighlight: RGBAColorToken
+    /// Subtle background tint for inline backtick code spans (`` `...` ``) (`UI-002`).
+    public let backtickInlineBackground: RGBAColorToken
+    /// Subtle background tint for multiline fenced code blocks (`` ```...``` ``) (`UI-002`).
+    public let backtickMultilineBackground: RGBAColorToken
+    /// Accent foreground color applied to inline and fenced backtick code spans (`UI-002`).
+    public let backtickForeground: RGBAColorToken
+    /// Muted disabled foreground for binary files in the left sidebar (`#52525B` dark gray in Light, `#9CA3AF` light gray in Black) (`DATA-003`, `UI-008`).
+    public let sidebarBinaryDisabledText: RGBAColorToken
 
-    /// Resolves Concept E2 Purple chrome tokens and pure `#FFFFFF`/`#000000` inverted editor canvas tokens for `appearance`.
+    /// Returns the deterministic depth-indexed color for a matched nested bracket pair (`AR-012`).
+    public func nestedBracketColor(forDepth depth: Int) -> RGBAColorToken {
+        guard !nestedBracketPalette.isEmpty else { return primaryAccent }
+        return nestedBracketPalette[max(0, depth) % nestedBracketPalette.count]
+    }
+
+    /// Resolves Concept E2 Purple chrome tokens, pure `#FFFFFF`/`#000000` inverted editor canvas tokens, and visual highlight tokens for `appearance`.
     public static func resolve(
         appearance: AppearanceMode,
         systemPrefersDark: Bool = true
@@ -83,7 +105,20 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 chromeSurface: RGBAColorToken(hex: "#F5F3FF"),
                 chromeForeground: RGBAColorToken(hex: "#1E1035"),
                 editorCanvasBackground: RGBAColorToken(hex: "#FFFFFF"),
-                editorCanvasText: RGBAColorToken(hex: "#000000")
+                editorCanvasText: RGBAColorToken(hex: "#000000"),
+                currentLineHighlight: RGBAColorToken(hex: "#F3F0FA"),
+                nestedBracketPalette: [
+                    RGBAColorToken(hex: "#7C3AED"),
+                    RGBAColorToken(hex: "#0284C7"),
+                    RGBAColorToken(hex: "#059669"),
+                    RGBAColorToken(hex: "#D97706"),
+                ],
+                activeBracketHighlight: RGBAColorToken(hex: "#DDD6FE"),
+                unbalancedBracketHighlight: RGBAColorToken(hex: "#DC2626"),
+                backtickInlineBackground: RGBAColorToken(hex: "#EDE9FE"),
+                backtickMultilineBackground: RGBAColorToken(hex: "#F5F3FF"),
+                backtickForeground: RGBAColorToken(hex: "#6D28D9"),
+                sidebarBinaryDisabledText: RGBAColorToken(hex: "#52525B")
             )
         case .black:
             return PurpleThemePalette(
@@ -95,13 +130,26 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 chromeSurface: brandGround,
                 chromeForeground: RGBAColorToken(hex: "#EDE9FE"),
                 editorCanvasBackground: RGBAColorToken(hex: "#000000"),
-                editorCanvasText: RGBAColorToken(hex: "#FFFFFF")
+                editorCanvasText: RGBAColorToken(hex: "#FFFFFF"),
+                currentLineHighlight: RGBAColorToken(hex: "#161224"),
+                nestedBracketPalette: [
+                    RGBAColorToken(hex: "#C4B5FD"),
+                    RGBAColorToken(hex: "#38BDF8"),
+                    RGBAColorToken(hex: "#34D399"),
+                    RGBAColorToken(hex: "#FBBF24"),
+                ],
+                activeBracketHighlight: RGBAColorToken(hex: "#3B1E6E"),
+                unbalancedBracketHighlight: RGBAColorToken(hex: "#F87171"),
+                backtickInlineBackground: RGBAColorToken(hex: "#1F1733"),
+                backtickMultilineBackground: RGBAColorToken(hex: "#140F24"),
+                backtickForeground: RGBAColorToken(hex: "#DDD6FE"),
+                sidebarBinaryDisabledText: RGBAColorToken(hex: "#9CA3AF")
             )
         }
     }
 }
 
-/// Stateless value-type controller scaling editor monospaced font size across `50%..300%` (`Cmd++`, `Cmd+-`, `Cmd+0`, pinch, pane focus) without mutating document text (`UI-004`).
+/// Stateless value-type controller scaling editor and left sidebar font sizes across `50%..300%` (`Cmd++`, `Cmd+-`, `Cmd+0`, pinch, pane focus) without mutating document text (`UI-004`).
 public struct EditorZoomController: Equatable, Sendable {
     public static let minZoomPercent: Int = EditorPreferences.minZoomPercent
     public static let maxZoomPercent: Int = EditorPreferences.maxZoomPercent
@@ -110,21 +158,34 @@ public struct EditorZoomController: Equatable, Sendable {
 
     public private(set) var zoomPercent: Int
     public let baseFontSizePoints: Double
+    public let baseSidebarFontSizePoints: Double
     public private(set) var isPaneFocusZoomed: Bool
 
     public init(
         zoomPercent: Int = EditorZoomController.defaultZoomPercent,
         baseFontSizePoints: Double = 14.0,
+        baseSidebarFontSizePoints: Double = 13.0,
         isPaneFocusZoomed: Bool = false
     ) {
         self.zoomPercent = EditorPreferences.clampZoom(zoomPercent)
         self.baseFontSizePoints = max(1.0, baseFontSizePoints)
+        self.baseSidebarFontSizePoints = max(1.0, baseSidebarFontSizePoints)
         self.isPaneFocusZoomed = isPaneFocusZoomed
     }
 
-    /// Effective monospaced font point size computed from `baseFontSizePoints * (zoomPercent / 100)`.
+    /// Linear scale multiplier (`0.5...3.0`) derived from `zoomPercent`.
+    public var zoomScaleFactor: Double {
+        Double(zoomPercent) / 100.0
+    }
+
+    /// Effective editor monospaced font point size computed from `baseFontSizePoints * (zoomPercent / 100)`.
     public var scaledFontSizePoints: Double {
-        baseFontSizePoints * (Double(zoomPercent) / 100.0)
+        baseFontSizePoints * zoomScaleFactor
+    }
+
+    /// Effective left sidebar font point size scaled proportionally with `zoomPercent` (`50%..300%`) (`UI-004`).
+    public var sidebarScaledFontSizePoints: Double {
+        baseSidebarFontSizePoints * zoomScaleFactor
     }
 
     /// Executes `Cmd++` (`+10%`), clamped at `300%`.

@@ -16,19 +16,79 @@ private extension RGBAColorToken {
     }
 }
 
-/// `@MainActor` TextKit 2 `NSTextView` wrapper enforcing `#FFFFFF`/`#000000` inverted canvas colors, `50%..300%` monospaced zoom, and read-only binary protection (`UI-002..008`, `UI-012`).
+/// Custom TextKit 2 `NSTextView` painting a full-width subtle current-line background highlight (`UI-002`, `UI-012`).
+@MainActor
+final class SwiftEditNSTextView: NSTextView {
+    var currentLineHighlightColor: NSColor = .clear
+
+    override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+        super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
+        needsDisplay = true
+    }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
+        needsDisplay = true
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard currentLineHighlightColor.alphaComponent > 0 else { return }
+
+        if let lineRect = currentLineFullWidthRect() {
+            currentLineHighlightColor.setFill()
+            lineRect.fill()
+        }
+    }
+
+    private func currentLineFullWidthRect() -> NSRect? {
+        let origin = textContainerOrigin
+        let fallbackHeight = max(14.0, (font?.ascender ?? 12.0) - (font?.descender ?? -3.0) + (font?.leading ?? 2.0))
+        guard let textLayoutManager,
+              let contentManager = textLayoutManager.textContentManager else {
+            return NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
+        }
+
+        let caretOffset = min(selectedRange().location, (string as NSString).length)
+        guard let caretLocation = contentManager.location(contentManager.documentRange.location, offsetBy: caretOffset) else {
+            return NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
+        }
+
+        var resolvedRect: NSRect?
+        textLayoutManager.enumerateTextLayoutFragments(from: caretLocation, options: [.ensuresLayout]) { fragment in
+            let fragmentOrigin = fragment.layoutFragmentFrame.origin
+            for lineFragment in fragment.textLineFragments {
+                let lineFrame = lineFragment.typographicBounds
+                let y = origin.y + fragmentOrigin.y + lineFrame.minY
+                resolvedRect = NSRect(x: 0, y: y, width: bounds.width, height: max(lineFrame.height, fallbackHeight))
+                return false
+            }
+            let fallbackY = origin.y + fragmentOrigin.y
+            resolvedRect = NSRect(x: 0, y: fallbackY, width: bounds.width, height: max(fragment.layoutFragmentFrame.height, fallbackHeight))
+            return false
+        }
+        return resolvedRect ?? NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
+    }
+}
+
+/// `@MainActor` TextKit 2 `NSTextView` wrapper enforcing `#FFFFFF`/`#000000` inverted canvas colors, current-line highlight, non-mutating nested bracket and backtick highlights, Markdown smart Enter continuation, `50%..300%` monospaced zoom, and read-only binary protection (`UI-002..008`, `UI-012`).
 @MainActor
 struct TextKit2EditorView: NSViewRepresentable {
     let text: String
     let isEditable: Bool
-    let backgroundColor: NSColor
-    let textColor: NSColor
+    let palette: PurpleThemePalette
     let fontSizePoints: Double
+    let highlightProjection: EditorHighlightProjection
     let onTextChange: (String) -> Void
     let onSelectionChange: (SwiftEditCore.TextRange) -> Void
+    let onSmartNewline: (Int) -> Int?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onTextChange: onTextChange, onSelectionChange: onSelectionChange)
+        Coordinator(
+            onTextChange: onTextChange,
+            onSelectionChange: onSelectionChange,
+            onSmartNewline: onSmartNewline
+        )
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -37,7 +97,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.borderType = .noBorder
 
-        let textView = NSTextView(usingTextLayoutManager: true)
+        let textView = SwiftEditNSTextView(usingTextLayoutManager: true)
         textView.delegate = context.coordinator
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -56,46 +116,126 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         applyStyling(to: textView)
         textView.string = text
+        applyNonMutatingHighlights(to: textView)
         scrollView.documentView = textView
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? NSTextView else { return }
+        guard let textView = scrollView.documentView as? SwiftEditNSTextView else { return }
         context.coordinator.onTextChange = onTextChange
         context.coordinator.onSelectionChange = onSelectionChange
+        context.coordinator.onSmartNewline = onSmartNewline
 
         applyStyling(to: textView)
         if textView.string != text {
             let previousSelection = textView.selectedRange()
+            let targetLocation = context.coordinator.pendingProgrammaticCaret ?? previousSelection.location
+            context.coordinator.pendingProgrammaticCaret = nil
             context.coordinator.isApplyingProgrammaticUpdate = true
             textView.string = text
-            let clampedLocation = min(previousSelection.location, (text as NSString).length)
+            let clampedLocation = min(max(0, targetLocation), (text as NSString).length)
             textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
             context.coordinator.isApplyingProgrammaticUpdate = false
         }
+        applyNonMutatingHighlights(to: textView)
+        textView.needsDisplay = true
     }
 
-    private func applyStyling(to textView: NSTextView) {
+    private func applyStyling(to textView: SwiftEditNSTextView) {
         textView.isEditable = isEditable
-        textView.backgroundColor = backgroundColor
-        textView.textColor = textColor
-        textView.insertionPointColor = textColor
+        textView.backgroundColor = palette.editorCanvasBackground.nsColor
+        textView.textColor = palette.editorCanvasText.nsColor
+        textView.insertionPointColor = palette.editorCanvasText.nsColor
+        textView.currentLineHighlightColor = palette.currentLineHighlight.nsColor
         textView.font = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .regular)
+    }
+
+    /// Applies non-mutating TextKit 2 rendering attributes for backtick code spans, nested depth-colored brackets, active bracket pair, and unbalanced brackets without mutating `NSTextStorage` (`UI-005`, `UI-006`, `UI-012`).
+    private func applyNonMutatingHighlights(to textView: SwiftEditNSTextView) {
+        guard let layoutManager = textView.textLayoutManager,
+              let contentManager = layoutManager.textContentManager else {
+            return
+        }
+        let docRange = contentManager.documentRange
+        let totalUTF16 = (textView.string as NSString).length
+        guard totalUTF16 > 0 else { return }
+
+        layoutManager.setRenderingAttributes([:], for: docRange)
+
+        func makeTextRange(location: Int, length: Int) -> NSTextRange? {
+            guard location >= 0, length > 0, location + length <= totalUTF16,
+                  let start = contentManager.location(docRange.location, offsetBy: location),
+                  let end = contentManager.location(start, offsetBy: length) else {
+                return nil
+            }
+            return NSTextRange(location: start, end: end)
+        }
+
+        // 1. Backtick inline and multiline fenced code highlights
+        for span in highlightProjection.backtickSpans {
+            guard let nsTextRange = makeTextRange(location: span.range.location, length: span.range.length) else { continue }
+            let bgColor = span.kind == .fencedMultiline
+                ? palette.backtickMultilineBackground.nsColor
+                : palette.backtickInlineBackground.nsColor
+            layoutManager.addRenderingAttribute(.backgroundColor, value: bgColor, for: nsTextRange)
+            layoutManager.addRenderingAttribute(.foregroundColor, value: palette.backtickForeground.nsColor, for: nsTextRange)
+        }
+
+        let boldFont = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .bold)
+
+        // 2. Nested depth-colored bracket pairs ({}, [], ())
+        for pair in highlightProjection.bracketPairs {
+            let depthColor = palette.nestedBracketColor(forDepth: pair.nestingDepth).nsColor
+            if let openRange = makeTextRange(location: pair.openOffset, length: 1) {
+                layoutManager.addRenderingAttribute(.foregroundColor, value: depthColor, for: openRange)
+                layoutManager.addRenderingAttribute(.font, value: boldFont, for: openRange)
+            }
+            if let closeRange = makeTextRange(location: pair.closeOffset, length: 1) {
+                layoutManager.addRenderingAttribute(.foregroundColor, value: depthColor, for: closeRange)
+                layoutManager.addRenderingAttribute(.font, value: boldFont, for: closeRange)
+            }
+        }
+
+        // 3. Active caret bracket pair background emphasis
+        if let active = highlightProjection.activeBracketPair {
+            let activeBg = palette.activeBracketHighlight.nsColor
+            if let openRange = makeTextRange(location: active.openOffset, length: 1) {
+                layoutManager.addRenderingAttribute(.backgroundColor, value: activeBg, for: openRange)
+            }
+            if let closeRange = makeTextRange(location: active.closeOffset, length: 1) {
+                layoutManager.addRenderingAttribute(.backgroundColor, value: activeBg, for: closeRange)
+            }
+        }
+
+        // 4. Unbalanced bracket error emphasis
+        let errorColor = palette.unbalancedBracketHighlight.nsColor
+        let errorBg = errorColor.withAlphaComponent(0.22)
+        for stray in highlightProjection.unbalancedBrackets {
+            if let strayRange = makeTextRange(location: stray.offset, length: 1) {
+                layoutManager.addRenderingAttribute(.foregroundColor, value: errorColor, for: strayRange)
+                layoutManager.addRenderingAttribute(.backgroundColor, value: errorBg, for: strayRange)
+                layoutManager.addRenderingAttribute(.font, value: boldFont, for: strayRange)
+            }
+        }
     }
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var onTextChange: (String) -> Void
         var onSelectionChange: (SwiftEditCore.TextRange) -> Void
+        var onSmartNewline: (Int) -> Int?
         var isApplyingProgrammaticUpdate = false
+        var pendingProgrammaticCaret: Int?
 
         init(
             onTextChange: @escaping (String) -> Void,
-            onSelectionChange: @escaping (SwiftEditCore.TextRange) -> Void
+            onSelectionChange: @escaping (SwiftEditCore.TextRange) -> Void,
+            onSmartNewline: @escaping (Int) -> Int?
         ) {
             self.onTextChange = onTextChange
             self.onSelectionChange = onSelectionChange
+            self.onSmartNewline = onSmartNewline
         }
 
         func textDidChange(_ notification: Notification) {
@@ -109,17 +249,239 @@ struct TextKit2EditorView: NSViewRepresentable {
                   let textView = notification.object as? NSTextView else { return }
             let range = textView.selectedRange()
             onSelectionChange(SwiftEditCore.TextRange(location: range.location, length: range.length))
+            textView.needsDisplay = true
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.insertNewline(_:)),
+                  textView.isEditable,
+                  textView.selectedRange().length == 0 else {
+                return false
+            }
+            if let newCaret = onSmartNewline(textView.selectedRange().location) {
+                pendingProgrammaticCaret = newCaret
+                return true
+            }
+            return false
         }
     }
+}
+
+/// Non-mutating `@MainActor` visual highlight snapshot projecting active line, nested brackets, active pair, unbalanced brackets, and backtick code spans (`UI-005`, `UI-006`, `UI-012`).
+public struct EditorHighlightProjection: Equatable, Sendable {
+    public let activeLineRange: SwiftEditCore.TextRange
+    public let bracketPairs: [BracketPairSpan]
+    public let activeBracketPair: BracketPairSpan?
+    public let unbalancedBrackets: [UnbalancedBracket]
+    public let backtickSpans: [BacktickHighlightSpan]
+
+    public init(
+        activeLineRange: SwiftEditCore.TextRange = SwiftEditCore.TextRange(location: 0, length: 0),
+        bracketPairs: [BracketPairSpan] = [],
+        activeBracketPair: BracketPairSpan? = nil,
+        unbalancedBrackets: [UnbalancedBracket] = [],
+        backtickSpans: [BacktickHighlightSpan] = []
+    ) {
+        self.activeLineRange = activeLineRange
+        self.bracketPairs = bracketPairs
+        self.activeBracketPair = activeBracketPair
+        self.unbalancedBrackets = unbalancedBrackets
+        self.backtickSpans = backtickSpans
+    }
+
+    /// Computes a deterministic highlight projection without mutating `session` or incrementing `BufferRevision`.
+    public static func evaluate(
+        text: String,
+        caretLocation: Int,
+        bracketResult: BracketBalanceResult?,
+        backtickResult: BacktickHighlightResult?
+    ) -> EditorHighlightProjection {
+        let units = Array(text.utf16)
+        let clampedCaret = min(max(0, caretLocation), units.count)
+        var lineStart = clampedCaret
+        while lineStart > 0 && units[lineStart - 1] != 0x0A && units[lineStart - 1] != 0x0D {
+            lineStart -= 1
+        }
+        var lineEnd = clampedCaret
+        while lineEnd < units.count && units[lineEnd] != 0x0A && units[lineEnd] != 0x0D {
+            lineEnd += 1
+        }
+        return EditorHighlightProjection(
+            activeLineRange: SwiftEditCore.TextRange(location: lineStart, length: lineEnd - lineStart),
+            bracketPairs: bracketResult?.matchedPairs ?? [],
+            activeBracketPair: bracketResult?.activePair,
+            unbalancedBrackets: bracketResult?.unbalancedBrackets ?? [],
+            backtickSpans: backtickResult?.spans ?? []
+        )
+    }
+}
+
+/// Strictly percentage-based left sidebar sizing geometry avoiding hardcoded pixel bounds across displays (`UI-001`, `UI-005`).
+public enum SidebarLayoutGeometry {
+    /// Minimum sidebar width as a fraction (`12%`) of the window/container width.
+    public static let minWidthRatio: Double = 0.12
+    /// Maximum sidebar width as a fraction (`65%`) of the window/container width.
+    public static let maxWidthRatio: Double = 0.65
+    /// Default expanded sidebar width as a fraction (`22%`) of the window/container width.
+    public static let defaultWidthRatio: Double = 0.22
+
+    /// Clamps any candidate sidebar ratio into `0.12...0.65`.
+    public static func clampedRatio(_ rawRatio: Double) -> Double {
+        guard rawRatio.isFinite else { return defaultWidthRatio }
+        return min(max(rawRatio, minWidthRatio), maxWidthRatio)
+    }
+
+    /// Computes proportional sidebar width strictly from `containerWidth * clampedRatio(ratio)`; returns `0` for non-positive container widths.
+    public static func resolvedWidth(forContainerWidth containerWidth: Double, ratio: Double) -> Double {
+        guard containerWidth.isFinite, containerWidth > 0 else { return 0 }
+        return containerWidth * clampedRatio(ratio)
+    }
+
+    /// Computes a clamped percentage ratio after dragging the divider by `dragDeltaWidth` inside `containerWidth`.
+    public static func updatedRatio(currentRatio: Double, dragDeltaWidth: Double, containerWidth: Double) -> Double {
+        guard containerWidth.isFinite, containerWidth > 0, dragDeltaWidth.isFinite else {
+            return clampedRatio(currentRatio)
+        }
+        return clampedRatio(currentRatio + (dragDeltaWidth / containerWidth))
+    }
+}
+
+/// Authoritative Help menu command titles exposed by `SwiftEditCommands` (`UI-009`, `UI-010`, `AR-014`).
+public enum SwiftEditHelpMenuCatalog {
+    public static let itemTitles: [String] = [
+        "Keyboard Shortcuts CheatSheet",
+        "About PH.SwiftEdit",
+    ]
 }
 
 /// `@MainActor @Observable` application controller wiring `SwiftEditCore` engines and `SessionRecoveryStore` to the Zed-minimal Purple SwiftUI shell (`UI-001..012`).
 @MainActor
 @Observable
 public final class SwiftEditWorkbenchModel {
+    /// Current macOS system dark-appearance flag synced from `@Environment(\.colorScheme)` for live `.auto` resolution (`UI-003`).
+    public private(set) var systemPrefersDark: Bool = true
+    /// Proportional width of the left navigation sidebar (`0.12...0.65` of window width, never hardcoded pixels) (`UI-001`).
+    public private(set) var sidebarWidthRatio: Double = SidebarLayoutGeometry.defaultWidthRatio
+    /// `true` while the left sidebar is open and pinned; unpinning collapses the sidebar cleanly (`UI-001`).
+    public var isLeftSidebarPinned: Bool { !isLeftSidebarCollapsed }
+    /// `true` while the pointer hovers over the top bar area, revealing middle command buttons (`UI-001`, `UI-011`).
+    public var isToolbarHovered: Bool = false
+    /// Latest linear `BacktickHighlightScanner` scan output for the active document.
+    public private(set) var backtickResult: BacktickHighlightResult?
+
+    /// SwiftUI `.preferredColorScheme` override (`nil` in `.auto` so macOS system appearance flows dynamically) (`UI-003`).
+    public var preferredSwiftUIColorScheme: ColorScheme? {
+        switch appearanceMode {
+        case .light: return .light
+        case .black: return .dark
+        case .auto: return nil
+        }
+    }
+
+    /// Non-mutating highlight projection for the active document canvas (`UI-002`, `UI-005`, `UI-006`).
+    public var activeHighlightProjection: EditorHighlightProjection {
+        EditorHighlightProjection.evaluate(
+            text: activeDocumentSession?.text ?? "",
+            caretLocation: currentSelection.location,
+            bracketResult: bracketResult,
+            backtickResult: backtickResult
+        )
+    }
+
+    /// Synchronizes live macOS system dark/light appearance and refreshes `palette` dynamically when in `.auto` mode without reloading buffers (`UI-003`).
+    public func updateSystemColorScheme(prefersDark: Bool) {
+        systemPrefersDark = prefersDark
+        palette = PurpleThemePalette.resolve(appearance: appearanceMode, systemPrefersDark: systemPrefersDark)
+    }
+
+    /// Updates `sidebarWidthRatio` strictly clamped into `0.12...0.65` (`UI-001`).
+    public func updateSidebarWidthRatio(_ rawRatio: Double) {
+        sidebarWidthRatio = SidebarLayoutGeometry.clampedRatio(rawRatio)
+    }
+
+    /// Toggles the manual sidebar `pin` state: unpinning collapses the sidebar, pinning expands it (`UI-001`).
+    public func toggleSidebarPinCollapse() {
+        isLeftSidebarCollapsed.toggle()
+    }
+
+    /// Resolves the target directory for right-click `New File…` / `New Folder…` on either a sidebar entry or empty sidebar background (`BC-012`, `SEC-003`).
+    public func resolveSidebarCreationDirectory(for entry: FolderEntryDescriptor?) -> URL? {
+        guard let entry else {
+            return selectedFolderURL.map { URL(fileURLWithPath: $0.standardizedFileURL.path) }
+        }
+        if entry.isDirectory {
+            return URL(fileURLWithPath: entry.url.standardizedFileURL.path)
+        }
+        return URL(fileURLWithPath: entry.url.deletingLastPathComponent().standardizedFileURL.path)
+    }
+
+    /// Reorders the tab matching `id` one slot left inside its pinned or unpinned partition (`BC-006`, `BC-008`).
+    public func moveTabLeft(id: DocumentID) {
+        do {
+            try tabSession.moveTabLeft(id: id)
+            persistRecoveryState()
+        } catch {
+            statusBannerMessage = "Reorder tab failed: \(error)"
+        }
+    }
+
+    /// Reorders the tab matching `id` one slot right inside its pinned or unpinned partition (`BC-006`, `BC-008`).
+    public func moveTabRight(id: DocumentID) {
+        do {
+            try tabSession.moveTabRight(id: id)
+            persistRecoveryState()
+        } catch {
+            statusBannerMessage = "Reorder tab failed: \(error)"
+        }
+    }
+
+    /// Reorders the tab matching `id` to `destinationIndex` inside its pinned or unpinned partition (`BC-006`, `BC-008`).
+    public func moveTab(id: DocumentID, toIndex destinationIndex: Int) {
+        do {
+            try tabSession.moveTab(id: id, toIndex: destinationIndex)
+            persistRecoveryState()
+        } catch {
+            statusBannerMessage = "Reorder tab failed: \(error)"
+        }
+    }
+
+    /// Evaluates and applies a Markdown smart Enter continuation or empty-marker exit edit atomically on the active document (`BC-004`, `BC-006`).
+    /// - Returns: The updated UTF-16 caret offset when smart newline handled the keystroke, or `nil` when standard newline insertion should proceed.
+    public func applySmartNewlineIfApplicable(at caretLocation: Int) -> Int? {
+        guard let activeID = tabSession.activeTabID,
+              var session = sessionsByID[activeID],
+              !session.isBinaryReadOnly else {
+            return nil
+        }
+        let isMarkdown = MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle)
+        guard let smart = MarkdownSmartNewlineEngine.evaluateNewline(
+            in: session.snapshot,
+            caretLocation: caretLocation,
+            isMarkdownDocument: isMarkdown
+        ) else {
+            return nil
+        }
+        do {
+            _ = try session.applyTextEdits([smart.edit], expectedRevision: session.revision)
+            sessionsByID[activeID] = session
+            currentSelection = SwiftEditCore.TextRange(location: smart.newCaretLocation, length: 0)
+            try? tabSession.updateTabState(
+                id: activeID,
+                isDirty: session.isDirty,
+                caretLocation: smart.newCaretLocation,
+                revision: session.revision
+            )
+            persistRecoveryState()
+            refreshDiagnosticsForActiveDocument()
+            return smart.newCaretLocation
+        } catch {
+            return nil
+        }
+    }
+
     public var appearanceMode: AppearanceMode {
         didSet {
-            palette = PurpleThemePalette.resolve(appearance: appearanceMode, systemPrefersDark: true)
+            palette = PurpleThemePalette.resolve(appearance: appearanceMode, systemPrefersDark: systemPrefersDark)
             preferencesStore.save(EditorPreferences(appearanceMode: appearanceMode, zoomPercent: zoomController.zoomPercent))
         }
     }
@@ -332,6 +694,9 @@ public final class SwiftEditWorkbenchModel {
                 grantedScopeRootURL = selectedFolderURL
             }
             refreshFolderEntries()
+            return
+        }
+        guard !entry.isBinary else {
             return
         }
         openFile(at: entry.url, withinScope: grantedScopeRootURL ?? selectedFolderURL)
@@ -554,12 +919,14 @@ public final class SwiftEditWorkbenchModel {
         guard let session = activeDocumentSession else {
             lintDiagnostics = []
             bracketResult = nil
+            backtickResult = nil
             return
         }
         let snap = session.snapshot
         safetyBanner = InspectionSafetyBannerState.evaluate(snapshot: snap)
         lintDiagnostics = MarkdownLintAndFormatEngine.lint(snapshot: snap).completedValue?.diagnostics ?? []
         bracketResult = SearchDiffAndBracketEngine.evaluateBrackets(in: snap, caretLocation: currentSelection.location).completedValue
+        backtickResult = BacktickHighlightScanner.scan(in: snap).completedValue
         if showDiffPane, let baseline = savedBaselineByID[session.id] {
             diffCoordinator.compare(lhs: baseline, rhs: snap)
         }
@@ -1029,40 +1396,87 @@ public final class SwiftEditWorkbenchModel {
     }
 }
 
+/// Drag-and-drop delegate reordering open tabs within their pinned/unpinned partition in `EditorTabStrip` (`BC-008`).
+@MainActor
+private struct TabReorderDropDelegate: DropDelegate {
+    let targetTab: TabDescriptor
+    let model: SwiftEditWorkbenchModel
+    @Binding var draggingTabID: DocumentID?
+
+    func dropEntered(info: DropInfo) {
+        guard let draggedID = draggingTabID,
+              draggedID != targetTab.id,
+              let targetIndex = model.tabSession.tabs.firstIndex(where: { $0.id == targetTab.id }) else {
+            return
+        }
+        model.moveTab(id: draggedID, toIndex: targetIndex)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingTabID = nil
+        return true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+}
+
 /// Root Zed-minimal Purple (`Viola`) + inverted `#FFFFFF`/`#000000` SwiftUI workspace view for `PH.SwiftEdit` (`UI-001..012`).
 public struct SwiftEditRootView: View {
+    @Environment(\.colorScheme) private var systemColorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model = SwiftEditWorkbenchModel()
+    @State private var draggingTabID: DocumentID?
+    @State private var dragStartSidebarRatio: Double?
 
     public init() {}
 
     public var body: some View {
         VStack(spacing: 0) {
             toolbarBar
-            HSplitView {
-                if !model.isLeftSidebarCollapsed {
-                    sidebarView
-                        .frame(minWidth: 190, idealWidth: 230, maxWidth: 320)
-                }
-                VStack(spacing: 0) {
-                    tabBar
-                    safetyAndErrorBanners
-                    FindReplaceGoToLineBar(
-                        state: $model.findReplaceState,
-                        palette: model.palette,
-                        onFind: { model.executeFind() },
-                        onFindNext: { model.findNextMatch() },
-                        onFindPrevious: { model.findPreviousMatch() },
-                        onReplaceAll: { model.executeReplaceAll() },
-                        onGoToLine: { model.executeGoToLine() },
-                        onClose: { model.presentFindBar(mode: .hidden) }
-                    )
-                    editorAndOptionalPanels
+            GeometryReader { geometry in
+                HStack(spacing: 0) {
+                    if !model.isLeftSidebarCollapsed {
+                        let sidebarWidth = SidebarLayoutGeometry.resolvedWidth(
+                            forContainerWidth: Double(geometry.size.width),
+                            ratio: model.sidebarWidthRatio
+                        )
+                        sidebarView
+                            .frame(width: CGFloat(sidebarWidth))
+                        sidebarPercentageDivider(containerWidth: Double(geometry.size.width))
+                    } else {
+                        collapsedSidebarEdgeHandle
+                    }
+                    VStack(spacing: 0) {
+                        tabBar
+                        safetyAndErrorBanners
+                        FindReplaceGoToLineBar(
+                            state: $model.findReplaceState,
+                            palette: model.palette,
+                            onFind: { model.executeFind() },
+                            onFindNext: { model.findNextMatch() },
+                            onFindPrevious: { model.findPreviousMatch() },
+                            onReplaceAll: { model.executeReplaceAll() },
+                            onGoToLine: { model.executeGoToLine() },
+                            onClose: { model.presentFindBar(mode: .hidden) }
+                        )
+                        editorAndOptionalPanels
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             statusBar
         }
         .background(model.palette.chromeSurface.swiftUIColor)
         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
+        .preferredColorScheme(model.preferredSwiftUIColorScheme)
+        .onAppear {
+            model.updateSystemColorScheme(prefersDark: systemColorScheme == .dark)
+        }
+        .onChange(of: systemColorScheme) { _, newScheme in
+            model.updateSystemColorScheme(prefersDark: newScheme == .dark)
+        }
         .frame(minWidth: 960, minHeight: 620)
         .focusedSceneValue(\.workbenchModel, model)
         .sheet(isPresented: $model.isCheatSheetPresented) {
@@ -1119,44 +1533,140 @@ public struct SwiftEditRootView: View {
 
     private var toolbarBar: some View {
         HStack(spacing: 10) {
-            Text("PH.SwiftEdit")
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(model.palette.featherHighlight.swiftUIColor)
-            Button("Folder…") { model.openFolderViaPanel() }
-            Button("File…") { model.openFileViaPanel() }
-            Button("New") { model.newUntitledTab() }
-            Button("Save") { model.saveActiveDocument() }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(!model.safetyBanner.canSave)
-            Button("Cmd+D") { model.performCommandD() }
-                .keyboardShortcut("d", modifiers: .command)
-            Button("Format") { model.formatActiveDocument() }
-                .disabled(!model.safetyBanner.canFormat)
-            Toggle("Preview", isOn: $model.showMarkdownPreview)
-                .toggleStyle(.button)
-            Button(model.showDiffPane ? "Hide Diff" : "Compare Diff") { model.toggleDiffPane() }
-            Button("Shortcuts") { model.isCheatSheetPresented = true }
-                .help("Open Keyboard Shortcuts CheatSheet (Cmd+/)")
-            Spacer()
+            HStack(spacing: 6) {
+                SwiftEditBrandLogoView(size: CGFloat(SwiftEditBrandLogoGeometry.topBarLogoSize))
+                Text("PH.SwiftEdit")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(model.palette.featherHighlight.swiftUIColor)
+            }
+            .fixedSize()
+
+            HStack(spacing: 8) {
+                Button("Folder…") { model.openFolderViaPanel() }
+                Button("File…") { model.openFileViaPanel() }
+                Button("New") { model.newUntitledTab() }
+                Button("Save") { model.saveActiveDocument() }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .disabled(!model.safetyBanner.canSave)
+                Button("Cmd+D") { model.performCommandD() }
+                    .keyboardShortcut("d", modifiers: .command)
+                Button("Format") { model.formatActiveDocument() }
+                    .disabled(!model.safetyBanner.canFormat)
+                Toggle("Preview", isOn: $model.showMarkdownPreview)
+                    .toggleStyle(.button)
+                Button(model.showDiffPane ? "Hide Diff" : "Compare Diff") { model.toggleDiffPane() }
+                Button("Shortcuts") { model.isCheatSheetPresented = true }
+                    .help("Open Keyboard Shortcuts CheatSheet (Cmd+/)")
+            }
+            .opacity(model.isToolbarHovered ? 1.0 : 0.0)
+            .allowsHitTesting(model.isToolbarHovered)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: model.isToolbarHovered)
+
+            Spacer(minLength: 8)
+
             HStack(spacing: 4) {
                 Button("-") { model.zoomController.zoomOut() }
                     .keyboardShortcut("-", modifiers: .command)
                 Button("\(model.zoomController.zoomPercent)%") { model.zoomController.resetZoom() }
                     .keyboardShortcut("0", modifiers: .command)
+                    .monospacedDigit()
                 Button("+") { model.zoomController.zoomIn() }
                     .keyboardShortcut("+", modifiers: .command)
             }
-            Picker("Theme", selection: $model.appearanceMode) {
-                Text("Light").tag(AppearanceMode.light)
-                Text("Black").tag(AppearanceMode.black)
-                Text("Auto").tag(AppearanceMode.auto)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 170)
+            .fixedSize()
+
+            appearanceSelectorControl
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(model.palette.brandGround.swiftUIColor)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            model.isToolbarHovered = hovering
+        }
+    }
+
+    /// Always-visible 3-way `Light | Dark | Auto` pill selector replacing the clipped segmented `Picker` (`UI-001`, `UI-003`).
+    private var appearanceSelectorControl: some View {
+        HStack(spacing: 2) {
+            appearanceOptionButton(title: "Light", mode: .light)
+            appearanceOptionButton(title: "Dark", mode: .black)
+            appearanceOptionButton(title: "Auto", mode: .auto)
+        }
+        .padding(2)
+        .background(model.palette.primaryAccent.swiftUIColor.opacity(0.18))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(model.palette.strokeLavender.swiftUIColor.opacity(0.45), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Appearance Mode Selector")
+    }
+
+    private func appearanceOptionButton(title: String, mode: AppearanceMode) -> some View {
+        let isSelected = model.appearanceMode == mode
+        return Button(action: { model.appearanceMode = mode }) {
+            Text(title)
+                .font(.caption.weight(isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? Color.white : model.palette.featherHighlight.swiftUIColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(isSelected ? model.palette.primaryAccent.swiftUIColor : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var collapsedSidebarEdgeHandle: some View {
+        VStack(spacing: 8) {
+            Button(action: { model.toggleSidebarPinCollapse() }) {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: max(12, CGFloat(model.zoomController.sidebarScaledFontSizePoints))))
+                    .foregroundStyle(model.palette.featherHighlight.swiftUIColor)
+            }
+            .buttonStyle(.plain)
+            .help("Expand and Pin Left Navigation Panel (Cmd+B)")
+            .padding(.top, 10)
+            Spacer()
+        }
+        .frame(width: 24)
+        .background(model.palette.brandGround.swiftUIColor.opacity(0.88))
+    }
+
+    private func sidebarPercentageDivider(containerWidth: Double) -> some View {
+        Rectangle()
+            .fill(model.palette.strokeLavender.swiftUIColor.opacity(0.28))
+            .frame(width: 5)
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.resizeLeftRight.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if dragStartSidebarRatio == nil {
+                            dragStartSidebarRatio = model.sidebarWidthRatio
+                        }
+                        let startRatio = dragStartSidebarRatio ?? model.sidebarWidthRatio
+                        let nextRatio = SidebarLayoutGeometry.updatedRatio(
+                            currentRatio: startRatio,
+                            dragDeltaWidth: Double(value.translation.width),
+                            containerWidth: containerWidth
+                        )
+                        model.updateSidebarWidthRatio(nextRatio)
+                    }
+                    .onEnded { _ in
+                        dragStartSidebarRatio = nil
+                    }
+            )
+            .accessibilityLabel("Resize Sidebar Divider")
     }
 
     private var tabBar: some View {
@@ -1170,16 +1680,36 @@ public struct SwiftEditRootView: View {
                                 .font(.caption2)
                         }
                         .buttonStyle(.plain)
+                        .help(tab.isPinned ? "Unpin Tab" : "Pin Tab")
+
                         Button(action: { model.activateTab(id: tab.id) }) {
                             Text("\(tab.title)\(tab.isDirty ? " •" : "")")
                                 .font(.callout.weight(isActive ? .semibold : .regular))
                         }
                         .buttonStyle(.plain)
+
+                        Button(action: { model.moveTabLeft(id: tab.id) }) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .opacity(isActive ? 0.85 : 0.45)
+                        .help("Move Tab Left")
+
+                        Button(action: { model.moveTabRight(id: tab.id) }) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .opacity(isActive ? 0.85 : 0.45)
+                        .help("Move Tab Right")
+
                         Button(action: { model.requestCloseTab(id: tab.id) }) {
                             Image(systemName: "xmark")
                                 .font(.caption2)
                         }
                         .buttonStyle(.plain)
+                        .help("Close Tab (Cmd+W)")
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
@@ -1189,6 +1719,21 @@ public struct SwiftEditRootView: View {
                             .stroke(isActive ? model.palette.strokeLavender.swiftUIColor : Color.clear, lineWidth: 1)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .onDrag {
+                        draggingTabID = tab.id
+                        return NSItemProvider(object: tab.id.rawValue.uuidString as NSString)
+                    }
+                    .onDrop(
+                        of: [UTType.text],
+                        delegate: TabReorderDropDelegate(targetTab: tab, model: model, draggingTabID: $draggingTabID)
+                    )
+                    .contextMenu {
+                        Button("Move Tab Left") { model.moveTabLeft(id: tab.id) }
+                        Button("Move Tab Right") { model.moveTabRight(id: tab.id) }
+                        Divider()
+                        Button(tab.isPinned ? "Unpin Tab" : "Pin Tab") { model.togglePin(id: tab.id) }
+                        Button("Close Tab") { model.requestCloseTab(id: tab.id) }
+                    }
                 }
             }
             .padding(.horizontal, 10)
@@ -1226,91 +1771,195 @@ public struct SwiftEditRootView: View {
     }
 
     private var sidebarView: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let sidebarFont = CGFloat(model.zoomController.sidebarScaledFontSizePoints)
+        let headerFont = max(10, sidebarFont * 0.88)
+        let rowSpacing = max(4, CGFloat(6.0 * model.zoomController.zoomScaleFactor))
+
+        return VStack(alignment: .leading, spacing: rowSpacing) {
             HStack(spacing: 8) {
                 Text(model.selectedFolderURL?.lastPathComponent ?? "No Folder Open")
-                    .font(.caption.weight(.semibold))
+                    .font(.system(size: headerFont, weight: .semibold))
                     .foregroundStyle(model.palette.strokeLavender.swiftUIColor)
                     .lineLimit(1)
                 Spacer()
                 if model.selectedFolderURL != nil {
                     Button(action: { model.navigateToParentFolder() }) {
                         Label("...", systemImage: "arrow.turn.left.up")
-                            .font(.caption.weight(.semibold))
+                            .font(.system(size: headerFont, weight: .semibold))
                     }
                     .buttonStyle(.plain)
                     .disabled(!model.canNavigateToParentFolder)
                     .help("Go to parent folder (...)")
                 }
+                Button(action: { model.toggleSidebarPinCollapse() }) {
+                    Image(systemName: model.isLeftSidebarPinned ? "pin.fill" : "pin.slash")
+                        .font(.system(size: headerFont, weight: .semibold))
+                        .foregroundStyle(model.palette.featherHighlight.swiftUIColor)
+                }
+                .buttonStyle(.plain)
+                .help("Unpin and Collapse Left Navigation Panel (Cmd+B)")
             }
             .padding(.horizontal, 10)
             .padding(.top, 8)
+
             List {
                 if model.canNavigateToParentFolder {
                     Button(action: { model.navigateToParentFolder() }) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: rowSpacing) {
                             Image(systemName: "folder.badge.minus")
+                                .font(.system(size: sidebarFont))
                                 .foregroundStyle(model.palette.featherHighlight.swiftUIColor)
                             Text("...")
-                                .font(.callout.weight(.semibold))
+                                .font(.system(size: sidebarFont, weight: .semibold))
                         }
                     }
                     .buttonStyle(.plain)
                 }
                 ForEach(model.folderEntries, id: \.url) { entry in
+                    let binaryColor = model.palette.sidebarBinaryDisabledText.swiftUIColor
+                    let iconName = entry.isDirectory
+                        ? "folder.fill"
+                        : (entry.isBinary ? "doc.fill" : (entry.isHiddenDotfile ? "eye.slash" : "doc.text"))
                     Button(action: { model.openFolderEntry(entry) }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: entry.isDirectory ? "folder.fill" : (entry.isHiddenDotfile ? "eye.slash" : "doc.text"))
-                                .foregroundStyle(model.palette.strokeLavender.swiftUIColor)
+                        HStack(spacing: rowSpacing) {
+                            Image(systemName: iconName)
+                                .font(.system(size: sidebarFont))
+                                .foregroundStyle(entry.isBinary ? binaryColor : model.palette.strokeLavender.swiftUIColor)
                             Text(entry.name)
-                                .font(.callout)
+                                .font(.system(size: sidebarFont))
+                                .foregroundStyle(entry.isBinary ? binaryColor : model.palette.chromeForeground.swiftUIColor)
+                                .italic(entry.isBinary)
                                 .lineLimit(1)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .help(entry.isBinary ? "Binary file (read-only disabled in sidebar)" : entry.name)
                     .contextMenu {
-                        Button("Reveal in Finder") { model.sidebarRevealInFinder(at: entry.url) }
-                        if entry.isDirectory {
-                            Button("Open Folder in Finder") { model.sidebarOpenFolderInFinder(at: entry.url) }
-                        } else if let currentFolder = model.selectedFolderURL {
-                            Button("Open Folder in Finder") { model.sidebarOpenFolderInFinder(at: currentFolder) }
-                        }
-                        Button("Open Terminal") { model.sidebarOpenInTerminal(at: entry.url) }
-                        Divider()
-                        Button("New Folder") { _ = model.sidebarCreateFolder(named: "New Folder", in: entry.isDirectory ? entry.url : model.selectedFolderURL) }
-                        Button("New File") { _ = model.sidebarCreateFile(named: "Untitled.md", in: entry.isDirectory ? entry.url : model.selectedFolderURL) }
-                        Divider()
-                        Button("Cut") { model.sidebarCutItem(at: entry.url) }
-                        Button("Copy") { model.sidebarCopyItem(at: entry.url) }
-                        Button("Paste") { _ = model.sidebarPasteItem(into: entry.isDirectory ? entry.url : model.selectedFolderURL) }
-                            .disabled(model.sidebarClipboard == nil)
-                        Divider()
-                        Button(entry.isDirectory ? "Rename Folder…" : "Rename File…") {
-                            promptInlineRename(for: entry)
-                        }
-                        Button("Delete (Move to Trash)", role: .destructive) {
-                            model.requestSidebarTrashItem(at: entry.url)
-                        }
+                        sidebarEntryContextMenu(for: entry)
                     }
                 }
             }
             .scrollContentBackground(.hidden)
+            .contextMenu {
+                sidebarBackgroundContextMenu
+            }
         }
         .background(model.palette.brandGround.swiftUIColor.opacity(0.92))
+        .contextMenu {
+            sidebarBackgroundContextMenu
+        }
+    }
+
+    @ViewBuilder
+    private func sidebarEntryContextMenu(for entry: FolderEntryDescriptor) -> some View {
+        let targetDir = model.resolveSidebarCreationDirectory(for: entry)
+        Button("Reveal in Finder") { model.sidebarRevealInFinder(at: entry.url) }
+        if entry.isDirectory {
+            Button("Open Folder in Finder") { model.sidebarOpenFolderInFinder(at: entry.url) }
+        } else if let currentFolder = model.selectedFolderURL {
+            Button("Open Folder in Finder") { model.sidebarOpenFolderInFinder(at: currentFolder) }
+        }
+        Button("Open Terminal") { model.sidebarOpenInTerminal(at: entry.url) }
+        Divider()
+        Button("New File…") { promptCreateFile(in: targetDir) }
+            .disabled(targetDir == nil)
+        Button("New Folder…") { promptCreateFolder(in: targetDir) }
+            .disabled(targetDir == nil)
+        Divider()
+        if !entry.isBinary {
+            Button("Cut") { model.sidebarCutItem(at: entry.url) }
+            Button("Copy") { model.sidebarCopyItem(at: entry.url) }
+            Button("Paste") { _ = model.sidebarPasteItem(into: targetDir) }
+                .disabled(model.sidebarClipboard == nil)
+            Divider()
+            Button(entry.isDirectory ? "Rename Folder…" : "Rename File…") {
+                promptInlineRename(for: entry)
+            }
+        }
+        Button("Delete (Move to Trash)", role: .destructive) {
+            model.requestSidebarTrashItem(at: entry.url)
+        }
+    }
+
+    @ViewBuilder
+    private var sidebarBackgroundContextMenu: some View {
+        let targetDir = model.resolveSidebarCreationDirectory(for: nil)
+        Button("New File…") { promptCreateFile(in: targetDir) }
+            .disabled(targetDir == nil)
+        Button("New Folder…") { promptCreateFolder(in: targetDir) }
+            .disabled(targetDir == nil)
+        Divider()
+        Button("Paste") { _ = model.sidebarPasteItem(into: targetDir) }
+            .disabled(model.sidebarClipboard == nil || targetDir == nil)
+        if let currentFolder = targetDir {
+            Divider()
+            Button("Open Folder in Finder") { model.sidebarOpenFolderInFinder(at: currentFolder) }
+            Button("Open Terminal") { model.sidebarOpenInTerminal(at: currentFolder) }
+        }
+    }
+
+    /// Prompts for a single-segment name validated via `SidebarItemNameValidator` and creates a new file inside `directory` (`CWE-22`, `BC-012`, `SEC-003`).
+    private func promptCreateFile(in directory: URL?) {
+        guard let directory,
+              let name = promptSingleSegmentName(
+                title: "New File",
+                message: "Enter a single-segment filename to create in \"\(directory.lastPathComponent)\":",
+                defaultValue: "Untitled.md",
+                confirmTitle: "Create"
+              ) else {
+            return
+        }
+        if let created = model.sidebarCreateFile(named: name, in: directory) {
+            model.openFile(at: created, withinScope: model.grantedScopeRootURL ?? directory)
+        }
+    }
+
+    /// Prompts for a single-segment name validated via `SidebarItemNameValidator` and creates a new folder inside `directory` (`CWE-22`, `BC-012`, `SEC-003`).
+    private func promptCreateFolder(in directory: URL?) {
+        guard let directory,
+              let name = promptSingleSegmentName(
+                title: "New Folder",
+                message: "Enter a single-segment folder name to create in \"\(directory.lastPathComponent)\":",
+                defaultValue: "New Folder",
+                confirmTitle: "Create"
+              ) else {
+            return
+        }
+        _ = model.sidebarCreateFolder(named: name, in: directory)
     }
 
     private func promptInlineRename(for entry: FolderEntryDescriptor) {
-        let alert = NSAlert()
-        alert.messageText = entry.isDirectory ? "Rename Folder" : "Rename File"
-        alert.informativeText = "Enter a new single-segment name:"
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
-        input.stringValue = entry.name
-        alert.accessoryView = input
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
-            _ = model.sidebarRenameItem(at: entry.url, to: input.stringValue)
+        guard let newName = promptSingleSegmentName(
+            title: entry.isDirectory ? "Rename Folder" : "Rename File",
+            message: "Enter a new single-segment name:",
+            defaultValue: entry.name,
+            confirmTitle: "Rename"
+        ) else {
+            return
         }
+        _ = model.sidebarRenameItem(at: entry.url, to: newName)
+    }
+
+    private func promptSingleSegmentName(
+        title: String,
+        message: String,
+        defaultValue: String,
+        confirmTitle: String
+    ) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        input.stringValue = defaultValue
+        alert.accessoryView = input
+        alert.addButton(withTitle: confirmTitle)
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return nil
+        }
+        return input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var editorAndOptionalPanels: some View {
@@ -1324,11 +1973,12 @@ public struct SwiftEditRootView: View {
                     TextKit2EditorView(
                         text: session.text,
                         isEditable: !session.isBinaryReadOnly,
-                        backgroundColor: model.palette.editorCanvasBackground.nsColor,
-                        textColor: model.palette.editorCanvasText.nsColor,
+                        palette: model.palette,
                         fontSizePoints: model.zoomController.scaledFontSizePoints,
+                        highlightProjection: model.activeHighlightProjection,
                         onTextChange: { model.handleEditorTextChanged($0) },
-                        onSelectionChange: { model.handleSelectionChanged($0) }
+                        onSelectionChange: { model.handleSelectionChanged($0) },
+                        onSmartNewline: { model.applySmartNewlineIfApplicable(at: $0) }
                     )
                 }
             }
@@ -1529,6 +2179,11 @@ public struct SwiftEditCommands: Commands {
                 model?.isCheatSheetPresented = true
             }
             .keyboardShortcut("/", modifiers: .command)
+            .disabled(model == nil)
+            Divider()
+            Button("About PH.SwiftEdit") {
+                model?.isAboutSheetPresented = true
+            }
             .disabled(model == nil)
         }
     }

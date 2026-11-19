@@ -35,12 +35,13 @@ struct XcodeAppShellAndPackagingFitnessTests {
         let repoInfoPlistVersions = try InfoPlistVersionStamper.readStampedVersions(from: Data(contentsOf: infoPlistURL))
         let stampedVersions = try InfoPlistVersionStamper.readStampedVersions(from: stampedPlistData)
 
-        // THEN all AppIcon slots exist, both entitlements have zero violations, and Info.plist matches version.json (0.0.1 / 0.0.1-alpha2)
+        // THEN all AppIcon slots exist, both entitlements have zero violations, and Info.plist matches version.json (nbgv source of truth)
         #expect(macIconsValid == true)
         #expect(iosIconsValid == true)
         #expect(macViolations.isEmpty)
         #expect(iosViolations.isEmpty)
-        #expect(versionDescriptor == VersionStampDescriptor(shortVersionString: "0.0.1", fullBuildVersionString: "0.0.1-alpha2"))
+        #expect(!versionDescriptor.shortVersionString.isEmpty)
+        #expect(!versionDescriptor.fullBuildVersionString.isEmpty)
         #expect(repoInfoPlistVersions == versionDescriptor)
         #expect(stampedVersions == versionDescriptor)
     }

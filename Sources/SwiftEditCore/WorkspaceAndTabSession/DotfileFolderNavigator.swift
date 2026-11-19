@@ -19,18 +19,27 @@ public struct SystemSecurityScopedResourceAccessor: SecurityScopedResourceAccess
     }
 }
 
-/// Immutable descriptor for a single shallow workspace directory child entry, including hidden dotfiles (`BC-007`, `DATA-007`).
+/// Immutable descriptor for a single shallow workspace directory child entry, including hidden dotfiles and bounded binary classification (`BC-007`, `DATA-003`, `DATA-007`).
 public struct FolderEntryDescriptor: Equatable, Sendable {
     public let name: String
     public let url: URL
     public let isDirectory: Bool
     public let isHiddenDotfile: Bool
+    /// `true` when a regular non-directory file contains `0x00` within its first `8 KiB` (`DocumentCodec.binaryProbeBytes`) (`DATA-003`).
+    public let isBinary: Bool
 
-    public init(name: String, url: URL, isDirectory: Bool, isHiddenDotfile: Bool) {
+    public init(
+        name: String,
+        url: URL,
+        isDirectory: Bool,
+        isHiddenDotfile: Bool,
+        isBinary: Bool = false
+    ) {
         self.name = name
         self.url = url
         self.isDirectory = isDirectory
         self.isHiddenDotfile = isHiddenDotfile
+        self.isBinary = isBinary
     }
 }
 
@@ -91,16 +100,32 @@ public struct DotfileFolderNavigator: Sendable {
             try Self.verifyConfinement(of: reportedChildURL, canonicalScopePath: canonicalScopePath)
 
             let resolvedChild = reportedChildURL.resolvingSymlinksInPath()
-            let isDir = (try? resolvedChild.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let resourceValues = try? resolvedChild.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+            let isDir = resourceValues?.isDirectory ?? false
+            let isRegularFile = resourceValues?.isRegularFile ?? false
+            let isBinary = (!isDir && isRegularFile) ? Self.probeIsBinaryRegularFile(at: resolvedChild) : false
             descriptors.append(FolderEntryDescriptor(
                 name: name,
                 url: reportedChildURL,
                 isDirectory: isDir,
-                isHiddenDotfile: name.hasPrefix(".")
+                isHiddenDotfile: name.hasPrefix("."),
+                isBinary: isBinary
             ))
         }
 
         return descriptors.sorted(by: Self.compareEntries)
+    }
+
+    /// Reads at most `DocumentCodec.binaryProbeBytes` (`8 KiB`) from a confinement-verified regular file to classify NUL-bearing binaries without loading full payloads (`CWE-400`, `DATA-003`, `SEC-003`).
+    private static func probeIsBinaryRegularFile(at resolvedURL: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: resolvedURL) else {
+            return false
+        }
+        defer { try? handle.close() }
+        guard let prefix = try? handle.read(upToCount: DocumentCodec.binaryProbeBytes) else {
+            return false
+        }
+        return DocumentCodec.isBinaryPrefix(prefix)
     }
 
     /// Resolves the parent directory URL (`...`) for `currentDirectoryURL` when not at `"/"` and either inside `scopeURL` or readable under user permissions (`BC-007`, `DATA-007`, `SEC-002`, `SEC-003`).

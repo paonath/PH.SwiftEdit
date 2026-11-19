@@ -19,17 +19,17 @@ struct BracketBalancingEngineTests {
 
         // THEN all five nested pairs are matched in order, unbalancedBrackets is empty, and activePair matches each caret context
         let expectedPairs = [
-            BracketPairSpan(openOffset: 9, closeOffset: 18, openSymbol: "(", closeSymbol: ")"),
-            BracketPairSpan(openOffset: 13, closeOffset: 17, openSymbol: "[", closeSymbol: "]"),
-            BracketPairSpan(openOffset: 20, closeOffset: 36, openSymbol: "{", closeSymbol: "}"),
-            BracketPairSpan(openOffset: 29, closeOffset: 34, openSymbol: "(", closeSymbol: ")"),
-            BracketPairSpan(openOffset: 31, closeOffset: 33, openSymbol: "[", closeSymbol: "]"),
+            BracketPairSpan(openOffset: 9, closeOffset: 18, openSymbol: "(", closeSymbol: ")", nestingDepth: 0),
+            BracketPairSpan(openOffset: 13, closeOffset: 17, openSymbol: "[", closeSymbol: "]", nestingDepth: 1),
+            BracketPairSpan(openOffset: 20, closeOffset: 36, openSymbol: "{", closeSymbol: "}", nestingDepth: 0),
+            BracketPairSpan(openOffset: 29, closeOffset: 34, openSymbol: "(", closeSymbol: ")", nestingDepth: 1),
+            BracketPairSpan(openOffset: 31, closeOffset: 33, openSymbol: "[", closeSymbol: "]", nestingDepth: 2),
         ]
         #expect(atBrace.matchedPairs == expectedPairs)
         #expect(atBrace.unbalancedBrackets.isEmpty)
-        #expect(atBrace.activePair == BracketPairSpan(openOffset: 20, closeOffset: 36, openSymbol: "{", closeSymbol: "}"))
-        #expect(atBracket.activePair == BracketPairSpan(openOffset: 13, closeOffset: 17, openSymbol: "[", closeSymbol: "]"))
-        #expect(enclosed.activePair == BracketPairSpan(openOffset: 31, closeOffset: 33, openSymbol: "[", closeSymbol: "]"))
+        #expect(atBrace.activePair == BracketPairSpan(openOffset: 20, closeOffset: 36, openSymbol: "{", closeSymbol: "}", nestingDepth: 0))
+        #expect(atBracket.activePair == BracketPairSpan(openOffset: 13, closeOffset: 17, openSymbol: "[", closeSymbol: "]", nestingDepth: 1))
+        #expect(enclosed.activePair == BracketPairSpan(openOffset: 31, closeOffset: 33, openSymbol: "[", closeSymbol: "]", nestingDepth: 2))
     }
 
     @Test("N3: evaluateBrackets reports stray closing, mismatched, and unclosed brackets with exact UTF-16 offsets")
@@ -44,8 +44,8 @@ struct BracketBalancingEngineTests {
 
         // THEN valid inner pairs still match while unbalanced delimiters are reported in ascending UTF-16 offset order
         #expect(brokenResult.matchedPairs == [
-            BracketPairSpan(openOffset: 13, closeOffset: 21, openSymbol: "[", closeSymbol: "]"),
-            BracketPairSpan(openOffset: 14, closeOffset: 20, openSymbol: "(", closeSymbol: ")"),
+            BracketPairSpan(openOffset: 13, closeOffset: 21, openSymbol: "[", closeSymbol: "]", nestingDepth: 0),
+            BracketPairSpan(openOffset: 14, closeOffset: 20, openSymbol: "(", closeSymbol: ")", nestingDepth: 1),
         ])
         #expect(brokenResult.unbalancedBrackets == [
             UnbalancedBracket(offset: 23, symbol: "}"),

@@ -65,7 +65,9 @@ public enum KeyboardShortcutsCheatSheetCatalog {
         ]),
         KeyboardShortcutSection(category: "Sidebar", items: [
             KeyboardShortcutDescriptor(title: "Parent Folder", shortcut: "...", summary: "Ascend to parent directory when user permissions allow"),
-            KeyboardShortcutDescriptor(title: "Sidebar Context Actions", shortcut: "Right-Click", summary: "Reveal/Open in Finder, Open Terminal/iTerm2, New/Rename/Cut/Copy/Paste/Trash"),
+            KeyboardShortcutDescriptor(title: "Pin / Collapse Sidebar", shortcut: "Pin / Cmd+B", summary: "Collapse or pin the percentage-resized left navigation panel"),
+            KeyboardShortcutDescriptor(title: "Sidebar Context Actions", shortcut: "Right-Click", summary: "New File/Folder prompt (rows & empty space), Reveal/Open in Finder, Open Terminal/iTerm2, Cut/Copy/Paste/Rename/Trash"),
+            KeyboardShortcutDescriptor(title: "Reorder Tabs", shortcut: "Drag / Context", summary: "Drag tabs left or right or use tab Move Left / Move Right actions"),
         ]),
     ]
 }

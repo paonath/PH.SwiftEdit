@@ -100,6 +100,50 @@ public struct WorkspaceTabSession: Equatable, Sendable {
         tabs = Self.partitionPinnedFirst(tabs)
     }
 
+    /// Reorders the tab matching `id` to `destinationIndex`, clamping strictly inside its pinned or unpinned partition (`BC-006`, `BC-008`).
+    /// - Parameters:
+    ///   - id: Identifier of the open tab to move.
+    ///   - destinationIndex: Desired 0-based index in `tabs`; clamped to the tab's pinned or unpinned partition.
+    /// - Throws: `DomainError.tabNotFound` when `id` is not present in `tabs`.
+    public mutating func moveTab(id: DocumentID, toIndex destinationIndex: Int) throws {
+        guard let sourceIndex = tabs.firstIndex(where: { $0.id == id }) else {
+            throw DomainError.tabNotFound(id)
+        }
+        let range = partitionRange(forPinned: tabs[sourceIndex].isPinned)
+        let clampedDestination = min(max(destinationIndex, range.lowerBound), range.upperBound)
+        guard clampedDestination != sourceIndex else { return }
+        let moved = tabs.remove(at: sourceIndex)
+        tabs.insert(moved, at: clampedDestination)
+    }
+
+    /// Moves the tab matching `id` one slot left inside its pinned or unpinned partition (`BC-006`, `BC-008`).
+    /// - Throws: `DomainError.tabNotFound` when `id` is not present in `tabs`.
+    public mutating func moveTabLeft(id: DocumentID) throws {
+        guard let sourceIndex = tabs.firstIndex(where: { $0.id == id }) else {
+            throw DomainError.tabNotFound(id)
+        }
+        try moveTab(id: id, toIndex: sourceIndex - 1)
+    }
+
+    /// Moves the tab matching `id` one slot right inside its pinned or unpinned partition (`BC-006`, `BC-008`).
+    /// - Throws: `DomainError.tabNotFound` when `id` is not present in `tabs`.
+    public mutating func moveTabRight(id: DocumentID) throws {
+        guard let sourceIndex = tabs.firstIndex(where: { $0.id == id }) else {
+            throw DomainError.tabNotFound(id)
+        }
+        try moveTab(id: id, toIndex: sourceIndex + 1)
+    }
+
+    private func partitionRange(forPinned isPinned: Bool) -> ClosedRange<Int> {
+        let pinnedCount = tabs.prefix(while: \.isPinned).count
+        if isPinned {
+            return 0...max(0, pinnedCount - 1)
+        }
+        let lower = pinnedCount
+        let upper = max(lower, tabs.count - 1)
+        return lower...upper
+    }
+
     /// Updates mutable metadata (`title`, `fileURL`, `isDirty`, `caretLocation`, `revision`) on an open tab.
     /// - Throws: `DomainError.tabNotFound` when `id` is not present in `tabs`.
     public mutating func updateTabState(

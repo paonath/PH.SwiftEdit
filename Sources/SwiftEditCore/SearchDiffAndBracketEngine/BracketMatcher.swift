@@ -6,12 +6,21 @@ public struct BracketPairSpan: Equatable, Sendable {
     public let closeOffset: Int
     public let openSymbol: Character
     public let closeSymbol: Character
+    /// 0-based nesting depth recorded when the opening delimiter was pushed onto the delimiter stack (`AR-012`).
+    public let nestingDepth: Int
 
-    public init(openOffset: Int, closeOffset: Int, openSymbol: Character, closeSymbol: Character) {
+    public init(
+        openOffset: Int,
+        closeOffset: Int,
+        openSymbol: Character,
+        closeSymbol: Character,
+        nestingDepth: Int = 0
+    ) {
         self.openOffset = openOffset
         self.closeOffset = closeOffset
         self.openSymbol = openSymbol
         self.closeSymbol = closeSymbol
+        self.nestingDepth = nestingDepth
     }
 }
 
@@ -33,19 +42,23 @@ public struct BracketBalanceResult: Equatable, Sendable {
     public let matchedPairs: [BracketPairSpan]
     public let unbalancedBrackets: [UnbalancedBracket]
     public let activePair: BracketPairSpan?
+    /// Matched pairs enclosing `caretLocation`, sorted outer-to-inner by ascending `openOffset` (`AR-012`).
+    public let enclosingPairs: [BracketPairSpan]
 
     public init(
         documentID: DocumentID,
         revision: BufferRevision,
         matchedPairs: [BracketPairSpan],
         unbalancedBrackets: [UnbalancedBracket],
-        activePair: BracketPairSpan?
+        activePair: BracketPairSpan?,
+        enclosingPairs: [BracketPairSpan] = []
     ) {
         self.documentID = documentID
         self.revision = revision
         self.matchedPairs = matchedPairs
         self.unbalancedBrackets = unbalancedBrackets
         self.activePair = activePair
+        self.enclosingPairs = enclosingPairs
     }
 }
 
@@ -76,17 +89,19 @@ public enum SearchDiffAndBracketEngine {
         let sortedPairs = scanner.matchedPairs.sorted { $0.openOffset < $1.openOffset }
         let sortedUnbalanced = scanner.finalizedUnbalanced().sorted { $0.offset < $1.offset }
         let active = caretLocation.flatMap { resolveActivePair(at: $0, in: sortedPairs) }
+        let enclosing = caretLocation.map { resolveEnclosingPairs(at: $0, in: sortedPairs) } ?? []
 
         return .completed(BracketBalanceResult(
             documentID: snapshot.id,
             revision: snapshot.revision,
             matchedPairs: sortedPairs,
             unbalancedBrackets: sortedUnbalanced,
-            activePair: active
+            activePair: active,
+            enclosingPairs: enclosing
         ))
     }
 
-    private static func firstOverlongLine(in text: String, limit: Int) -> (line: Int, utf16Length: Int)? {
+    static func firstOverlongLine(in text: String, limit: Int) -> (line: Int, utf16Length: Int)? {
         let units = text.utf16
         var index = units.startIndex
         var lineNumber = 1
@@ -119,7 +134,7 @@ public enum SearchDiffAndBracketEngine {
     }
 
     private struct DelimiterStackScanner {
-        private var stack: [(offset: Int, symbol: Character)] = []
+        private var stack: [(offset: Int, symbol: Character, depth: Int)] = []
         private(set) var matchedPairs: [BracketPairSpan] = []
         private var unbalanced: [UnbalancedBracket] = []
 
@@ -138,7 +153,7 @@ public enum SearchDiffAndBracketEngine {
         private mutating func consume(character: Character, at offset: Int) {
             switch character {
             case "(", "[", "{":
-                stack.append((offset: offset, symbol: character))
+                stack.append((offset: offset, symbol: character, depth: stack.count))
             case ")", "]", "}":
                 let expectedOpen = Self.matchingOpener(for: character)
                 if let top = stack.last, top.symbol == expectedOpen {
@@ -147,7 +162,8 @@ public enum SearchDiffAndBracketEngine {
                         openOffset: top.offset,
                         closeOffset: offset,
                         openSymbol: top.symbol,
-                        closeSymbol: character
+                        closeSymbol: character,
+                        nestingDepth: top.depth
                     ))
                 } else {
                     unbalanced.append(UnbalancedBracket(offset: offset, symbol: character))
@@ -177,5 +193,11 @@ public enum SearchDiffAndBracketEngine {
         return pairs
             .filter { $0.openOffset < caret && caret < $0.closeOffset }
             .max(by: { $0.openOffset < $1.openOffset })
+    }
+
+    private static func resolveEnclosingPairs(at caret: Int, in pairs: [BracketPairSpan]) -> [BracketPairSpan] {
+        pairs
+            .filter { $0.openOffset <= caret && caret <= $0.closeOffset }
+            .sorted { $0.openOffset < $1.openOffset }
     }
 }
