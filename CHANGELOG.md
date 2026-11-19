@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-19 UTC
+Branch: feature/FirstStub | Commit: ec1cac8
+
+### Added
+- Implemented the minimalist `SwiftEditUI` workspace layout (`isLeftSidebarCollapsed = true` default, automatic expansion on `Open Folder` / `Open All Files in Folder`, right-column `EditorTabStrip`, left 1-based `LineNumberGutterView`, and live `Line`/`Column`/`Character count`/`UTF-8`/`LF|CRLF|CR` status bar) (`openspec/specs/ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions/spec.md` and `openspec/specs/swifteditui-purple-zed-layout-textkit2-and-appicons/spec.md`, archived at `openspec/changes/archive/2026-11-19-007-ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions/`).
+- Added left-sidebar `...` parent-folder navigation (`DotfileFolderNavigator.resolveParentDirectory` and `SwiftEditWorkbenchModel.navigateToParentFolder`) ascending one directory level whenever not at `"/"` and user permissions permit reading the parent folder (`[BC-007]`, `[DATA-007]`, `[UI-001]`).
+- Added `FindReplaceGoToLineBar` (`Cmd+F` Find, `Cmd+H` Find & Replace, `Cmd+G` Go to Line), 3-way `LineEnding` switching (`DocumentSession.setLineEnding`), 10-entry MRU `Open Recent` menu integration, `> 50`-file batch-open confirmation, and `Save / Don't Save / Cancel` prompts on dirty tab close (`Cmd+W`) and application termination (`Cmd+Q`).
+- Added `@FocusedValue` `SwiftEditCommands` (`File`, `Edit`, `View`, `Help`, `About`) in `XcodeApp/SwiftEditApp.swift`, graphical `KeyboardShortcutsCheatSheetView` (`KeyboardShortcutsCheatSheetCatalog`), `AboutSheetView` (`AboutSheetDescriptor` reading `version.json` / `Info.plist`), and all 11 sidebar CRUD/Cut-Copy-Paste/Trash and `Finder`/`iTerm2`/`Terminal.app` actions via `DesktopWorkspaceIntegrating` (`MacOSWorkspaceAdapter`).
+
+### Security
+- Enforced symlink parent-escape blocking and balanced security-scoped resource bracketing on `...` parent-folder navigation (`DomainError.securityScopeViolation`, `CWE-22`, `CWE-59`, `[SEC-002]`, `[SEC-003]`).
+- Enforced directory-only `NSWorkspace` terminal handoff (`DesktopWorkspaceValidator.resolveTerminalLaunch` resolving selected files such as `.command`/`.sh` strictly to their verified parent directory, allowlisting only `com.googlecode.iterm2` and `com.apple.Terminal` with zero subprocesses, `CWE-78`) and HTTPS-only `AboutSheetDescriptor` repository link confirmation (`[SEC-004]`, `[UI-008]`).
+
+## [Unreleased] - 2026-11-19 UTC
 Branch: feature/FirstStub | Commit: f6f700a
 
 ### Added
