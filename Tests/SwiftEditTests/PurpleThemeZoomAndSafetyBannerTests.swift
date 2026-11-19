@@ -25,6 +25,7 @@ struct PurpleThemeZoomAndSafetyBannerTests {
         zoom.resetZoom()
 
         let safetyState = InspectionSafetyBannerState.evaluate(snapshot: session.snapshot)
+        let gutter = LineNumberGutterProjection.evaluate(text: "one\ntwo\nthree", caretLocation: 5, fontSizePoints: zoom.scaledFontSizePoints)
         let httpsPrompt = try #require(InspectionSafetyBannerState.prepareExternalURIConfirmation(rawURI: "https://swift.org/documentation"))
 
         // THEN Concept E2 tokens (#0B0614, #7C3AED, #A78BFA, #C4B5FD), 21:1 B/W canvas, >= 4.5:1 chrome contrast, zoom scaling, and HTTPS confirmation match spec
@@ -45,6 +46,7 @@ struct PurpleThemeZoomAndSafetyBannerTests {
         #expect(afterPinchPercent == 165)
         #expect(zoom.isPaneFocusZoomed == true)
         #expect(zoom.zoomPercent == 100)
+        #expect(gutter == LineNumberGutterProjection(lineNumbers: [1, 2, 3], activeLine: 2, fontSizePoints: 14.0))
         #expect(session.text == "unchanged document text")
         #expect(safetyState == InspectionSafetyBannerState(
             isBinaryReadOnlyBannerVisible: false,
@@ -71,12 +73,14 @@ struct PurpleThemeZoomAndSafetyBannerTests {
         // WHEN stepping beyond bounds
         minZoom.zoomOut()
         maxZoom.zoomIn()
+        let emptyGutter = LineNumberGutterProjection.evaluate(text: "", caretLocation: 0, fontSizePoints: 14.0)
 
         // THEN all zoom percentages remain strictly clamped in 50...300
         #expect(minZoom.zoomPercent == 50)
         #expect(maxZoom.zoomPercent == 300)
         #expect(underflowInit.zoomPercent == 50)
         #expect(overflowInit.zoomPercent == 300)
+        #expect(emptyGutter.lineNumbers == [1])
     }
 
     @Test("N2 [Security]: InspectionSafetyBannerState locks out binary mutations, detects Trojan Source BiDi scalars, and blocks unsafe external URI schemes")

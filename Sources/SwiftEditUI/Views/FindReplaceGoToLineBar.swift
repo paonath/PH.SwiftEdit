@@ -1,0 +1,123 @@
+import Foundation
+import SwiftEditCore
+import SwiftUI
+
+/// Presentation mode of the inline Find / Find & Replace / Go-to-Line bar (`Cmd+F`, `Cmd+H`, `Cmd+G`) (`UI-009`).
+public enum FindBarPresentationMode: String, Equatable, Sendable {
+    case hidden
+    case find
+    case findAndReplace
+    case goToLine
+}
+
+/// User resolution choice for closing a dirty tab (`Cmd+W`) or quitting with unsaved changes (`Cmd+Q`) (`BC-008`, `DATA-006`).
+public enum DirtyCloseDecision: Equatable, Sendable {
+    case save
+    case dontSave
+    case cancel
+}
+
+/// Value-type state backing `FindReplaceGoToLineBar` and `SwiftEditWorkbenchModel` search/navigation operations (`BC-004`, `BC-011`).
+public struct FindReplaceBarState: Equatable, Sendable {
+    public var mode: FindBarPresentationMode = .hidden
+    public var query: String = ""
+    public var replacement: String = ""
+    public var isCaseSensitive: Bool = false
+    public var goToLineText: String = ""
+    public var matches: [SwiftEditCore.TextRange] = []
+    public var activeMatchIndex: Int = 0
+
+    public init() {}
+
+    /// Advances `activeMatchIndex` forward modulo `matches.count` and returns the selected `TextRange` (`nil` when `matches` is empty).
+    public mutating func selectNextMatch() -> SwiftEditCore.TextRange? {
+        guard !matches.isEmpty else { return nil }
+        activeMatchIndex = (activeMatchIndex + 1) % matches.count
+        return matches[activeMatchIndex]
+    }
+
+    /// Moves `activeMatchIndex` backward modulo `matches.count` and returns the selected `TextRange` (`nil` when `matches` is empty).
+    public mutating func selectPreviousMatch() -> SwiftEditCore.TextRange? {
+        guard !matches.isEmpty else { return nil }
+        activeMatchIndex = (activeMatchIndex - 1 + matches.count) % matches.count
+        return matches[activeMatchIndex]
+    }
+}
+
+#if os(macOS)
+/// Inline Purple-themed bar supporting Find (`Cmd+F`), Find & Replace (`Cmd+H`), and Go to Line (`Cmd+G`) (`UI-001`, `UI-009`).
+public struct FindReplaceGoToLineBar: View {
+    @Binding public var state: FindReplaceBarState
+    public let palette: PurpleThemePalette
+    public let onFind: () -> Void
+    public let onFindNext: () -> Void
+    public let onFindPrevious: () -> Void
+    public let onReplaceAll: () -> Void
+    public let onGoToLine: () -> Void
+    public let onClose: () -> Void
+
+    public init(
+        state: Binding<FindReplaceBarState>,
+        palette: PurpleThemePalette,
+        onFind: @escaping () -> Void,
+        onFindNext: @escaping () -> Void,
+        onFindPrevious: @escaping () -> Void,
+        onReplaceAll: @escaping () -> Void,
+        onGoToLine: @escaping () -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self._state = state
+        self.palette = palette
+        self.onFind = onFind
+        self.onFindNext = onFindNext
+        self.onFindPrevious = onFindPrevious
+        self.onReplaceAll = onReplaceAll
+        self.onGoToLine = onGoToLine
+        self.onClose = onClose
+    }
+
+    public var body: some View {
+        if state.mode != .hidden {
+            HStack(spacing: 8) {
+                if state.mode == .goToLine {
+                    Text("Go to Line:")
+                        .font(.caption.weight(.semibold))
+                    TextField("Line number (1...)", text: $state.goToLineText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                        .onSubmit { onGoToLine() }
+                    Button("Jump") { onGoToLine() }
+                } else {
+                    TextField("Find…", text: $state.query)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 180)
+                        .onSubmit { onFind() }
+                    Toggle("Aa", isOn: $state.isCaseSensitive)
+                        .toggleStyle(.button)
+                    Button("Find") { onFind() }
+                    Button("◀") { onFindPrevious() }
+                        .disabled(state.matches.isEmpty)
+                    Button("▶") { onFindNext() }
+                        .disabled(state.matches.isEmpty)
+                    Text("\(state.matches.count) match(es)")
+                        .font(.caption.monospacedDigit())
+                    if state.mode == .findAndReplace {
+                        TextField("Replace…", text: $state.replacement)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 160)
+                        Button("Replace All") { onReplaceAll() }
+                    }
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color(.sRGB, red: palette.brandGround.red, green: palette.brandGround.green, blue: palette.brandGround.blue, opacity: 0.95))
+        }
+    }
+}
+#endif

@@ -7,5 +7,10 @@ struct SwiftEditApp: App {
         WindowGroup {
             SwiftEditRootView()
         }
+        #if os(macOS)
+        .commands {
+            SwiftEditCommands()
+        }
+        #endif
     }
 }

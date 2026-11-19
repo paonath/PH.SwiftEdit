@@ -34,6 +34,17 @@ public struct FolderEntryDescriptor: Equatable, Sendable {
     }
 }
 
+/// Resolved parent-directory transition for left-sidebar `...` up-navigation (`BC-007`, `DATA-007`, `SEC-002`, `SEC-003`).
+public struct ParentDirectoryResolution: Equatable, Sendable {
+    public let parentURL: URL
+    public let updatedScopeRootURL: URL
+
+    public init(parentURL: URL, updatedScopeRootURL: URL) {
+        self.parentURL = parentURL
+        self.updatedScopeRootURL = updatedScopeRootURL
+    }
+}
+
 /// Shallow workspace directory navigator surfacing regular files and hidden dotfiles (`.env`, `.gitignore`) sorted directories-first (`BC-007`, `DATA-007`, `SEC-002`, `SEC-003`, `SEC-012`).
 ///
 /// Security invariants:
@@ -92,10 +103,79 @@ public struct DotfileFolderNavigator: Sendable {
         return descriptors.sorted(by: Self.compareEntries)
     }
 
+    /// Resolves the parent directory URL (`...`) for `currentDirectoryURL` when not at `"/"` and either inside `scopeURL` or readable under user permissions (`BC-007`, `DATA-007`, `SEC-002`, `SEC-003`).
+    ///
+    /// Security invariants (`CWE-22`, `CWE-59`, `SEC-002`, `SEC-003`):
+    /// - Rejects any candidate parent that is itself a symbolic link or where `currentDirectoryURL` / `candidateParent` resolves outside the ancestor/descendant lineage of `scopeURL`.
+    /// - Brackets external parent permission probing with `startAccessing(url:)` and a deterministic `defer { stopAccessing(url:) }` release.
+    /// - Throws: `DomainError.securityScopeViolation` when a symbolic link attempts to redirect parent traversal outside the permitted hierarchy.
+    public func resolveParentDirectory(
+        from currentDirectoryURL: URL,
+        withinScope scopeURL: URL?,
+        isParentReadable: (URL) -> Bool = { url in
+            (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil
+        }
+    ) throws -> ParentDirectoryResolution? {
+        let standardizedCurrent = currentDirectoryURL.standardizedFileURL
+        guard standardizedCurrent.path != "/" else {
+            return nil
+        }
+
+        let candidateParent = standardizedCurrent.deletingLastPathComponent().standardizedFileURL
+        if Self.isSymbolicLink(atPath: standardizedCurrent.path) || Self.isSymbolicLink(atPath: candidateParent.path) {
+            throw DomainError.securityScopeViolation(path: candidateParent.path)
+        }
+
+        let currentScope = (scopeURL ?? standardizedCurrent).standardizedFileURL
+        let canonicalScopePath = currentScope.resolvingSymlinksInPath().standardizedFileURL.path
+        let candidateParentResolved = candidateParent.resolvingSymlinksInPath().standardizedFileURL
+        let candidateParentResolvedPath = candidateParentResolved.path
+
+        let isInsideCurrentScope = Self.isDescendantOrEqual(path: candidateParentResolvedPath, ancestorPath: canonicalScopePath)
+        let isAncestorOfCurrentScope = Self.isDescendantOrEqual(path: canonicalScopePath, ancestorPath: candidateParentResolvedPath)
+
+        guard isInsideCurrentScope || isAncestorOfCurrentScope else {
+            throw DomainError.securityScopeViolation(path: candidateParent.path)
+        }
+
+        if isInsideCurrentScope {
+            return ParentDirectoryResolution(
+                parentURL: candidateParentResolved,
+                updatedScopeRootURL: currentScope.resolvingSymlinksInPath().standardizedFileURL
+            )
+        }
+
+        let didAccess = securityScope.startAccessing(url: candidateParentResolved)
+        defer {
+            if didAccess {
+                securityScope.stopAccessing(url: candidateParentResolved)
+            }
+        }
+
+        guard isParentReadable(candidateParentResolved) else {
+            return nil
+        }
+
+        return ParentDirectoryResolution(
+            parentURL: candidateParentResolved,
+            updatedScopeRootURL: candidateParentResolved
+        )
+    }
+
+    private static func isSymbolicLink(atPath path: String) -> Bool {
+        ((try? FileManager.default.attributesOfItem(atPath: path))?[.type] as? FileAttributeType) == .typeSymbolicLink
+    }
+
+    private static func isDescendantOrEqual(path: String, ancestorPath: String) -> Bool {
+        if ancestorPath == "/" {
+            return path.hasPrefix("/")
+        }
+        return path == ancestorPath || path.hasPrefix(ancestorPath + "/")
+    }
+
     private static func verifyConfinement(of candidateURL: URL, canonicalScopePath: String) throws {
         let resolvedPath = candidateURL.resolvingSymlinksInPath().standardizedFileURL.path
-        let isConfined = resolvedPath == canonicalScopePath || resolvedPath.hasPrefix(canonicalScopePath + "/")
-        if !isConfined {
+        if !isDescendantOrEqual(path: resolvedPath, ancestorPath: canonicalScopePath) {
             throw DomainError.securityScopeViolation(path: candidateURL.path)
         }
     }

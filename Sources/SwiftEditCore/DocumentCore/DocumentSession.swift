@@ -66,6 +66,16 @@ public struct DocumentSession: Equatable, Sendable {
         )
     }
 
+    /// Updates the document's wire `LineEnding` (`LF`, `CRLF`, `CR`) and marks `isDirty` when changed (`DATA-004`).
+    /// - Throws: `DomainError.binaryFileSaveForbidden` when `isBinaryReadOnly` is `true`.
+    public mutating func setLineEnding(_ newLineEnding: LineEnding) throws {
+        try ensureEditable()
+        guard lineEnding != newLineEnding else { return }
+        lineEnding = newLineEnding
+        revision = revision.next()
+        isDirty = true
+    }
+
     /// Replaces the UTF-16 `range` with `replacement`, increments `revision`, marks `isDirty`, and returns `.textEdited`.
     /// - Throws: `DomainError.binaryFileSaveForbidden` when `isBinaryReadOnly` is `true`, or `DomainError.invalidTextRange` when `range` is out of bounds.
     @discardableResult
