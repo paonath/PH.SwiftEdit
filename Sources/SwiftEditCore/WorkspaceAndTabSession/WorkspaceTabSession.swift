@@ -147,6 +147,62 @@ public struct WorkspaceTabSession: Equatable, Sendable {
         return removed
     }
 
+    /// Reconciles open tabs in place after a sidebar file or folder rename, preserving `DocumentID`s (`BC-006`, `BC-008`).
+    public mutating func applyRename(from oldURL: URL, to newURL: URL) {
+        let oldPath = oldURL.standardizedFileURL.path
+        let newBaseURL = newURL.standardizedFileURL
+        for index in tabs.indices {
+            guard let currentURL = tabs[index].fileURL else { continue }
+            let currentPath = currentURL.standardizedFileURL.path
+            guard let match = Self.matchPathOrDescendant(candidatePath: currentPath, targetRootPath: oldPath) else {
+                continue
+            }
+            if match.isExact {
+                tabs[index].fileURL = newBaseURL
+                tabs[index].title = newBaseURL.lastPathComponent
+            } else {
+                let rebased = newBaseURL.appendingPathComponent(match.relativeSubpath).standardizedFileURL
+                tabs[index].fileURL = rebased
+            }
+        }
+    }
+
+    /// Reconciles open tabs after a sidebar item moves to Trash: closes clean matching tabs (including pinned) and detaches dirty tabs (`fileURL = nil`) so unsaved edits are never silently lost (`BC-008`, `DATA-006`).
+    public mutating func applyTrash(of trashedURL: URL) {
+        let trashedPath = trashedURL.standardizedFileURL.path
+        var cleanIDsToClose: [DocumentID] = []
+        for index in tabs.indices {
+            guard let currentURL = tabs[index].fileURL else { continue }
+            let currentPath = currentURL.standardizedFileURL.path
+            guard Self.matchPathOrDescendant(candidatePath: currentPath, targetRootPath: trashedPath) != nil else {
+                continue
+            }
+            if tabs[index].isDirty {
+                tabs[index].fileURL = nil
+            } else {
+                cleanIDsToClose.append(tabs[index].id)
+            }
+        }
+        for id in cleanIDsToClose {
+            _ = try? closeTab(id: id, forcePinned: true)
+        }
+    }
+
+    private static func matchPathOrDescendant(
+        candidatePath: String,
+        targetRootPath: String
+    ) -> (isExact: Bool, relativeSubpath: String)? {
+        if candidatePath == targetRootPath {
+            return (true, "")
+        }
+        let prefix = targetRootPath.hasSuffix("/") ? targetRootPath : targetRootPath + "/"
+        if candidatePath.hasPrefix(prefix) {
+            let relative = String(candidatePath.dropFirst(prefix.count))
+            return (false, relative)
+        }
+        return nil
+    }
+
     private func resolveFallbackActiveTab(removedAt index: Int) -> DocumentID? {
         guard !tabs.isEmpty else { return nil }
         let fallbackIndex = index > 0 ? index - 1 : 0

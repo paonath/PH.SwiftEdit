@@ -28,6 +28,7 @@ public enum DegradedEvaluationReason: Equatable, Sendable {
     case astDepthExceeded(maxDepth: Int)
     case lineLengthExceeded(line: Int, utf16Length: Int)
     case inputTooLarge(byteCount: Int)
+    case matchLimitExceeded(maxMatches: Int)
     case deadlineExceeded(limitMilliseconds: Int)
 }
 

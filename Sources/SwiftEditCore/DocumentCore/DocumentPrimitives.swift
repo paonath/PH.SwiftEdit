@@ -44,26 +44,67 @@ public enum TextEncoding: String, CaseIterable, Codable, Sendable {
     }
 }
 
-/// Authoritative document line-break convention preserved on save while normalized to `\n` inside `DocumentSession`.
+/// Authoritative three-way document line-break convention (`LF`, `CRLF`, Classic Mac `CR`) preserved on save while normalized to `\n` inside `DocumentSession` (`DATA-004`).
 public enum LineEnding: String, CaseIterable, Codable, Sendable {
     case lf = "\n"
     case crlf = "\r\n"
+    /// Classic Mac `\r` (`U+000D`) line break evaluated strictly after `\r\n` so Windows `CRLF` files are never misclassified (`DATA-004`).
+    case cr = "\r"
 
-    /// Detects `.crlf` when at least one `\r\n` sequence is present, defaulting to `.lf`.
+    /// Detects the wire line ending by scanning Unicode scalars with deterministic precedence `crlf > cr > lf`.
+    /// - Parameter rawText: Decoded string prior to canonical `\n` normalization.
+    /// - Returns: `.crlf` if any `U+000D U+000A` pair exists, `.cr` if any bare `U+000D` exists, otherwise `.lf`.
     public static func detect(in rawText: String) -> LineEnding {
-        rawText.contains("\r\n") ? .crlf : .lf
+        let scalars = rawText.unicodeScalars
+        var index = scalars.startIndex
+        var sawBareCR = false
+        while index < scalars.endIndex {
+            let scalar = scalars[index]
+            let nextIndex = scalars.index(after: index)
+            if scalar.value == 0x0D {
+                if nextIndex < scalars.endIndex && scalars[nextIndex].value == 0x0A {
+                    return .crlf
+                }
+                sawBareCR = true
+            }
+            index = nextIndex
+        }
+        return sawBareCR ? .cr : .lf
     }
 
-    /// Converts `\r\n` and bare `\r` sequences into canonical `\n` line breaks for in-memory editing.
+    /// Normalizes `\r\n` pairs and bare `\r` scalars into single `\n` (`U+000A`) breaks in one scalar pass.
     public static func normalizeToLF(_ rawText: String) -> String {
-        rawText
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
+        let scalars = rawText.unicodeScalars
+        var output = String.UnicodeScalarView()
+        output.reserveCapacity(scalars.count)
+        var index = scalars.startIndex
+        while index < scalars.endIndex {
+            let scalar = scalars[index]
+            let nextIndex = scalars.index(after: index)
+            if scalar.value == 0x0D {
+                output.append("\n")
+                if nextIndex < scalars.endIndex && scalars[nextIndex].value == 0x0A {
+                    index = scalars.index(after: nextIndex)
+                    continue
+                }
+            } else {
+                output.append(scalar)
+            }
+            index = nextIndex
+        }
+        return String(output)
     }
 
-    /// Re-applies the document's wire line-break convention prior to byte encoding.
+    /// Re-applies the document's wire line-break convention (`\n`, `\r\n`, or `\r`) prior to byte serialization.
     public func apply(toCanonicalLF canonicalLF: String) -> String {
-        self == .crlf ? canonicalLF.replacingOccurrences(of: "\n", with: "\r\n") : canonicalLF
+        switch self {
+        case .lf:
+            return canonicalLF
+        case .crlf:
+            return canonicalLF.replacingOccurrences(of: "\n", with: "\r\n")
+        case .cr:
+            return canonicalLF.replacingOccurrences(of: "\n", with: "\r")
+        }
     }
 }
 
@@ -103,6 +144,10 @@ public enum DomainError: Error, Equatable, Sendable {
     case sessionRecoveryQuotaExceeded(byteCount: UInt64)
     case corruptedRecoveryManifest
     case securityScopeViolation(path: String)
+    case batchLimitExceeded(maxBytes: UInt64)
+    case invalidItemName(String)
+    case destinationAlreadyExists(path: String)
+    case invalidPasteTarget(path: String)
     case ioFailure(String)
 }
 
