@@ -145,6 +145,7 @@ public final class WorkspaceEditorCoordinator {
     public private(set) var lastErrorBannerMessage: String?
     public private(set) var reduceMotionEnabled: Bool = false
     public private(set) var bufferReloadCount: Int = 0
+    private let systemDarkDetector: @MainActor () -> Bool
 
     /// Returns `false` when system Reduce Motion is enabled (`UI-011`).
     public var shouldAnimateTransitions: Bool {
@@ -154,12 +155,21 @@ public final class WorkspaceEditorCoordinator {
     public init(
         session: DocumentSession,
         title: String = "Untitled",
-        appearanceMode: AppearanceMode = .black
+        appearanceMode: AppearanceMode = .black,
+        systemDarkDetector: @escaping @MainActor () -> Bool = {
+            #if os(macOS)
+            return MacOSAppearanceSynchronizer.readUnmaskedSystemPrefersDark()
+            #else
+            return true
+            #endif
+        }
     ) {
         self.activeSession = session
         self.tabSession = WorkspaceTabSession()
         self.appearanceMode = appearanceMode
-        self.palette = PurpleThemePalette.resolve(appearance: appearanceMode)
+        self.systemDarkDetector = systemDarkDetector
+        let initialDark = systemDarkDetector()
+        self.palette = PurpleThemePalette.resolve(appearance: appearanceMode, systemPrefersDark: initialDark)
         self.zoomController = EditorZoomController()
         self.bufferAdapter = TextKit2BufferAdapter(initialText: session.text)
         self.bufferReloadCount = 1
@@ -175,9 +185,10 @@ public final class WorkspaceEditorCoordinator {
     }
 
     /// Updates `appearanceMode` and `palette` dynamically without reloading open document buffers (`UI-003`).
-    public func setAppearanceMode(_ mode: AppearanceMode, systemPrefersDark: Bool = true) {
+    public func setAppearanceMode(_ mode: AppearanceMode, systemPrefersDark: Bool? = nil) {
         appearanceMode = mode
-        palette = PurpleThemePalette.resolve(appearance: mode, systemPrefersDark: systemPrefersDark)
+        let resolvedDark = systemPrefersDark ?? systemDarkDetector()
+        palette = PurpleThemePalette.resolve(appearance: mode, systemPrefersDark: resolvedDark)
     }
 
     /// Updates Reduce Motion preference (`UI-011`).

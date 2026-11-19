@@ -1,5 +1,9 @@
 import Foundation
 import SwiftEditCore
+import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// Immutable sRGB color token with WCAG 2.2 relative luminance and contrast ratio calculation (`UI-001`, `UI-002`, `UI-009`).
 public struct RGBAColorToken: Equatable, Sendable {
@@ -20,6 +24,18 @@ public struct RGBAColorToken: Equatable, Sendable {
         self.alpha = alpha
     }
 
+    /// SwiftUI `Color` materialized in the `.sRGB` color space preserving `alpha` (`UI-001`).
+    public var swiftUIColor: Color {
+        Color(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
+    }
+
+    #if os(macOS)
+    /// AppKit `NSColor` materialized in the `.sRGB` color space preserving `alpha` (`AR-003`, `UI-001`).
+    public var nsColor: NSColor {
+        NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+    }
+    #endif
+
     /// WCAG 2.2 relative luminance (`0.0` pure black to `1.0` pure white).
     public var relativeLuminance: Double {
         0.2126 * Self.linearize(red) + 0.7152 * Self.linearize(green) + 0.0722 * Self.linearize(blue)
@@ -37,6 +53,70 @@ public struct RGBAColorToken: Equatable, Sendable {
     }
 }
 
+/// Immutable Concept E2 brand logo geometry and palette specification derived from `docs/design/assets/logo-e2-refined.svg` (`UI-001`).
+public struct SwiftEditBrandLogoGeometry: Equatable, Sendable {
+    public static let groundHex = "#0B0614"
+    public static let triangleStrokeHex = "#A78BFA"
+    public static let featherTopHex = "#C4B5FD"
+    public static let featherBottomHex = "#7C3AED"
+    public static let viewBoxSize: Double = 512.0
+    public static let cornerRadius: Double = 96.0
+    public static let topBarLogoSize: Double = 20.0
+    public static let aboutDialogLogoSize: Double = 84.0
+}
+
+/// Target macOS window chrome appearance applied to `NSApp.appearance` (`AR-003`, `UI-003`).
+public enum MacOSWindowAppearanceTarget: String, Equatable, Sendable {
+    /// Forces standard macOS Light (`NSAppearance.Name.aqua`) window titlebars, menus, and sheets.
+    case aqua
+    /// Forces standard macOS Dark (`NSAppearance.Name.darkAqua`) window titlebars, menus, and sheets.
+    case darkAqua
+    /// Clears `NSApp.appearance` (`nil`) so macOS host automatic appearance governs chrome surfaces.
+    case systemAutomatic
+}
+
+#if os(macOS)
+/// `@MainActor` bridge synchronizing `NSApp.appearance` and reading unmasked host OS interface style (`AR-003`, `UI-003`, `UI-005`).
+///
+/// Guards `NSApp.activationPolicy() == .regular` before mutating `NSApp.appearance` so headless parallel `Swift Testing` processes (`NSApp == nil` or `.prohibited`) remain side-effect-free (`TEST-003`).
+@MainActor
+public enum MacOSAppearanceSynchronizer {
+    /// Maps an `AppearanceMode` to its deterministic `MacOSWindowAppearanceTarget`.
+    public static func target(for appearance: AppearanceMode) -> MacOSWindowAppearanceTarget {
+        switch appearance {
+        case .light: return .aqua
+        case .black: return .darkAqua
+        case .auto: return .systemAutomatic
+        }
+    }
+
+    /// Maps an `AppearanceMode` to an explicit `NSAppearance.Name` (`nil` when `.auto` delegates to the host OS).
+    public static func nsAppearanceName(for appearance: AppearanceMode) -> NSAppearance.Name? {
+        switch appearance {
+        case .light: return .aqua
+        case .black: return .darkAqua
+        case .auto: return nil
+        }
+    }
+
+    /// Synchronizes `NSApp.appearance` when running inside a regular GUI application process and returns the resolved target (`UI-003`).
+    @discardableResult
+    public static func synchronizeApplicationAppearance(for appearance: AppearanceMode) -> MacOSWindowAppearanceTarget {
+        let resolvedTarget = target(for: appearance)
+        guard let app = NSApp, app.activationPolicy() == .regular else {
+            return resolvedTarget
+        }
+        app.appearance = nsAppearanceName(for: appearance).flatMap { NSAppearance(named: $0) }
+        return resolvedTarget
+    }
+
+    /// Reads the unmasked host macOS `AppleInterfaceStyle` global preference (`true` when `"Dark"`, `false` when Light) without being shadowed by `NSApp.appearance` or SwiftUI `.preferredColorScheme` overrides (`UI-003`).
+    public static func readUnmaskedSystemPrefersDark(userDefaults: UserDefaults = .standard) -> Bool {
+        (userDefaults.string(forKey: "AppleInterfaceStyle") ?? "") == "Dark"
+    }
+}
+#endif
+
 /// Concrete Light or Black presentation mode resolved from `AppearanceMode` (`UI-001`, `UI-003`).
 public enum ResolvedThemeMode: String, Equatable, Sendable {
     case light
@@ -44,32 +124,105 @@ public enum ResolvedThemeMode: String, Equatable, Sendable {
 }
 
 /// Semantic Concept E2 Feather-in-Triangle Purple (`Viola`) workspace chrome palette and `#FFFFFF`/`#000000` inverted editor canvas (`UI-001..003`, `UI-009`).
+///
+/// Intentionally omits `brandGround` so `SwiftEditUI` views cannot hardcode near-black `#0B0614` surfaces in Light mode (`CWE-451`).
 public struct PurpleThemePalette: Equatable, Sendable {
+    /// Active resolved Light or Black theme mode.
     public let mode: ResolvedThemeMode
-    public let brandGround: RGBAColorToken
+    /// Concept E2 feather bottom anchor (`#7C3AED`).
     public let primaryAccent: RGBAColorToken
+    /// Concept E2 inverted-triangle stroke anchor (`#A78BFA`).
     public let strokeLavender: RGBAColorToken
+    /// Concept E2 feather top highlight anchor (`#C4B5FD`).
     public let featherHighlight: RGBAColorToken
+    /// Default workspace chrome container surface (`#F5F3FF` Light, `#0B0614` Black).
     public let chromeSurface: RGBAColorToken
+    /// Primary text and icon foreground across chrome and modal sheets (`#1E1035` Light, `#EDE9FE` Black, `>= 12.1:1`).
     public let chromeForeground: RGBAColorToken
+    /// Pure editor canvas background (`#FFFFFF` Light, `#000000` Black, `21:1` contrast) (`UI-002`).
     public let editorCanvasBackground: RGBAColorToken
+    /// Pure editor canvas primary text (`#000000` Light, `#FFFFFF` Black, `21:1` contrast) (`UI-002`).
     public let editorCanvasText: RGBAColorToken
-    /// Subtle full-width current-line highlight (`#F3F0FA` in Light, `#161224` slightly lighter than `#000000` in Black) (`UI-002`).
+    /// Subtle full-width current-line highlight (`#F3F0FA` Light, `#161224` Black) (`UI-002`).
     public let currentLineHighlight: RGBAColorToken
-    /// High-contrast nested bracket pair colors indexed modulo `nestingDepth` (`AR-012`, `UI-002`).
+    /// Depth-indexed nested bracket pair colors verified at `>= 4.5:1` against `editorCanvasBackground` (`AR-012`, `UI-002`).
     public let nestedBracketPalette: [RGBAColorToken]
-    /// Background highlight pill applied behind the active caret bracket pair (`UI-002`).
+    /// Background highlight pill behind the active matched bracket pair (`UI-002`).
     public let activeBracketHighlight: RGBAColorToken
-    /// Error foreground color applied to unbalanced bracket delimiters (`UI-002`).
+    /// Error foreground color applied to unbalanced bracket delimiters (`#991B1B` Light, `#FCA5A5` Black, `>= 6.78:1` against `unbalancedBracketBackground`, `CWE-451`, `UI-002`).
     public let unbalancedBracketHighlight: RGBAColorToken
-    /// Subtle background tint for inline backtick code spans (`` `...` ``) (`UI-002`).
+    /// Opaque pill background paired with `unbalancedBracketHighlight` (`#FEE2E2` Light, `#450A0A` Black, `>= 6.78:1` WCAG 2.2 AA contrast) (`UI-002`, `UI-009`).
+    public let unbalancedBracketBackground: RGBAColorToken
+    /// Trojan Source Unicode BiDi warning text foreground (`#78350F` Light, `#FDE68A` Black, `>= 8.15:1` contrast, `CVE-2021-42574`, `CWE-451`, `UI-008`).
+    public let bidiWarningForeground: RGBAColorToken
+    /// Trojan Source Unicode BiDi warning banner background (`#FEF3C7` Light, `#451A03` Black, `CVE-2021-42574`, `UI-008`).
+    public let bidiWarningBackground: RGBAColorToken
+    /// Trojan Source Unicode BiDi warning border (`#B45309` Light, `#F59E0B` Black, `>= 4.56:1` against `chromeSurface`, `CVE-2021-42574`, `UI-008`).
+    public let bidiWarningBorder: RGBAColorToken
+    /// Binary read-only quarantine banner text foreground (`#7C2D12` Light, `#FED7AA` Black, `>= 8.18:1` contrast, `CWE-451`, `DATA-003`, `UI-008`).
+    public let binaryQuarantineForeground: RGBAColorToken
+    /// Binary read-only quarantine banner background (`#FFEDD5` Light, `#431407` Black, `DATA-003`, `UI-008`).
+    public let binaryQuarantineBackground: RGBAColorToken
+    /// Binary read-only quarantine banner border (`#C2410C` Light, `#FB923C` Black, `>= 4.69:1` against `chromeSurface`, `DATA-003`, `UI-008`).
+    public let binaryQuarantineBorder: RGBAColorToken
+    /// Inert raw-HTML preview block text foreground (`#7F1D1D` Light, `#FECACA` Black, `>= 8.17:1` contrast, `CWE-451`, `UI-006`).
+    public let inertHTMLWarningForeground: RGBAColorToken
+    /// Inert raw-HTML preview block background (`#FEE2E2` Light, `#450A0A` Black, `UI-006`).
+    public let inertHTMLWarningBackground: RGBAColorToken
+    /// Inert raw-HTML preview block border (`#DC2626` Light, `#EF4444` Black, `>= 3.0:1` against `chromeSurface`, `UI-006`).
+    public let inertHTMLWarningBorder: RGBAColorToken
+    /// Background tint for inline backtick code spans (`` `...` ``) (`UI-002`).
     public let backtickInlineBackground: RGBAColorToken
-    /// Subtle background tint for multiline fenced code blocks (`` ```...``` ``) (`UI-002`).
+    /// Background tint for multiline fenced code blocks (`` ```...``` ``) (`UI-002`).
     public let backtickMultilineBackground: RGBAColorToken
-    /// Accent foreground color applied to inline and fenced backtick code spans (`UI-002`).
+    /// Accent foreground applied to inline and fenced backtick code spans (`UI-002`).
     public let backtickForeground: RGBAColorToken
-    /// Muted disabled foreground for binary files in the left sidebar (`#52525B` dark gray in Light, `#9CA3AF` light gray in Black) (`DATA-003`, `UI-008`).
+    /// Muted disabled foreground for quarantined binary files in the left sidebar (`#52525B` Light, `#9CA3AF` Black) (`DATA-003`, `UI-008`).
     public let sidebarBinaryDisabledText: RGBAColorToken
+    /// Top header bar surface (`#F3E8FF` Light, `#0B0614` Black).
+    public let topBarSurface: RGBAColorToken
+    /// Modal dialog surface for `AboutSheetView` and `KeyboardShortcutsCheatSheetView` (`#F3E8FF` Light, `#0B0614` Black).
+    public let sheetSurface: RGBAColorToken
+    /// Collapsible left Folder Navigator surface (`#EDE0FF` Light, `#140A24` Black).
+    public let sidebarSurface: RGBAColorToken
+    /// Right-column Notepad++-style tab strip surface (`#E9D5FF` Light, `#180C2C` Black).
+    public let tabBarSurface: RGBAColorToken
+    /// Selected editor tab background seamlessly matching `editorCanvasBackground` (`#FFFFFF` Light, `#000000` Black).
+    public let tabActiveSurface: RGBAColorToken
+    /// Pin badge and dirty-indicator accent on editor tabs (`#7C3AED` Light, `#C4B5FD` Black).
+    public let pinnedTabBadge: RGBAColorToken
+    /// Find/Replace/Go-to-Line bar surface (`0.96` alpha, clamped to `1.0` under `reduceTransparency` or `increasedContrast`).
+    public let findBarSurface: RGBAColorToken
+    /// Translucent header brand submenu surface (`0.90` alpha, clamped to `1.0` under `reduceTransparency` or `increasedContrast`).
+    public let submenuTranslucentSurface: RGBAColorToken
+    /// Left 1-based line-number gutter surface (`#F5F3FF` Light, `#0B0614` Black).
+    public let gutterSurface: RGBAColorToken
+    /// Inactive line-number foreground (`#5B21B6` Light, `#A78BFA` Black, `>= 6.8:1`).
+    public let gutterForeground: RGBAColorToken
+    /// Active caret-line number foreground (`#1E1035` Light, `#EDE9FE` Black, `>= 15.0:1`).
+    public let gutterActiveForeground: RGBAColorToken
+    /// Bottom status-bar surface (`#7C3AED` Light, `#2E1065` Black).
+    public let statusBarSurface: RGBAColorToken
+    /// Bottom status-bar text and control foreground (`#FFFFFF`, `>= 5.70:1`).
+    public let statusBarForeground: RGBAColorToken
+    /// Secondary chrome text and muted label foreground (`#5B21B6` Light, `#C4B5FD` Black, `>= 6.6:1`).
+    public let secondaryForeground: RGBAColorToken
+    /// Interactive chrome icon, focus-ring, and active-tab border accent (`#7C3AED` Light, `#A78BFA` Black, `>= 3.0:1`).
+    public let chromeAccent: RGBAColorToken
+    /// Prominent selected-pill and primary-button fill (`#7C3AED`).
+    public let activeControlFill: RGBAColorToken
+    /// Foreground paired with `activeControlFill` (`#FFFFFF`, `5.70:1`).
+    public let activeControlForeground: RGBAColorToken
+    /// Shortcut-badge and selector-track container surface (`#E9D5FF` Light, `#2E1065` Black).
+    public let badgeSurface: RGBAColorToken
+    /// `1pt` chrome separator token (`#C4B5FD` / `#3B1D6E`, stepped up to `#7C3AED` / `#A78BFA` `>= 3.0:1` under `reduceTransparency` or `increasedContrast`).
+    public let hairlineBorder: RGBAColorToken
+    /// Active text-selection background inside `TextKit2EditorView` (`#DDD6FE` Light, `#3B0764` Black).
+    public let selectionBackground: RGBAColorToken
+    /// Inserted-line background in Side-by-Side Myers Diff (`#DCFCE7` Light, `#052E16` Black).
+    public let diffInsertedBackground: RGBAColorToken
+    /// Removed-line background in Side-by-Side Myers Diff (`#FEE2E2` Light, `#450A0A` Black).
+    public let diffRemovedBackground: RGBAColorToken
 
     /// Returns the deterministic depth-indexed color for a matched nested bracket pair (`AR-012`).
     public func nestedBracketColor(forDepth depth: Int) -> RGBAColorToken {
@@ -77,10 +230,18 @@ public struct PurpleThemePalette: Equatable, Sendable {
         return nestedBracketPalette[max(0, depth) % nestedBracketPalette.count]
     }
 
-    /// Resolves Concept E2 Purple chrome tokens, pure `#FFFFFF`/`#000000` inverted editor canvas tokens, and visual highlight tokens for `appearance`.
+    /// Resolves Concept E2 Purple chrome tokens, pure `#FFFFFF`/`#000000` inverted editor canvas tokens, and accessibility overrides.
+    /// - Parameters:
+    ///   - appearance: Requested `Light`, `Black`, or `Auto` preference mode.
+    ///   - systemPrefersDark: Unmasked host OS dark-mode state consulted when `appearance == .auto`.
+    ///   - reduceTransparency: Clamps `submenuTranslucentSurface` and `findBarSurface` to `1.0` alpha and steps up `hairlineBorder` contrast when `true`.
+    ///   - increasedContrast: Clamps translucent chrome surfaces to `1.0` alpha and steps up `hairlineBorder` to `>= 3.0:1` when `true`.
+    /// - Returns: Contrast-verified `PurpleThemePalette` value snapshot.
     public static func resolve(
         appearance: AppearanceMode,
-        systemPrefersDark: Bool = true
+        systemPrefersDark: Bool = true,
+        reduceTransparency: Bool = false,
+        increasedContrast: Bool = false
     ) -> PurpleThemePalette {
         let resolvedMode: ResolvedThemeMode
         switch appearance {
@@ -89,16 +250,16 @@ public struct PurpleThemePalette: Equatable, Sendable {
         case .auto: resolvedMode = systemPrefersDark ? .black : .light
         }
 
-        let brandGround = RGBAColorToken(hex: "#0B0614")
-        let primaryAccent = RGBAColorToken(hex: "#7C3AED")
-        let strokeLavender = RGBAColorToken(hex: "#A78BFA")
-        let featherHighlight = RGBAColorToken(hex: "#C4B5FD")
+        let darkGround = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.groundHex)
+        let primaryAccent = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherBottomHex)
+        let strokeLavender = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.triangleStrokeHex)
+        let featherHighlight = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherTopHex)
+        let clampOpaque = reduceTransparency || increasedContrast
 
         switch resolvedMode {
         case .light:
             return PurpleThemePalette(
                 mode: .light,
-                brandGround: brandGround,
                 primaryAccent: primaryAccent,
                 strokeLavender: strokeLavender,
                 featherHighlight: featherHighlight,
@@ -108,26 +269,57 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 editorCanvasText: RGBAColorToken(hex: "#000000"),
                 currentLineHighlight: RGBAColorToken(hex: "#F3F0FA"),
                 nestedBracketPalette: [
-                    RGBAColorToken(hex: "#7C3AED"),
-                    RGBAColorToken(hex: "#0284C7"),
-                    RGBAColorToken(hex: "#059669"),
-                    RGBAColorToken(hex: "#D97706"),
+                    RGBAColorToken(hex: "#6D28D9"),
+                    RGBAColorToken(hex: "#0369A1"),
+                    RGBAColorToken(hex: "#047857"),
+                    RGBAColorToken(hex: "#B45309"),
                 ],
-                activeBracketHighlight: RGBAColorToken(hex: "#DDD6FE"),
-                unbalancedBracketHighlight: RGBAColorToken(hex: "#DC2626"),
+                activeBracketHighlight: RGBAColorToken(hex: "#EDE9FE"),
+                unbalancedBracketHighlight: RGBAColorToken(hex: "#991B1B"),
+                unbalancedBracketBackground: RGBAColorToken(hex: "#FEE2E2"),
+                bidiWarningForeground: RGBAColorToken(hex: "#78350F"),
+                bidiWarningBackground: RGBAColorToken(hex: "#FEF3C7"),
+                bidiWarningBorder: RGBAColorToken(hex: "#B45309"),
+                binaryQuarantineForeground: RGBAColorToken(hex: "#7C2D12"),
+                binaryQuarantineBackground: RGBAColorToken(hex: "#FFEDD5"),
+                binaryQuarantineBorder: RGBAColorToken(hex: "#C2410C"),
+                inertHTMLWarningForeground: RGBAColorToken(hex: "#7F1D1D"),
+                inertHTMLWarningBackground: RGBAColorToken(hex: "#FEE2E2"),
+                inertHTMLWarningBorder: RGBAColorToken(hex: "#DC2626"),
                 backtickInlineBackground: RGBAColorToken(hex: "#EDE9FE"),
                 backtickMultilineBackground: RGBAColorToken(hex: "#F5F3FF"),
                 backtickForeground: RGBAColorToken(hex: "#6D28D9"),
-                sidebarBinaryDisabledText: RGBAColorToken(hex: "#52525B")
+                sidebarBinaryDisabledText: RGBAColorToken(hex: "#52525B"),
+                topBarSurface: RGBAColorToken(hex: "#F3E8FF"),
+                sheetSurface: RGBAColorToken(hex: "#F3E8FF"),
+                sidebarSurface: RGBAColorToken(hex: "#EDE0FF"),
+                tabBarSurface: RGBAColorToken(hex: "#E9D5FF"),
+                tabActiveSurface: RGBAColorToken(hex: "#FFFFFF"),
+                pinnedTabBadge: RGBAColorToken(hex: "#7C3AED"),
+                findBarSurface: RGBAColorToken(hex: "#F3E8FF", alpha: clampOpaque ? 1.0 : 0.96),
+                submenuTranslucentSurface: RGBAColorToken(hex: "#F3E8FF", alpha: clampOpaque ? 1.0 : 0.90),
+                gutterSurface: RGBAColorToken(hex: "#F5F3FF"),
+                gutterForeground: RGBAColorToken(hex: "#5B21B6"),
+                gutterActiveForeground: RGBAColorToken(hex: "#1E1035"),
+                statusBarSurface: RGBAColorToken(hex: "#7C3AED"),
+                statusBarForeground: RGBAColorToken(hex: "#FFFFFF"),
+                secondaryForeground: RGBAColorToken(hex: "#5B21B6"),
+                chromeAccent: RGBAColorToken(hex: "#7C3AED"),
+                activeControlFill: RGBAColorToken(hex: "#7C3AED"),
+                activeControlForeground: RGBAColorToken(hex: "#FFFFFF"),
+                badgeSurface: RGBAColorToken(hex: "#E9D5FF"),
+                hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#7C3AED" : "#C4B5FD"),
+                selectionBackground: RGBAColorToken(hex: "#DDD6FE"),
+                diffInsertedBackground: RGBAColorToken(hex: "#DCFCE7"),
+                diffRemovedBackground: RGBAColorToken(hex: "#FEE2E2")
             )
         case .black:
             return PurpleThemePalette(
                 mode: .black,
-                brandGround: brandGround,
                 primaryAccent: primaryAccent,
                 strokeLavender: strokeLavender,
                 featherHighlight: featherHighlight,
-                chromeSurface: brandGround,
+                chromeSurface: darkGround,
                 chromeForeground: RGBAColorToken(hex: "#EDE9FE"),
                 editorCanvasBackground: RGBAColorToken(hex: "#000000"),
                 editorCanvasText: RGBAColorToken(hex: "#FFFFFF"),
@@ -138,12 +330,44 @@ public struct PurpleThemePalette: Equatable, Sendable {
                     RGBAColorToken(hex: "#34D399"),
                     RGBAColorToken(hex: "#FBBF24"),
                 ],
-                activeBracketHighlight: RGBAColorToken(hex: "#3B1E6E"),
-                unbalancedBracketHighlight: RGBAColorToken(hex: "#F87171"),
+                activeBracketHighlight: RGBAColorToken(hex: "#2E1065"),
+                unbalancedBracketHighlight: RGBAColorToken(hex: "#FCA5A5"),
+                unbalancedBracketBackground: RGBAColorToken(hex: "#450A0A"),
+                bidiWarningForeground: RGBAColorToken(hex: "#FDE68A"),
+                bidiWarningBackground: RGBAColorToken(hex: "#451A03"),
+                bidiWarningBorder: RGBAColorToken(hex: "#F59E0B"),
+                binaryQuarantineForeground: RGBAColorToken(hex: "#FED7AA"),
+                binaryQuarantineBackground: RGBAColorToken(hex: "#431407"),
+                binaryQuarantineBorder: RGBAColorToken(hex: "#FB923C"),
+                inertHTMLWarningForeground: RGBAColorToken(hex: "#FECACA"),
+                inertHTMLWarningBackground: RGBAColorToken(hex: "#450A0A"),
+                inertHTMLWarningBorder: RGBAColorToken(hex: "#EF4444"),
                 backtickInlineBackground: RGBAColorToken(hex: "#1F1733"),
                 backtickMultilineBackground: RGBAColorToken(hex: "#140F24"),
                 backtickForeground: RGBAColorToken(hex: "#DDD6FE"),
-                sidebarBinaryDisabledText: RGBAColorToken(hex: "#9CA3AF")
+                sidebarBinaryDisabledText: RGBAColorToken(hex: "#9CA3AF"),
+                topBarSurface: darkGround,
+                sheetSurface: darkGround,
+                sidebarSurface: RGBAColorToken(hex: "#140A24"),
+                tabBarSurface: RGBAColorToken(hex: "#180C2C"),
+                tabActiveSurface: RGBAColorToken(hex: "#000000"),
+                pinnedTabBadge: RGBAColorToken(hex: "#C4B5FD"),
+                findBarSurface: RGBAColorToken(hex: "#140A24", alpha: clampOpaque ? 1.0 : 0.96),
+                submenuTranslucentSurface: RGBAColorToken(hex: "#140A24", alpha: clampOpaque ? 1.0 : 0.90),
+                gutterSurface: darkGround,
+                gutterForeground: RGBAColorToken(hex: "#A78BFA"),
+                gutterActiveForeground: RGBAColorToken(hex: "#EDE9FE"),
+                statusBarSurface: RGBAColorToken(hex: "#2E1065"),
+                statusBarForeground: RGBAColorToken(hex: "#FFFFFF"),
+                secondaryForeground: RGBAColorToken(hex: "#C4B5FD"),
+                chromeAccent: RGBAColorToken(hex: "#A78BFA"),
+                activeControlFill: RGBAColorToken(hex: "#7C3AED"),
+                activeControlForeground: RGBAColorToken(hex: "#FFFFFF"),
+                badgeSurface: RGBAColorToken(hex: "#2E1065"),
+                hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#A78BFA" : "#3B1D6E"),
+                selectionBackground: RGBAColorToken(hex: "#3B0764"),
+                diffInsertedBackground: RGBAColorToken(hex: "#052E16"),
+                diffRemovedBackground: RGBAColorToken(hex: "#450A0A")
             )
         }
     }
@@ -345,5 +569,54 @@ public struct InspectionSafetyBannerState: Equatable, Sendable {
         case 0x061C: return ("U+061C", "ARABIC LETTER MARK")
         default: return nil
         }
+    }
+}
+
+/// Shared semantic styling modifiers keeping modal sheets and `1pt` hairline borders uniform across `SwiftEditUI` views (`UI-001`, `UI-009`).
+public extension View {
+    /// Applies mode-resolved `sheetSurface`, `chromeForeground`, and `chromeAccent` tint to modal dialogs.
+    func purpleModalSheetChrome(palette: PurpleThemePalette) -> some View {
+        self
+            .background(palette.sheetSurface.swiftUIColor)
+            .foregroundStyle(palette.chromeForeground.swiftUIColor)
+            .tint(palette.chromeAccent.swiftUIColor)
+    }
+
+    /// Renders a `1pt` horizontal or vertical `hairlineBorder` separator along `edge`.
+    func purpleHairlineBorder(palette: PurpleThemePalette, edge: Edge) -> some View {
+        let isVertical = (edge == .leading || edge == .trailing)
+        let alignment: Alignment
+        switch edge {
+        case .top: alignment = .top
+        case .bottom: alignment = .bottom
+        case .leading: alignment = .leading
+        case .trailing: alignment = .trailing
+        }
+        return overlay(alignment: alignment) {
+            Rectangle()
+                .fill(palette.hairlineBorder.swiftUIColor)
+                .frame(width: isVertical ? 1 : nil, height: isVertical ? nil : 1)
+        }
+    }
+
+    /// Applies an opaque high-salience security warning banner surface, foreground, and `1pt` bottom border (`CVE-2021-42574`, `CWE-451`, `UI-008`).
+    func purpleSecurityWarningBanner(
+        foreground: RGBAColorToken,
+        background: RGBAColorToken,
+        border: RGBAColorToken,
+        verticalPadding: CGFloat
+    ) -> some View {
+        self
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(foreground.swiftUIColor)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, verticalPadding)
+            .background(background.swiftUIColor)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(border.swiftUIColor)
+                    .frame(height: 1)
+            }
     }
 }

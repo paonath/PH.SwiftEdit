@@ -1,18 +1,6 @@
 import Foundation
 import SwiftUI
 
-/// Immutable Concept E2 brand logo geometry and palette specification derived from `docs/design/assets/logo-e2-refined.svg` (`UI-001`).
-public struct SwiftEditBrandLogoGeometry: Equatable, Sendable {
-    public static let groundHex = "#0B0614"
-    public static let triangleStrokeHex = "#A78BFA"
-    public static let featherTopHex = "#C4B5FD"
-    public static let featherBottomHex = "#7C3AED"
-    public static let viewBoxSize: Double = 512.0
-    public static let cornerRadius: Double = 96.0
-    public static let topBarLogoSize: Double = 20.0
-    public static let aboutDialogLogoSize: Double = 84.0
-}
-
 /// Pure SwiftUI vector rendering of the official Concept E2 Feather-in-Inverted-Triangle brand logo (`docs/design/assets/logo-e2-refined.svg`) (`UI-001`).
 public struct SwiftEditBrandLogoView: View {
     public let size: CGFloat
@@ -24,15 +12,10 @@ public struct SwiftEditBrandLogoView: View {
     public var body: some View {
         Canvas { context, canvasSize in
             let scale = min(canvasSize.width, canvasSize.height) / CGFloat(SwiftEditBrandLogoGeometry.viewBoxSize)
-            let ground = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.groundHex)
-            let stroke = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.triangleStrokeHex)
-            let featherTop = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherTopHex)
-            let featherBottom = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherBottomHex)
-
-            let groundColor = Color(.sRGB, red: ground.red, green: ground.green, blue: ground.blue, opacity: 1.0)
-            let strokeColor = Color(.sRGB, red: stroke.red, green: stroke.green, blue: stroke.blue, opacity: 1.0)
-            let topColor = Color(.sRGB, red: featherTop.red, green: featherTop.green, blue: featherTop.blue, opacity: 1.0)
-            let bottomColor = Color(.sRGB, red: featherBottom.red, green: featherBottom.green, blue: featherBottom.blue, opacity: 1.0)
+            let groundColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.groundHex).swiftUIColor
+            let strokeColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.triangleStrokeHex).swiftUIColor
+            let topColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherTopHex).swiftUIColor
+            let bottomColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherBottomHex).swiftUIColor
 
             // Rounded square ground (#0B0614, rx=96/512)
             let bgRect = CGRect(x: 0, y: 0, width: 512 * scale, height: 512 * scale)

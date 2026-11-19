@@ -111,12 +111,16 @@ public struct FindReplaceGoToLineBar: View {
                 Spacer()
                 Button(action: onClose) {
                     Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(palette.secondaryForeground.swiftUIColor)
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(Color(.sRGB, red: palette.brandGround.red, green: palette.brandGround.green, blue: palette.brandGround.blue, opacity: 0.95))
+            .foregroundStyle(palette.chromeForeground.swiftUIColor)
+            .tint(palette.chromeAccent.swiftUIColor)
+            .background(palette.findBarSurface.swiftUIColor)
+            .purpleHairlineBorder(palette: palette, edge: .bottom)
         }
     }
 }

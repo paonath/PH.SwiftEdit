@@ -170,6 +170,24 @@ public enum InfoPlistVersionStamper {
         )
     }
 
+    /// Synchronizes `CFBundleShortVersionString` and `CFBundleVersion` in `infoPlistURL` from `versionJsonURL` whenever out of date (`AR-014`, `TEST-008`).
+    /// - Parameters:
+    ///   - infoPlistURL: File URL of `XcodeApp/Info.plist`.
+    ///   - versionJsonURL: File URL of `version.json` (`Nerdbank.GitVersioning`).
+    /// - Returns: The synchronized `VersionStampDescriptor` persisted on disk.
+    @discardableResult
+    public static func synchronizeInfoPlistIfNeeded(at infoPlistURL: URL, from versionJsonURL: URL) throws -> VersionStampDescriptor {
+        let versionData = try Data(contentsOf: versionJsonURL)
+        let descriptor = try parseVersionDescriptor(from: versionData)
+        let currentPlistData = try Data(contentsOf: infoPlistURL)
+        let currentVersions = try? readStampedVersions(from: currentPlistData)
+        if currentVersions != descriptor {
+            let updatedData = try stampInfoPlist(plistData: currentPlistData, descriptor: descriptor)
+            try updatedData.write(to: infoPlistURL, options: .atomic)
+        }
+        return try readStampedVersions(from: Data(contentsOf: infoPlistURL))
+    }
+
     private static func extractNumericSemVerPrefix(from rawVersion: String) -> String {
         let base = rawVersion.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? ""
         return base.split(separator: "+", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? ""

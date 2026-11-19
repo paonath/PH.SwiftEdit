@@ -126,10 +126,10 @@ public struct LineNumberGutterView: View {
             VStack(alignment: .trailing, spacing: 2) {
                 ForEach(projection.lineNumbers, id: \.self) { lineNumber in
                     let isActive = lineNumber == projection.activeLine
-                    let token = isActive ? palette.featherHighlight : palette.strokeLavender
+                    let token = isActive ? palette.gutterActiveForeground : palette.gutterForeground
                     Text("\(lineNumber)")
                         .font(.system(size: projection.fontSizePoints, weight: isActive ? .semibold : .regular, design: .monospaced))
-                        .foregroundStyle(Color(.sRGB, red: token.red, green: token.green, blue: token.blue, opacity: isActive ? 1.0 : 0.7))
+                        .foregroundStyle(token.swiftUIColor)
                         .frame(minWidth: 36, alignment: .trailing)
                 }
             }
@@ -137,7 +137,8 @@ public struct LineNumberGutterView: View {
             .padding(.horizontal, 8)
         }
         .frame(minWidth: 52, maxWidth: 68)
-        .background(Color(.sRGB, red: palette.brandGround.red, green: palette.brandGround.green, blue: palette.brandGround.blue, opacity: 0.96))
+        .background(palette.gutterSurface.swiftUIColor)
+        .purpleHairlineBorder(palette: palette, edge: .trailing)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Line Number Gutter")
     }

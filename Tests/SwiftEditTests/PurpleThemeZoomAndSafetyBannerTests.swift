@@ -29,7 +29,9 @@ struct PurpleThemeZoomAndSafetyBannerTests {
         let httpsPrompt = try #require(InspectionSafetyBannerState.prepareExternalURIConfirmation(rawURI: "https://swift.org/documentation"))
 
         // THEN Concept E2 tokens (#0B0614, #7C3AED, #A78BFA, #C4B5FD), 21:1 B/W canvas, >= 4.5:1 chrome contrast, zoom scaling, and HTTPS confirmation match spec
-        #expect(lightPalette.brandGround.hex == "#0B0614")
+        #expect(SwiftEditBrandLogoGeometry.groundHex == "#0B0614")
+        #expect(blackPalette.topBarSurface.hex == "#0B0614")
+        #expect(lightPalette.topBarSurface.hex == "#F3E8FF")
         #expect(lightPalette.primaryAccent.hex == "#7C3AED")
         #expect(lightPalette.strokeLavender.hex == "#A78BFA")
         #expect(lightPalette.featherHighlight.hex == "#C4B5FD")

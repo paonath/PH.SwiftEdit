@@ -23,25 +23,32 @@ struct XcodeAppShellAndPackagingFitnessTests {
         let macEntitlementsURL = root.appendingPathComponent("XcodeApp/PH.SwiftEdit.macOS.entitlements")
         let iosEntitlementsURL = root.appendingPathComponent("XcodeApp/PH.SwiftEdit.iOS.entitlements")
         let infoPlistURL = root.appendingPathComponent("XcodeApp/Info.plist")
+        let pbxprojURL = root.appendingPathComponent("XcodeApp/PH.SwiftEdit.xcodeproj/project.pbxproj")
+        let stampScriptURL = root.appendingPathComponent("Scripts/stamp-info-plist.sh")
         let versionJsonURL = root.appendingPathComponent("version.json")
 
-        // WHEN validating AppIcon catalogs, entitlements plists, and Info.plist version stamping
+        // WHEN validating AppIcon catalogs, entitlements plists, Xcode build-phase wiring, and Info.plist synchronization from version.json
         let macIconsValid = try EntitlementsFitnessValidator.verifyAppIconCatalog(at: macIconsURL, expectedPNGCount: 10)
         let iosIconsValid = try EntitlementsFitnessValidator.verifyAppIconCatalog(at: iosIconsURL, expectedPNGCount: 8)
         let macViolations = try EntitlementsFitnessValidator.validate(plistData: Data(contentsOf: macEntitlementsURL), platform: .macOS)
         let iosViolations = try EntitlementsFitnessValidator.validate(plistData: Data(contentsOf: iosEntitlementsURL), platform: .iOS)
         let versionDescriptor = try InfoPlistVersionStamper.parseVersionDescriptor(from: Data(contentsOf: versionJsonURL))
+        let syncedVersions = try InfoPlistVersionStamper.synchronizeInfoPlistIfNeeded(at: infoPlistURL, from: versionJsonURL)
         let stampedPlistData = try InfoPlistVersionStamper.stampInfoPlist(plistData: Data(contentsOf: infoPlistURL), descriptor: versionDescriptor)
         let repoInfoPlistVersions = try InfoPlistVersionStamper.readStampedVersions(from: Data(contentsOf: infoPlistURL))
         let stampedVersions = try InfoPlistVersionStamper.readStampedVersions(from: stampedPlistData)
+        let pbxprojText = try String(contentsOf: pbxprojURL, encoding: .utf8)
 
-        // THEN all AppIcon slots exist, both entitlements have zero violations, and Info.plist matches version.json (nbgv source of truth)
+        // THEN all AppIcon slots exist, entitlements have zero violations, Xcode runs stamp-info-plist.sh, and Info.plist matches version.json
         #expect(macIconsValid == true)
         #expect(iosIconsValid == true)
         #expect(macViolations.isEmpty)
         #expect(iosViolations.isEmpty)
+        #expect(FileManager.default.isExecutableFile(atPath: stampScriptURL.path))
+        #expect(pbxprojText.contains("Scripts/stamp-info-plist.sh"))
         #expect(!versionDescriptor.shortVersionString.isEmpty)
         #expect(!versionDescriptor.fullBuildVersionString.isEmpty)
+        #expect(syncedVersions == versionDescriptor)
         #expect(repoInfoPlistVersions == versionDescriptor)
         #expect(stampedVersions == versionDescriptor)
     }

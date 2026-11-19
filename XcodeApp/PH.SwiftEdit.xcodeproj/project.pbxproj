@@ -60,6 +60,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 700000020000000200000002 /* Build configuration list for PBXNativeTarget "PH.SwiftEdit" */;
 			buildPhases = (
+				800000030000000300000003 /* Stamp Info.plist from version.json */,
 				800000010000000100000001 /* Sources */,
 				300000010000000100000001 /* Frameworks */,
 				800000020000000200000002 /* Resources */,
@@ -118,6 +119,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		800000030000000300000003 /* Stamp Info.plist from version.json */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/../version.json",
+			);
+			name = "Stamp Info.plist from version.json";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/../Scripts/stamp-info-plist.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		800000010000000100000001 /* Sources */ = {

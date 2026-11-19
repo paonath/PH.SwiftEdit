@@ -95,34 +95,35 @@ public struct AboutSheetView: View {
     public var body: some View {
         VStack(spacing: 14) {
             SwiftEditBrandLogoView(size: CGFloat(SwiftEditBrandLogoGeometry.aboutDialogLogoSize))
-                .shadow(color: Color(.sRGB, red: palette.primaryAccent.red, green: palette.primaryAccent.green, blue: palette.primaryAccent.blue, opacity: 0.45), radius: 10)
+                .shadow(color: palette.chromeAccent.swiftUIColor.opacity(0.35), radius: 10)
             Text(descriptor.appName)
                 .font(.title2.weight(.bold))
+                .foregroundStyle(palette.chromeForeground.swiftUIColor)
             Text("Version \(descriptor.fullVersion) (\(descriptor.shortVersion))")
                 .font(.callout.monospaced())
+                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
             Text("Minimalist Sandboxed macOS Text & Markdown Editor")
                 .font(.caption)
-                .opacity(0.85)
+                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
             HStack(spacing: 10) {
                 Button("Repository (GitHub)") {
                     pendingLinkPrompt = AboutSheetDescriptor.prepareExternalLinkConfirmation(rawURI: descriptor.repositoryURL)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(Color(.sRGB, red: palette.primaryAccent.red, green: palette.primaryAccent.green, blue: palette.primaryAccent.blue, opacity: 1.0))
+                .tint(palette.activeControlFill.swiftUIColor)
 
                 Button("License (\(descriptor.licenseName))") {
                     pendingLinkPrompt = AboutSheetDescriptor.prepareExternalLinkConfirmation(rawURI: descriptor.licenseURL)
                 }
                 .buttonStyle(.bordered)
-                .tint(Color(.sRGB, red: palette.strokeLavender.red, green: palette.strokeLavender.green, blue: palette.strokeLavender.blue, opacity: 1.0))
+                .tint(palette.chromeAccent.swiftUIColor)
             }
             Button("Close") { onClose() }
                 .keyboardShortcut(.cancelAction)
         }
         .padding(24)
         .frame(width: 460, height: 320)
-        .background(Color(.sRGB, red: palette.brandGround.red, green: palette.brandGround.green, blue: palette.brandGround.blue, opacity: 1.0))
-        .foregroundStyle(Color(.sRGB, red: palette.chromeForeground.red, green: palette.chromeForeground.green, blue: palette.chromeForeground.blue, opacity: 1.0))
+        .purpleModalSheetChrome(palette: palette)
         .alert(
             "Open External Link?",
             isPresented: Binding(

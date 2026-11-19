@@ -98,22 +98,28 @@ public struct KeyboardShortcutsCheatSheetView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(section.category)
                                 .font(.headline)
-                                .foregroundStyle(Color(.sRGB, red: palette.featherHighlight.red, green: palette.featherHighlight.green, blue: palette.featherHighlight.blue, opacity: 1.0))
+                                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
                             ForEach(section.items, id: \.title) { item in
                                 HStack(spacing: 12) {
                                     Text(item.shortcut)
                                         .font(.callout.monospaced().weight(.semibold))
+                                        .foregroundStyle(palette.chromeForeground.swiftUIColor)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 3)
-                                        .background(Color(.sRGB, red: palette.primaryAccent.red, green: palette.primaryAccent.green, blue: palette.primaryAccent.blue, opacity: 0.25))
+                                        .background(palette.badgeSurface.swiftUIColor)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 4)
+                                                .stroke(palette.hairlineBorder.swiftUIColor, lineWidth: 1)
+                                        )
                                         .clipShape(RoundedRectangle(cornerRadius: 4))
                                         .frame(width: 175, alignment: .leading)
                                     Text(item.title)
                                         .font(.callout.weight(.medium))
+                                        .foregroundStyle(palette.chromeForeground.swiftUIColor)
                                         .frame(width: 210, alignment: .leading)
                                     Text(item.summary)
                                         .font(.caption)
-                                        .opacity(0.85)
+                                        .foregroundStyle(palette.secondaryForeground.swiftUIColor)
                                     Spacer()
                                 }
                             }
@@ -124,8 +130,7 @@ public struct KeyboardShortcutsCheatSheetView: View {
         }
         .padding(20)
         .frame(minWidth: 680, minHeight: 460)
-        .background(Color(.sRGB, red: palette.brandGround.red, green: palette.brandGround.green, blue: palette.brandGround.blue, opacity: 1.0))
-        .foregroundStyle(Color(.sRGB, red: palette.chromeForeground.red, green: palette.chromeForeground.green, blue: palette.chromeForeground.blue, opacity: 1.0))
+        .purpleModalSheetChrome(palette: palette)
     }
 }
 #endif

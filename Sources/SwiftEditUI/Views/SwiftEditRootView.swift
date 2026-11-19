@@ -6,16 +6,6 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-private extension RGBAColorToken {
-    var swiftUIColor: Color {
-        Color(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
-    }
-
-    var nsColor: NSColor {
-        NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
-    }
-}
-
 /// Custom TextKit 2 `NSTextView` painting a full-width subtle current-line background highlight (`UI-002`, `UI-012`).
 @MainActor
 final class SwiftEditNSTextView: NSTextView {
@@ -114,7 +104,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.textContainer?.widthTracksTextView = true
 
-        applyStyling(to: textView)
+        applyStyling(to: textView, in: scrollView)
         textView.string = text
         applyNonMutatingHighlights(to: textView)
         scrollView.documentView = textView
@@ -127,7 +117,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         context.coordinator.onSelectionChange = onSelectionChange
         context.coordinator.onSmartNewline = onSmartNewline
 
-        applyStyling(to: textView)
+        applyStyling(to: textView, in: scrollView)
         if textView.string != text {
             let previousSelection = textView.selectedRange()
             let targetLocation = context.coordinator.pendingProgrammaticCaret ?? previousSelection.location
@@ -139,16 +129,41 @@ struct TextKit2EditorView: NSViewRepresentable {
             context.coordinator.isApplyingProgrammaticUpdate = false
         }
         applyNonMutatingHighlights(to: textView)
+        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
         textView.needsDisplay = true
     }
 
-    private func applyStyling(to textView: SwiftEditNSTextView) {
+    /// Applies canvas, selection, insertion-point, and `NSScrollView` scroller appearance tokens in `O(viewport)` without invoking whole-document `ensureLayout` (`UI-002`, `UI-003`, `UI-007`, `UI-012`).
+    ///
+    /// Disables `usesAdaptiveColorMappingForDarkAppearance` so AppKit never auto-inverts explicit `#FFFFFF`/`#000000` canvas tokens, and restarts the insertion-point blink timer when `textView` is first responder so caret color updates immediately.
+    private func applyStyling(to textView: SwiftEditNSTextView, in scrollView: NSScrollView) {
+        let editorFont = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .regular)
+        let canvasBg = palette.editorCanvasBackground.nsColor
+        let canvasFg = palette.editorCanvasText.nsColor
+
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = canvasBg
+        scrollView.appearance = NSAppearance(named: palette.mode == .black ? .darkAqua : .aqua)
+        scrollView.scrollerKnobStyle = (palette.mode == .black) ? .light : .dark
+
+        textView.usesAdaptiveColorMappingForDarkAppearance = false
         textView.isEditable = isEditable
-        textView.backgroundColor = palette.editorCanvasBackground.nsColor
-        textView.textColor = palette.editorCanvasText.nsColor
-        textView.insertionPointColor = palette.editorCanvasText.nsColor
+        textView.backgroundColor = canvasBg
+        textView.textColor = canvasFg
+        textView.insertionPointColor = canvasFg
         textView.currentLineHighlightColor = palette.currentLineHighlight.nsColor
-        textView.font = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .regular)
+        textView.font = editorFont
+        textView.selectedTextAttributes = [
+            .backgroundColor: palette.selectionBackground.nsColor,
+            .foregroundColor: canvasFg,
+        ]
+        textView.typingAttributes = [
+            .font: editorFont,
+            .foregroundColor: canvasFg,
+        ]
+        if textView.window?.firstResponder === textView {
+            textView.updateInsertionPointStateAndRestartTimer(true)
+        }
     }
 
     /// Applies non-mutating TextKit 2 rendering attributes for backtick code spans, nested depth-colored brackets, active bracket pair, and unbalanced brackets without mutating `NSTextStorage` (`UI-005`, `UI-006`, `UI-012`).
@@ -210,7 +225,7 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         // 4. Unbalanced bracket error emphasis
         let errorColor = palette.unbalancedBracketHighlight.nsColor
-        let errorBg = errorColor.withAlphaComponent(0.22)
+        let errorBg = palette.unbalancedBracketBackground.nsColor
         for stray in highlightProjection.unbalancedBrackets {
             if let strayRange = makeTextRange(location: stray.offset, length: 1) {
                 layoutManager.addRenderingAttribute(.foregroundColor, value: errorColor, for: strayRange)
@@ -360,6 +375,12 @@ public enum SwiftEditHelpMenuCatalog {
 public final class SwiftEditWorkbenchModel {
     /// Current macOS system dark-appearance flag synced from `@Environment(\.colorScheme)` for live `.auto` resolution (`UI-003`).
     public private(set) var systemPrefersDark: Bool = true
+    /// Current macOS Reduce Transparency accessibility preference (`UI-009`).
+    public private(set) var reduceTransparency: Bool = false
+    /// Current macOS Increased Contrast accessibility preference (`UI-003`, `UI-009`).
+    public private(set) var increasedContrast: Bool = false
+    /// Latest window appearance target synchronized via `MacOSAppearanceSynchronizer` (`UI-003`).
+    public private(set) var lastWindowAppearanceTarget: MacOSWindowAppearanceTarget = .darkAqua
     /// Proportional width of the left navigation sidebar (`0.12...0.65` of window width, never hardcoded pixels) (`UI-001`).
     public private(set) var sidebarWidthRatio: Double = SidebarLayoutGeometry.defaultWidthRatio
     /// `true` while the left sidebar is open and pinned; unpinning collapses the sidebar cleanly (`UI-001`).
@@ -390,8 +411,39 @@ public final class SwiftEditWorkbenchModel {
 
     /// Synchronizes live macOS system dark/light appearance and refreshes `palette` dynamically when in `.auto` mode without reloading buffers (`UI-003`).
     public func updateSystemColorScheme(prefersDark: Bool) {
+        guard appearanceMode == .auto else { return }
         systemPrefersDark = prefersDark
-        palette = PurpleThemePalette.resolve(appearance: appearanceMode, systemPrefersDark: systemPrefersDark)
+        palette = PurpleThemePalette.resolve(
+            appearance: appearanceMode,
+            systemPrefersDark: systemPrefersDark,
+            reduceTransparency: reduceTransparency,
+            increasedContrast: increasedContrast
+        )
+    }
+
+    /// Re-reads the unmasked macOS interface style via `systemDarkDetector` and updates `palette` when in `.auto` mode (`UI-003`).
+    public func refreshUnmaskedSystemAppearance() {
+        systemPrefersDark = systemDarkDetector()
+        if appearanceMode == .auto {
+            palette = PurpleThemePalette.resolve(
+                appearance: appearanceMode,
+                systemPrefersDark: systemPrefersDark,
+                reduceTransparency: reduceTransparency,
+                increasedContrast: increasedContrast
+            )
+        }
+    }
+
+    /// Synchronizes Reduce Transparency and Increased Contrast accessibility flags into `palette` without mutating open buffers (`UI-003`, `UI-009`).
+    public func updateAccessibilityPreferences(reduceTransparency: Bool, increasedContrast: Bool) {
+        self.reduceTransparency = reduceTransparency
+        self.increasedContrast = increasedContrast
+        palette = PurpleThemePalette.resolve(
+            appearance: appearanceMode,
+            systemPrefersDark: systemPrefersDark,
+            reduceTransparency: reduceTransparency,
+            increasedContrast: increasedContrast
+        )
     }
 
     /// Updates `sidebarWidthRatio` strictly clamped into `0.12...0.65` (`UI-001`).
@@ -481,7 +533,16 @@ public final class SwiftEditWorkbenchModel {
 
     public var appearanceMode: AppearanceMode {
         didSet {
-            palette = PurpleThemePalette.resolve(appearance: appearanceMode, systemPrefersDark: systemPrefersDark)
+            if appearanceMode == .auto {
+                systemPrefersDark = systemDarkDetector()
+            }
+            lastWindowAppearanceTarget = MacOSAppearanceSynchronizer.synchronizeApplicationAppearance(for: appearanceMode)
+            palette = PurpleThemePalette.resolve(
+                appearance: appearanceMode,
+                systemPrefersDark: systemPrefersDark,
+                reduceTransparency: reduceTransparency,
+                increasedContrast: increasedContrast
+            )
             preferencesStore.save(EditorPreferences(appearanceMode: appearanceMode, zoomPercent: zoomController.zoomPercent))
         }
     }
@@ -529,6 +590,9 @@ public final class SwiftEditWorkbenchModel {
     private let preferencesStore: EditorPreferencesStore
     private let recoveryStore: SessionRecoveryStore
     private let parentPermissionChecker: (URL) -> Bool
+    /// Unmasked host OS dark-mode detector consulted on Frame 0 initialization and `.auto` restoration (`UI-003`, `TEST-004`).
+    private let systemDarkDetector: @MainActor () -> Bool
+    @ObservationIgnored private var distributedThemeObserver: (any NSObjectProtocol)?
 
     public init(
         preferencesSuiteName: String = "it.ph.SwiftEdit.preferences",
@@ -539,6 +603,9 @@ public final class SwiftEditWorkbenchModel {
         desktopWorkspace: any DesktopWorkspaceIntegrating = MacOSWorkspaceAdapter(),
         parentPermissionChecker: @escaping (URL) -> Bool = { url in
             (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil
+        },
+        systemDarkDetector: @escaping @MainActor () -> Bool = {
+            MacOSAppearanceSynchronizer.readUnmaskedSystemPrefersDark()
         }
     ) {
         self.fileSystem = fileSystem
@@ -551,10 +618,17 @@ public final class SwiftEditWorkbenchModel {
             bookmarkCoder: bookmarkCoder
         )
         self.parentPermissionChecker = parentPermissionChecker
+        self.systemDarkDetector = systemDarkDetector
         self.preferencesStore = EditorPreferencesStore(suiteName: preferencesSuiteName)
         let prefs = preferencesStore.load()
+        let initialSystemDark = systemDarkDetector()
+        self.systemPrefersDark = initialSystemDark
         self.appearanceMode = prefs.appearanceMode
-        self.palette = PurpleThemePalette.resolve(appearance: prefs.appearanceMode, systemPrefersDark: true)
+        self.lastWindowAppearanceTarget = MacOSAppearanceSynchronizer.synchronizeApplicationAppearance(for: prefs.appearanceMode)
+        self.palette = PurpleThemePalette.resolve(
+            appearance: prefs.appearanceMode,
+            systemPrefersDark: initialSystemDark
+        )
         self.zoomController = EditorZoomController(zoomPercent: prefs.zoomPercent)
 
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -586,6 +660,22 @@ public final class SwiftEditWorkbenchModel {
         restoreSessionRecoveryIfPresent()
         recentFiles = recentFilesStore.entries()
         refreshDiagnosticsForActiveDocument()
+
+        distributedThemeObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refreshUnmaskedSystemAppearance()
+            }
+        }
+    }
+
+    isolated deinit {
+        if let observer = distributedThemeObserver {
+            DistributedNotificationCenter.default().removeObserver(observer)
+        }
     }
 
     public var activeDocumentSession: DocumentSession? {
@@ -1426,6 +1516,8 @@ private struct TabReorderDropDelegate: DropDelegate {
 public struct SwiftEditRootView: View {
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var model = SwiftEditWorkbenchModel()
     @State private var draggingTabID: DocumentID?
     @State private var dragStartSidebarRatio: Double?
@@ -1472,10 +1564,28 @@ public struct SwiftEditRootView: View {
         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
         .preferredColorScheme(model.preferredSwiftUIColorScheme)
         .onAppear {
-            model.updateSystemColorScheme(prefersDark: systemColorScheme == .dark)
+            model.refreshUnmaskedSystemAppearance()
+            model.updateAccessibilityPreferences(
+                reduceTransparency: reduceTransparency,
+                increasedContrast: colorSchemeContrast == .increased
+            )
         }
         .onChange(of: systemColorScheme) { _, newScheme in
-            model.updateSystemColorScheme(prefersDark: newScheme == .dark)
+            if model.appearanceMode == .auto {
+                model.updateSystemColorScheme(prefersDark: newScheme == .dark)
+            }
+        }
+        .onChange(of: reduceTransparency) { _, newValue in
+            model.updateAccessibilityPreferences(
+                reduceTransparency: newValue,
+                increasedContrast: colorSchemeContrast == .increased
+            )
+        }
+        .onChange(of: colorSchemeContrast) { _, newContrast in
+            model.updateAccessibilityPreferences(
+                reduceTransparency: reduceTransparency,
+                increasedContrast: newContrast == .increased
+            )
         }
         .frame(minWidth: 960, minHeight: 620)
         .focusedSceneValue(\.workbenchModel, model)
@@ -1537,7 +1647,7 @@ public struct SwiftEditRootView: View {
                 SwiftEditBrandLogoView(size: CGFloat(SwiftEditBrandLogoGeometry.topBarLogoSize))
                 Text("PH.SwiftEdit")
                     .font(.headline.weight(.semibold))
-                    .foregroundStyle(model.palette.featherHighlight.swiftUIColor)
+                    .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
             }
             .fixedSize()
 
@@ -1579,7 +1689,14 @@ public struct SwiftEditRootView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(model.palette.brandGround.swiftUIColor)
+        .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
+        .tint(model.palette.chromeAccent.swiftUIColor)
+        .background(model.palette.topBarSurface.swiftUIColor)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(model.palette.hairlineBorder.swiftUIColor)
+                .frame(height: 1)
+        }
         .contentShape(Rectangle())
         .onHover { hovering in
             model.isToolbarHovered = hovering
@@ -1594,10 +1711,10 @@ public struct SwiftEditRootView: View {
             appearanceOptionButton(title: "Auto", mode: .auto)
         }
         .padding(2)
-        .background(model.palette.primaryAccent.swiftUIColor.opacity(0.18))
+        .background(model.palette.badgeSurface.swiftUIColor)
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(model.palette.strokeLavender.swiftUIColor.opacity(0.45), lineWidth: 1)
+                .stroke(model.palette.hairlineBorder.swiftUIColor, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .fixedSize()
@@ -1610,10 +1727,10 @@ public struct SwiftEditRootView: View {
         return Button(action: { model.appearanceMode = mode }) {
             Text(title)
                 .font(.caption.weight(isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? Color.white : model.palette.featherHighlight.swiftUIColor)
+                .foregroundStyle(isSelected ? model.palette.activeControlForeground.swiftUIColor : model.palette.secondaryForeground.swiftUIColor)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(isSelected ? model.palette.primaryAccent.swiftUIColor : Color.clear)
+                .background(isSelected ? model.palette.activeControlFill.swiftUIColor : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
@@ -1625,7 +1742,7 @@ public struct SwiftEditRootView: View {
             Button(action: { model.toggleSidebarPinCollapse() }) {
                 Image(systemName: "sidebar.left")
                     .font(.system(size: max(12, CGFloat(model.zoomController.sidebarScaledFontSizePoints))))
-                    .foregroundStyle(model.palette.featherHighlight.swiftUIColor)
+                    .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
             }
             .buttonStyle(.plain)
             .help("Expand and Pin Left Navigation Panel (Cmd+B)")
@@ -1633,12 +1750,17 @@ public struct SwiftEditRootView: View {
             Spacer()
         }
         .frame(width: 24)
-        .background(model.palette.brandGround.swiftUIColor.opacity(0.88))
+        .background(model.palette.sidebarSurface.swiftUIColor)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(model.palette.hairlineBorder.swiftUIColor)
+                .frame(width: 1)
+        }
     }
 
     private func sidebarPercentageDivider(containerWidth: Double) -> some View {
         Rectangle()
-            .fill(model.palette.strokeLavender.swiftUIColor.opacity(0.28))
+            .fill(model.palette.hairlineBorder.swiftUIColor)
             .frame(width: 5)
             .contentShape(Rectangle())
             .onHover { hovering in
@@ -1678,6 +1800,7 @@ public struct SwiftEditRootView: View {
                         Button(action: { model.togglePin(id: tab.id) }) {
                             Image(systemName: tab.isPinned ? "pin.fill" : "pin")
                                 .font(.caption2)
+                                .foregroundStyle((tab.isPinned ? model.palette.pinnedTabBadge : model.palette.secondaryForeground).swiftUIColor)
                         }
                         .buttonStyle(.plain)
                         .help(tab.isPinned ? "Unpin Tab" : "Pin Tab")
@@ -1685,6 +1808,7 @@ public struct SwiftEditRootView: View {
                         Button(action: { model.activateTab(id: tab.id) }) {
                             Text("\(tab.title)\(tab.isDirty ? " •" : "")")
                                 .font(.callout.weight(isActive ? .semibold : .regular))
+                                .foregroundStyle((isActive ? model.palette.chromeForeground : model.palette.secondaryForeground).swiftUIColor)
                         }
                         .buttonStyle(.plain)
 
@@ -1693,7 +1817,7 @@ public struct SwiftEditRootView: View {
                                 .font(.system(size: 9, weight: .semibold))
                         }
                         .buttonStyle(.plain)
-                        .opacity(isActive ? 0.85 : 0.45)
+                        .opacity(isActive ? 0.85 : 0.65)
                         .help("Move Tab Left")
 
                         Button(action: { model.moveTabRight(id: tab.id) }) {
@@ -1701,7 +1825,7 @@ public struct SwiftEditRootView: View {
                                 .font(.system(size: 9, weight: .semibold))
                         }
                         .buttonStyle(.plain)
-                        .opacity(isActive ? 0.85 : 0.45)
+                        .opacity(isActive ? 0.85 : 0.65)
                         .help("Move Tab Right")
 
                         Button(action: { model.requestCloseTab(id: tab.id) }) {
@@ -1711,12 +1835,13 @@ public struct SwiftEditRootView: View {
                         .buttonStyle(.plain)
                         .help("Close Tab (Cmd+W)")
                     }
+                    .foregroundStyle((isActive ? model.palette.chromeForeground : model.palette.secondaryForeground).swiftUIColor)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(isActive ? model.palette.primaryAccent.swiftUIColor.opacity(0.35) : Color.clear)
+                    .background(isActive ? model.palette.tabActiveSurface.swiftUIColor : Color.clear)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
-                            .stroke(isActive ? model.palette.strokeLavender.swiftUIColor : Color.clear, lineWidth: 1)
+                            .stroke(isActive ? model.palette.chromeAccent.swiftUIColor : model.palette.hairlineBorder.swiftUIColor, lineWidth: 1)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .onDrag {
@@ -1739,34 +1864,42 @@ public struct SwiftEditRootView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
         }
-        .background(model.palette.chromeSurface.swiftUIColor)
+        .background(model.palette.tabBarSurface.swiftUIColor)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(model.palette.hairlineBorder.swiftUIColor)
+                .frame(height: 1)
+        }
     }
 
     @ViewBuilder
     private var safetyAndErrorBanners: some View {
         if model.safetyBanner.isBinaryReadOnlyBannerVisible {
             Text("READ-ONLY BINARY INSPECTION: Save, Format, Pin Tab, and SessionRecovery are disabled.")
-                .font(.caption.weight(.semibold))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.orange.opacity(0.25))
+                .purpleSecurityWarningBanner(
+                    foreground: model.palette.binaryQuarantineForeground,
+                    background: model.palette.binaryQuarantineBackground,
+                    border: model.palette.binaryQuarantineBorder,
+                    verticalPadding: 6
+                )
         }
         if !model.safetyBanner.bidiWarnings.isEmpty {
             Text("BiDi Warning: \(model.safetyBanner.bidiWarnings.count) Unicode bidirectional control character(s) detected.")
-                .font(.caption.weight(.semibold))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .background(Color.yellow.opacity(0.25))
+                .purpleSecurityWarningBanner(
+                    foreground: model.palette.bidiWarningForeground,
+                    background: model.palette.bidiWarningBackground,
+                    border: model.palette.bidiWarningBorder,
+                    verticalPadding: 5
+                )
         }
         if let message = model.statusBannerMessage {
             Text(message)
                 .font(.caption)
+                .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
-                .background(model.palette.primaryAccent.swiftUIColor.opacity(0.2))
+                .background(model.palette.badgeSurface.swiftUIColor)
         }
     }
 
@@ -1779,13 +1912,14 @@ public struct SwiftEditRootView: View {
             HStack(spacing: 8) {
                 Text(model.selectedFolderURL?.lastPathComponent ?? "No Folder Open")
                     .font(.system(size: headerFont, weight: .semibold))
-                    .foregroundStyle(model.palette.strokeLavender.swiftUIColor)
+                    .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
                     .lineLimit(1)
                 Spacer()
                 if model.selectedFolderURL != nil {
                     Button(action: { model.navigateToParentFolder() }) {
                         Label("...", systemImage: "arrow.turn.left.up")
                             .font(.system(size: headerFont, weight: .semibold))
+                            .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
                     }
                     .buttonStyle(.plain)
                     .disabled(!model.canNavigateToParentFolder)
@@ -1794,7 +1928,7 @@ public struct SwiftEditRootView: View {
                 Button(action: { model.toggleSidebarPinCollapse() }) {
                     Image(systemName: model.isLeftSidebarPinned ? "pin.fill" : "pin.slash")
                         .font(.system(size: headerFont, weight: .semibold))
-                        .foregroundStyle(model.palette.featherHighlight.swiftUIColor)
+                        .foregroundStyle(model.palette.chromeAccent.swiftUIColor)
                 }
                 .buttonStyle(.plain)
                 .help("Unpin and Collapse Left Navigation Panel (Cmd+B)")
@@ -1808,9 +1942,10 @@ public struct SwiftEditRootView: View {
                         HStack(spacing: rowSpacing) {
                             Image(systemName: "folder.badge.minus")
                                 .font(.system(size: sidebarFont))
-                                .foregroundStyle(model.palette.featherHighlight.swiftUIColor)
+                                .foregroundStyle(model.palette.chromeAccent.swiftUIColor)
                             Text("...")
                                 .font(.system(size: sidebarFont, weight: .semibold))
+                                .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
                         }
                     }
                     .buttonStyle(.plain)
@@ -1824,7 +1959,7 @@ public struct SwiftEditRootView: View {
                         HStack(spacing: rowSpacing) {
                             Image(systemName: iconName)
                                 .font(.system(size: sidebarFont))
-                                .foregroundStyle(entry.isBinary ? binaryColor : model.palette.strokeLavender.swiftUIColor)
+                                .foregroundStyle(entry.isBinary ? binaryColor : model.palette.chromeAccent.swiftUIColor)
                             Text(entry.name)
                                 .font(.system(size: sidebarFont))
                                 .foregroundStyle(entry.isBinary ? binaryColor : model.palette.chromeForeground.swiftUIColor)
@@ -1846,7 +1981,7 @@ public struct SwiftEditRootView: View {
                 sidebarBackgroundContextMenu
             }
         }
-        .background(model.palette.brandGround.swiftUIColor.opacity(0.92))
+        .background(model.palette.sidebarSurface.swiftUIColor)
         .contextMenu {
             sidebarBackgroundContextMenu
         }
@@ -1999,12 +2134,20 @@ public struct SwiftEditRootView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Native Preview (Zero-WebKit)")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(model.palette.strokeLavender.swiftUIColor)
+                    .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
                 ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                     Text(block.text)
                         .font(block.kind == .heading ? .title3.bold() : (block.kind == .codeBlock || block.isInertPlainTextHTML ? .body.monospaced() : .body))
+                        .foregroundStyle((block.isInertPlainTextHTML ? model.palette.inertHTMLWarningForeground : model.palette.chromeForeground).swiftUIColor)
                         .padding(block.isInertPlainTextHTML ? 6 : 0)
-                        .background(block.isInertPlainTextHTML ? Color.red.opacity(0.15) : Color.clear)
+                        .background(block.isInertPlainTextHTML ? model.palette.inertHTMLWarningBackground.swiftUIColor : Color.clear)
+                        .overlay {
+                            if block.isInertPlainTextHTML {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(model.palette.inertHTMLWarningBorder.swiftUIColor, lineWidth: 1)
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -2018,17 +2161,21 @@ public struct SwiftEditRootView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Side-by-Side Myers Diff (vs Saved Baseline)")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(model.palette.strokeLavender.swiftUIColor)
+                    .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
                 ForEach(Array(model.diffCoordinator.rows.enumerated()), id: \.offset) { _, row in
                     HStack(spacing: 8) {
                         Text(row.lhsText ?? "")
                             .font(.caption.monospaced())
+                            .foregroundStyle((row.kind == .removed ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(row.kind == .removed ? Color.red.opacity(0.2) : Color.clear)
+                            .padding(.horizontal, 4)
+                            .background(row.kind == .removed ? model.palette.diffRemovedBackground.swiftUIColor : Color.clear)
                         Text(row.rhsText ?? "")
                             .font(.caption.monospaced())
+                            .foregroundStyle((row.kind == .inserted ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(row.kind == .inserted ? Color.green.opacity(0.2) : Color.clear)
+                            .padding(.horizontal, 4)
+                            .background(row.kind == .inserted ? model.palette.diffInsertedBackground.swiftUIColor : Color.clear)
                     }
                 }
             }
@@ -2057,9 +2204,11 @@ public struct SwiftEditRootView: View {
             .fixedSize()
         }
         .font(.caption.monospacedDigit())
+        .foregroundStyle(model.palette.statusBarForeground.swiftUIColor)
+        .tint(model.palette.statusBarForeground.swiftUIColor)
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
-        .background(model.palette.brandGround.swiftUIColor)
+        .background(model.palette.statusBarSurface.swiftUIColor)
     }
 }
 
