@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "015-debug-hardening-usability-and-automated-qa"
+    status: "draft"
+    date: "2026-11-20"
+    capabilities: ["debug-hardening-usability-and-automated-qa", "translucent-header-brand-submenu", "editor-ux-highlighting-sidebar-pin-tabs-and-about", "ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions", "textkit2-gfm-editor-and-native-preview", "comprehensive-markdown-linter-and-diagnostics-ui", "markdown-lint-format-bracket-and-diff", "document-core-and-spm-scaffold", "notepadpp-tabs-session-recovery-and-dotfiles"]
+    path: "openspec/changes/015-debug-hardening-usability-and-automated-qa"
+    summary: "Fix all 33 debug audit findings, make header menu click-only & accessible, and add automated 3x debug verification."
   - id: "014-markdown-document-navigator-and-distraction-free"
     status: "draft"
     date: "2026-11-20"
