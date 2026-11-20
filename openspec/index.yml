@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "010-translucent-header-brand-submenu"
+    status: "draft"
+    date: "2026-11-20"
+    capabilities: ["translucent-header-brand-submenu", "ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions", "editor-ux-highlighting-sidebar-pin-tabs-and-about"]
+    path: "openspec/changes/010-translucent-header-brand-submenu"
+    summary: "Root-ZStack Translucent HeaderBrandSubmenuView, Descriptive Badges, Single-Source SwiftEditCommands & Binary Guards"
   - id: "009-full-app-semantic-theming-and-window-sync"
     status: "implemented"
     date: "2026-11-19"
