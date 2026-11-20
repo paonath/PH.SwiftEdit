@@ -1,7 +1,7 @@
 # Capability: editor-ux-highlighting-sidebar-pin-tabs-and-about
 
 ## Purpose
-Updates `REQ-006` of `editor-ux-highlighting-sidebar-pin-tabs-and-about` to replace inline `isToolbarHovered` horizontal top-bar buttons with the `120 ms`-dwell / `180 ms`-grace / `Escape`-latched `HeaderBrandSubmenuView` while keeping percentage-only sidebar resizing (`12%..65%`), manual `pin` collapse, and confined right-click file/folder creation intact.
+Extends `REQ-002` of `editor-ux-highlighting-sidebar-pin-tabs-and-about` additively so `Return` also continues manual pseudo-outline markers (`a.`, `1.1`) and exits empty nested ordered items in two stages while preserving every existing continuation and security scenario.
 
 ## Requirements
 
@@ -30,7 +30,7 @@ WHEN evaluating a non-binary text `DocumentSnapshot`, the bracket and backtick s
 - **THEN** both engines return `.degradedOrTimedOut` without scanning full line payloads or mutating state
 
 ### Requirement: REQ-002 Markdown Smart Enter List and Blockquote Continuation
-WHEN the user presses Enter in a Markdown or untitled text buffer outside fenced code blocks, the Markdown smart newline engine SHALL propose the next consistent bullet, task checkbox, incremented numbered item, or blockquote prefix while clearing empty list markers to exit the list [BC-004][BC-006][BC-011][DATA-003][SEC-012].
+WHEN the user presses Enter in a Markdown or untitled buffer outside fenced code, the smart newline engine SHALL continue bullets, tasks, numbered items, pseudo-outline markers (`a.`, `1.1`), and blockquotes, and clear empty markers, exiting nested empty items in two stages [BC-004][BC-006][BC-011][DATA-003][SEC-012].
 
 #### Scenario: P2 Unordered Task Ordered and Blockquote Continuation Plus Empty Marker Exit
 - **Path**: P2
@@ -52,6 +52,13 @@ WHEN the user presses Enter in a Markdown or untitled text buffer outside fenced
 - **GIVEN** a binary read-only snapshot, a caret offset outside `0...text.utf16.count`, or a line exceeding `4096` UTF-16 code units
 - **WHEN** `MarkdownSmartNewlineEngine.evaluateNewline(in:caretLocation:isMarkdownDocument:)` runs
 - **THEN** each call returns `nil` without throwing or mutating the document
+
+#### Scenario: P3 Pseudo-Outline Continuation and Two-Stage Nested Empty Exit
+- **Path**: P3
+- **Trait**: positive
+- **GIVEN** Markdown buffers `"    a. alpha"`, `"    1.1 uno"`, and a nested empty item `"2. due\n    1. "`
+- **WHEN** `MarkdownSmartNewlineEngine.evaluateNewline` runs at the end of each
+- **THEN** it proposes `"\n    b. "` and `"\n    1.2 "`, and on the nested empty item it first outdents it to `"3. "` and on a second Enter clears the marker
 
 ### Requirement: REQ-003 Partition-Preserving Tab Left and Right Reordering
 WHEN the user reorders an open tab left, right, or to a target index, the workspace tab session SHALL reposition the tab inside its pinned or unpinned partition while preserving `activeTabID` and pinned-first ordering [BC-006][BC-008][TEST-002].

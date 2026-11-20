@@ -1,9 +1,9 @@
-# Spec Delta: adaptive-markdown-lists-tab-indentation
+# Capability: adaptive-markdown-lists-tab-indentation
 
 ## Purpose
 Defines the pure `MarkdownSmartListEngine` that nests and outdents Markdown list items with CommonMark-valid four-space steps on `Tab` and `Shift+Tab`, resumes parent numbering, inherits valid user markers, rejects orphan code-block indentation, and applies edits atomically through the workbench without touching binary or non-Markdown buffers.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: REQ-001 CommonMark-Valid Four-Space List Nesting and Outdent
 WHEN the user presses `Tab` or `Shift+Tab` on a list line or multi-line selection outside fenced code in a Markdown document, the `MarkdownSmartListEngine` SHALL emit a single `TextEdit` batch that nests or outdents by four spaces with CommonMark-valid markers, resumes parent numbering on outdent, and inherits valid user markers [AR-002][BC-004][BC-011].
@@ -18,9 +18,9 @@ WHEN the user presses `Tab` or `Shift+Tab` on a list line or multi-line selectio
 #### Scenario: P2 Multi-Line Selection Indents All List Lines and Inherits Valid Override Markers
 - **Path**: P2
 - **Trait**: positive
-- **GIVEN** a snapshot `"* a\n* b\n+ c"` with a selection spanning all three lines
+- **GIVEN** a snapshot `"- root\n* a\n* b\n+ c"` with a selection spanning lines `2` through `4`
 - **WHEN** `evaluateIndent` runs with `Tab`
-- **THEN** a single batch indents the three lines to `"    * a"`, `"    * b"`, `"    + c"` preserving each valid marker, and `newSelection` shifts by the total inserted prefix length
+- **THEN** a single batch indents lines `2..4` to `"    * a"`, `"    * b"`, `"    + c"` preserving each valid marker (the parent `"- root"` satisfies the Parent-Ceiling), and `newSelection` shifts by the total inserted prefix length
 
 #### Scenario: N1 Root First Item Non-List Line Fenced Code and Non-Markdown Are Safely Handled
 - **Path**: N1
@@ -62,9 +62,3 @@ WHEN `SwiftEditWorkbenchModel.applyListIndentation(outdent:)` receives a list ed
 - **GIVEN** an inspected binary read-only file and a plain-text `notes.swift` buffer containing `"- item"`
 - **WHEN** `applyListIndentation(outdent: false)` runs for each
 - **THEN** the call reports not handled, the text and `BufferRevision` stay unchanged
-
-## MODIFIED Requirements
-
-## REMOVED Requirements
-
-## RENAMED Requirements

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-20 UTC
+Branch: feature/FirstStub | Commit: e036b5b
+
+### Added
+- Added `MarkdownSmartListEngine` (`SmartListEdit`, `SmartListOutcome`, `MarkdownListLine`, `MarkdownListGrammar`) in `SwiftEditCore` for CommonMark-valid `4`-space `Tab` nesting and `Shift+Tab` outdenting across unordered (`-`, `*`, `+`), ordered (`N.`, `N)`), and task-list (`- [ ]`) items, with Parent-Ceiling validation, valid marker inheritance, sibling number resumption, and `coalescedEdit` single-replacement support (`openspec/specs/adaptive-markdown-lists-tab-indentation/spec.md`, archived at `openspec/changes/archive/2026-11-20-011-adaptive-markdown-lists-tab-indentation/`).
+- Extended `MarkdownSmartNewlineEngine` with `a.` → `b.` and `1.1` → `1.2` pseudo-outline continuation plus two-stage empty nested ordered list exit, and added `MarkdownLintRuleID.nonStandardOutlineMarker` in `MarkdownLintAndFormatEngine` to flag pseudo-outline markers inside list context outside fenced code blocks (`openspec/specs/markdown-lint-format-bracket-and-diff/spec.md`).
+- Wired `SwiftEditWorkbenchModel.listIndentationOutcome(outdent:)`, `applyListIndentation(outdent:)`, and `TextKit2EditorView.Coordinator.handleListIndent` (`insertTab:` / `insertBacktab:`) in `SwiftEditRootView` so single-line and multi-line list indentation updates in one `BufferRevision` with single-step `Cmd+Z` undo (`openspec/specs/editor-ux-highlighting-sidebar-pin-tabs-and-about/spec.md`).
+
+### Security
+- Enforced bounded fail-closed guards in `MarkdownSmartListEngine` (`4096` UTF-16 line cap, `32` nesting level cap, `999_999_999` ordered number cap, `128` sibling lookback cap, and clamped UTF-16 range validation) alongside binary read-only quarantine and non-Markdown file lockouts in `SwiftEditWorkbenchModel.applyListIndentation`.
+
+## [Unreleased] - 2026-11-20 UTC
 Branch: feature/FirstStub | Commit: 084cbdf
 
 ### Added

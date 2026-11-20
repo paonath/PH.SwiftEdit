@@ -5,11 +5,11 @@ always_read:
   - "openspec/Constitution.md"
 specs:
   - id: "011-adaptive-markdown-lists-tab-indentation"
-    status: "draft"
+    status: "implemented"
     date: "2026-11-20"
-    capabilities: ["adaptive-markdown-lists-tab-indentation", "editor-ux-highlighting-sidebar-pin-tabs-and-about", "markdown-lint-format-bracket-and-diff"]
-    path: "openspec/changes/011-adaptive-markdown-lists-tab-indentation"
-    summary: "Linter-Governed Markdown List Tab/Shift+Tab/Return Indentation, Parent-Ceiling Guard & nonStandardOutlineMarker Lint"
+    capabilities: ["editor-ux-highlighting-sidebar-pin-tabs-and-about", "adaptive-markdown-lists-tab-indentation", "markdown-lint-format-bracket-and-diff"]
+    path: "openspec/changes/archive/2026-11-20-011-adaptive-markdown-lists-tab-indentation"
+    summary: "Linter-Governed Adaptive Markdown List Indentation (Tab / Shift+Tab / Return)"
   - id: "010-translucent-header-brand-submenu"
     status: "implemented"
     date: "2026-11-20"
