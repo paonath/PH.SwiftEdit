@@ -5,10 +5,10 @@ always_read:
   - "openspec/Constitution.md"
 specs:
   - id: "013-comprehensive-markdown-linter-and-diagnostics-ui"
-    status: "draft"
+    status: "implemented"
     date: "2026-11-20"
     capabilities: ["comprehensive-markdown-linter-and-diagnostics-ui", "markdown-lint-format-bracket-and-diff"]
-    path: "openspec/changes/013-comprehensive-markdown-linter-and-diagnostics-ui"
+    path: "openspec/changes/archive/2026-11-20-013-comprehensive-markdown-linter-and-diagnostics-ui"
     summary: "26-Rule All-Construct Markdown Linter, Idempotent Quick-Fix and Fix All, Triple Diagnostics UI and Shift+Cmd+M Popover"
   - id: "012-textkit2-gfm-editor-and-native-preview"
     status: "implemented"

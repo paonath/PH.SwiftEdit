@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-20 UTC
+Branch: feature/FirstStub | Commit: c102cbc
+
+### Added
+- Added `MarkdownLintProfile` (`.legacyBaseline` default, `.allConstructs` 26-rule catalog), `MarkdownLintSeverity`, `MarkdownAllConstructsLinter`, `MarkdownSourceLineTable`, and `YAMLFrontmatterScanner` (Line-1 mask up to `200` lines) in `SwiftEditCore` (`openspec/specs/comprehensive-markdown-linter-and-diagnostics-ui/spec.md`, `openspec/specs/markdown-lint-format-bracket-and-diff/spec.md`, archived at `openspec/changes/archive/2026-11-20-013-comprehensive-markdown-linter-and-diagnostics-ui/`).
+- Added `MarkdownQuickFixResolver` (idempotent, revision-pinned `fixAll` in one `BufferRevision`), `ActiveLintStatus` (`Lint: Off`, `Lint: Paused`, `✓ Lint: 0` / `⚠ Lint: N`), and `ActiveLineLintSuppressionPolicy` in `SwiftEditCore`.
+- Added `MarkdownDiagnosticsPopoverView` (`⇧⌘M` and status-bar `Lint:` trigger with Jump-to-Range, per-item Quick-Fix, and single-Undo Fix All), TextKit 2 dotted underlines, `LineNumberGutterView` severity badges, and `KeyboardShortcutsCheatSheetView` / `SwiftEditCommands` entries in `SwiftEditUI`.
+
+### Security
+- Hardened `.unsafeLinkScheme` and `.unsafeImagePath` (`SEC-LINT-01`) with percent/HTML-entity decoding, control/C1/zero-width/BiDi scalar stripping, protocol-relative link rejection, traversal/`../` and `.svg`/`.svgz` blocking, `quickFix == nil` on security rules, `expectedRevision` race guard, `1000`-diagnostic cap retaining `.error` ahead of `.warning`, and active-line suppression immunity for security errors.
+
+## [Unreleased] - 2026-11-20 UTC
 Branch: feature/FirstStub | Commit: eeac4fc
 
 ### Added
