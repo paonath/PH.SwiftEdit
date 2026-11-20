@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-20 UTC
+Branch: feature/FirstStub | Commit: eeac4fc
+
+### Added
+- Added `MarkdownSyntaxHighlighter` (`MarkdownLineIndex`, `MarkdownSyntaxSpan`, `MarkdownSyntaxKind`) in `SwiftEditCore` for zero-regex viewport-only GFM tokenization across 12 constructs with an `O(log F)` fenced-code index while preserving `#000000`/`#FFFFFF` (`21:1`) prose (`openspec/specs/textkit2-gfm-editor-and-native-preview/spec.md`, archived at `openspec/changes/archive/2026-11-20-012-textkit2-gfm-editor-and-native-preview/`).
+- Added `MarkdownAuthoringCommands` and `GFMTableEditEngine` in `SwiftEditCore` for single-batch Markdown formatting commands (`CommandMenu("Markdown")`: Bold, Italic, Strikethrough, Inline Code, Code Fence, Link, Image, Task Toggle, Blockquote, Headings 1–6, Insert Table) and GFM pipe-table `Tab` / `Shift+Tab` column-padded cell navigation with automatic row append.
+- Added `MarkdownPreviewProjector` (`GFMPreviewDocument`, `GFMPreviewBlock`) and `PreviewResourceAndLinkGate` in `SwiftEditCore`, plus extracted `TextKit2EditorView` (with `renderingAttributesValidator` and `Ctrl+Tab` > Fence > Table > List > default dispatch), `MarkdownNativePreviewView` (`Cmd+P` default-OFF Zero-WebKit native preview with `sourceLine` scroll sync), `LazyVStack` `LineNumberGutterView`, and `500 ms` debounced `SessionRecovery` persistence in `SwiftEditUI`.
+
+### Security
+- Enforced zero-socket offline preview (`AsyncImage`, `URLSession`, `WebKit` banned), 5-gate `FileSystemProviding`-confined local raster image admission (`png`/`jpg`/`jpeg`/`gif`/`webp`/`heic`, `<= 16 MiB`, `<= 8192 px`, `<= 16 MP`, downsampled `<= 2048 px`, max `64` images, SVG/PDF and symlink escapes blocked), `OpenURLAction` user confirmation (`https`/`http`/`mailto` only), inert monospaced rendering of raw HTML, `4096` UTF-16 line cap, `64x2000` table cap, and binary read-only lockouts.
+
+## [Unreleased] - 2026-11-20 UTC
 Branch: feature/FirstStub | Commit: e036b5b
 
 ### Added
