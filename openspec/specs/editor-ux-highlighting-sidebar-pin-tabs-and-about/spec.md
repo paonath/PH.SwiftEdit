@@ -1,7 +1,7 @@
 # Capability: editor-ux-highlighting-sidebar-pin-tabs-and-about
 
 ## Purpose
-Extends `REQ-005` of `editor-ux-highlighting-sidebar-pin-tabs-and-about` additively to synchronize `NSApp.appearance` and `TextKit2EditorView` selection, caret, and scroller appearance across `Light`, `Dark`, and `Auto` switches using an unmasked macOS interface style detector that prevents `.auto` feedback loops and cold-start flashes.
+Updates `REQ-006` of `editor-ux-highlighting-sidebar-pin-tabs-and-about` to replace inline `isToolbarHovered` horizontal top-bar buttons with the `120 ms`-dwell / `180 ms`-grace / `Escape`-latched `HeaderBrandSubmenuView` while keeping percentage-only sidebar resizing (`12%..65%`), manual `pin` collapse, and confined right-click file/folder creation intact.
 
 ## Requirements
 
@@ -119,7 +119,7 @@ WHEN switching appearance modes, syncing unmasked system appearance, or adjustin
 - **THEN** `systemPrefersDark` remains `true` and `.auto` resolves `.black`
 
 ### Requirement: REQ-006 Percentage-Based Collapsible Pinned Sidebar Hover Topbar and Confined Right-Click Create
-WHEN laying out the left sidebar, hovering over the top bar, or right-clicking the sidebar to create a file or folder, the workbench SHALL size sidebar width strictly as a clamped percentage ratio (`0.12...0.65`) of container width, support manual pin/collapse, hide top-bar command buttons until hover while keeping Logo, Zoom, and Theme always visible, and validate prompted creation names inside scope [BC-012][SEC-003][SEC-012][UI-001][UI-005][UI-011].
+WHEN laying out the left sidebar, interacting with the top bar brand region, or right-clicking the sidebar to create a file or folder, the workbench SHALL size sidebar width strictly as a clamped percentage ratio (`0.12...0.65`) of container width, support manual pin/collapse, gate `HeaderBrandSubmenuView` via `120 ms` dwell while keeping Logo, Zoom, and Theme always visible, and validate prompted creation names inside scope [BC-012][SEC-003][SEC-012][UI-001][UI-005][UI-011].
 
 #### Scenario: P6 Proportional Sidebar Width Pin Collapse Hover Topbar and Empty-Area Right-Click Create
 - **Path**: P6
@@ -141,6 +141,20 @@ WHEN laying out the left sidebar, hovering over the top bar, or right-clicking t
 - **GIVEN** right-click creation inputs `"../escape.md"`, `"a/b.md"`, a BiDi override name `"a\u{202E}b.md"`, and a symlinked target folder resolving outside workspace scope
 - **WHEN** `sidebarCreateFile` and `sidebarCreateFolder` evaluate each input
 - **THEN** every attempt fails closed with `DomainError.invalidItemName` or `DomainError.securityScopeViolation` and creates zero files or directories
+
+#### Scenario: P9 Proportional Sidebar Width Pin Collapse Dwell Header Submenu and Empty-Area Right-Click Create
+- **Path**: P9
+- **Trait**: positive
+- **GIVEN** `SidebarLayoutGeometry` across `1200pt` and `2560pt` display widths, an expanded pinned sidebar, `HeaderSubmenuStateMachine`, and a mounted workspace folder
+- **WHEN** `sidebarWidthRatio` updates to `0.40`, `toggleSidebarPinCollapse()` runs, brand header dwell reaches `120 ms`, and `resolveSidebarCreationDirectory(for: nil)` + `sidebarCreateFile(named: "new.md", in:)` execute
+- **THEN** computed widths scale strictly to `480pt` and `1024pt` (`40%`), unpinning collapses the sidebar, `HeaderBrandSubmenuView` opens without shifting editor layout while Logo, Zoom, and Theme remain visible, and `"new.md"` is created inside the current folder
+
+#### Scenario: N12 Active Sidebar Divider Drag Blocks Submenu Hover Opening
+- **Path**: N12
+- **Trait**: negative
+- **GIVEN** an active sidebar percentage divider drag (`isDraggingTabOrSidebar == true`)
+- **WHEN** the pointer crosses the brand header region for `120 ms`
+- **THEN** `HeaderSubmenuStateMachine` remains closed and sidebar ratio clamping (`0.12...0.65`) continues uninterrupted
 
 ### Requirement: REQ-007 Concept E2 Vector Brand Logo and Help About Dialog With Validated Repo and License Links
 WHEN rendering the top bar brand header or opening `Help -> About PH.SwiftEdit`, the UI shell SHALL display the Concept E2 vector logo small beside `PH.SwiftEdit` and large inside the About dialog alongside App Name, `nbgv` version, validated GitHub repository link, and validated MIT License link [AR-014][SEC-004][UI-001][UI-008][UI-010].

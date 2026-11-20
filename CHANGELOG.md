@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - 2026-11-20 UTC
+Branch: feature/FirstStub | Commit: 084cbdf
+
+### Added
+- Added `HeaderSubmenuStateMachine` (`120 ms` hover dwell, `0 ms` click toggle, `180 ms` travel grace, active-drag lockout, `Escape` suppression latch) and translucent `HeaderBrandSubmenuView` (`312 pt` overlay at `.zIndex(100)` over `.zIndex(99)` outside-click shield with `0.0 pt` vertical layout shift) (`openspec/specs/translucent-header-brand-submenu/spec.md`, archived at `openspec/changes/archive/2026-11-20-010-translucent-header-brand-submenu/`).
+- Added descriptive verb-noun `HeaderCommandCatalog` rows with monospaced shortcut badges (`Duplicate Line or Selection` `⌘D`, `Format Markdown Document` `⇧⌘F`, `Format Markdown Section` `⌥⇧⌘F`, `Show/Hide Markdown Preview` `⌘P` defaulting to `false`, `Show/Hide File Compare Diff`, `Keyboard Shortcuts CheatSheet` `⌘/`) and `SwiftEditWorkbenchModel.formatActiveSection()` / `toggleMarkdownPreview()`.
+- Extracted single-source `SwiftEditCommands` (`Sources/SwiftEditUI/Views/SwiftEditCommands.swift`) and added `Cmd+P` (`Toggle Markdown Preview`) and `Cmd+Option+Shift+F` (`Format Markdown Section`) to `KeyboardShortcutsCheatSheetCatalog`.
+
+### Changed
+- Replaced the nine inline horizontal top-bar buttons in `SwiftEditRootView.toolbarBar` with the `PH.SwiftEdit` brand submenu trigger while keeping Zoom (`-`, `100%`, `+`) and `Light | Dark | Auto` controls isolated and always visible on the right (`[UI-001]`, `[UI-012]`), and removed duplicate `.keyboardShortcut` modifiers from `toolbarBar`.
+
+### Security
+- Replaced the system `.printItem` (`Cmd+P`) with in-memory Zero-WebKit Markdown Preview toggling (`SEC-004`, zero print-spooler IPC) and enforced synchronized binary read-only quarantine lockouts (`DATA-003`, `SEC-012`, `UI-008`) across `HeaderCommandCatalog`, `SwiftEditCommands`, and `SwiftEditWorkbenchModel` (`performCommandD`, `saveActiveDocument`, `saveActiveDocumentAsViaPanel`, `formatActiveDocument`, `formatActiveSection`) before any `NSSavePanel` construction.
+
 ## [Unreleased] - 2026-11-19 UTC
 Branch: feature/FirstStub | Commit: c4340b5
 

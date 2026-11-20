@@ -1,7 +1,7 @@
 # Capability: ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions
 
 ## Purpose
-Extends `REQ-001`, `REQ-004`, and `REQ-005` of `ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions` additively for percentage-only sidebar resizing (`12%..65%`) with manual `pin` collapse, sidebar zoom and disabled binary rows, hover-revealed top-bar commands beside a Concept E2 vector logo, `Help -> About PH.SwiftEdit` with MIT License link, tab left/right reordering, and interactive empty-area plus row right-click file/folder creation.
+Updates `REQ-004` of `ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions` to replace inline horizontal top-bar hover buttons with the root-`ZStack` translucent `HeaderBrandSubmenuView`, add `Cmd+P` (`Toggle Markdown Preview`) and `Cmd+Option+Shift+F` (`Format Markdown Section`) to `KeyboardShortcutsCheatSheetCatalog`, and enforce binary quarantine command lockouts across `SwiftEditCommands` while preserving all HTTPS external-link guards.
 
 ## Requirements
 
@@ -78,7 +78,7 @@ WHEN the user executes Find, Replace, Go to Line, switches line endings, reopens
 - **THEN** the dirty tab stays open with its text intact, application termination is canceled (`false`), and the `52` files are not opened until `confirmPendingBatchOpen()` is called
 
 ### Requirement: REQ-004 Classic FocusedValue Menus Graphical CheatSheet and Guarded About Dialog
-WHEN rendering the top bar, invoking menu commands, or opening `Help -> About PH.SwiftEdit`, the UI shell SHALL show the Concept E2 vector logo beside `PH.SwiftEdit`, reveal middle command buttons only on top-bar hover while keeping Zoom and Light/Dark/Auto controls always visible, expose `About PH.SwiftEdit` in the `Help` menu, and validate both GitHub repository and MIT License links through `ExternalURIConfirmationPrompt` [AR-014][SEC-004][UI-001][UI-008][UI-009][UI-010][UI-011].
+WHEN rendering the header, opening `HeaderBrandSubmenuView`, invoking `SwiftEditCommands`, or opening `About PH.SwiftEdit`, the UI shell SHALL show the Concept E2 logo with a dwell-gated translucent submenu, isolate Zoom and Appearance on the right, list `Cmd+P` and `Cmd+Option+Shift+F` in the CheatSheet, disable mutating commands on binary tabs, and guard external About links [AR-014][DATA-003][SEC-004][UI-001][UI-008][UI-009][UI-010][UI-011].
 
 #### Scenario: P4 Complete Keyboard Shortcuts CheatSheet Catalog and Validated About GitHub Link
 - **Path**: P4
@@ -107,6 +107,20 @@ WHEN rendering the top bar, invoking menu commands, or opening `Help -> About PH
 - **GIVEN** tampered license URIs `"http://example.com/LICENSE"` and `"file:///etc/passwd"`
 - **WHEN** `AboutSheetDescriptor.prepareExternalLinkConfirmation(rawURI:)` evaluates each URI
 - **THEN** both calls return `nil`
+
+#### Scenario: P9 Brand Header Translucent Submenu Updated CheatSheet and Validated About Links
+- **Path**: P9
+- **Trait**: positive
+- **GIVEN** `SwiftEditWorkbenchModel`, `HeaderCommandCatalog`, `KeyboardShortcutsCheatSheetCatalog.allSections`, and `AboutSheetDescriptor.resolve(versionManifestData:)`
+- **WHEN** the brand header dwell completes (`120 ms`), the CheatSheet catalog is inspected, and `AboutSheetDescriptor` validates repository and MIT License links
+- **THEN** `HeaderBrandSubmenuView` opens with descriptive titles and badges while Zoom and Appearance stay isolated on the right, the CheatSheet includes `Cmd+Option+Shift+F` (`Format Markdown Section`) and `Cmd+P` (`Toggle Markdown Preview`), and both official GitHub HTTPS URLs produce valid confirmation prompts
+
+#### Scenario: N11 Binary Tab Disables Duplicate Save and Format Entries in Command Descriptors
+- **Path**: N11
+- **Trait**: security
+- **GIVEN** an active binary read-only tab (`safetyBanner.canSave == false`, `safetyBanner.canFormat == false`)
+- **WHEN** command enablement state is evaluated for `Save`, `Save As…`, `Duplicate Line or Selection`, `Format Markdown Document`, and `Format Markdown Section`
+- **THEN** all five mutating commands resolve as disabled while read-only navigation and inspection commands remain enabled
 
 ### Requirement: REQ-005 Confined 11 Sidebar File/Folder Actions and Directory-Only Finder/Terminal/iTerm2 Handoff
 WHEN triggering sidebar actions on an entry or empty background or reordering tabs, the workbench and desktop adapter SHALL execute prompted Create File/Folder, CRUD, Cut/Copy/Paste, and Trash inside symlink-verified scope, reorder tabs within pinned or unpinned partitions, and launch verified directory-only URLs in `Finder`, `com.googlecode.iterm2`, or `com.apple.Terminal` with zero subprocesses [AR-003][AR-007][BC-008][BC-012][SEC-002][SEC-003][SEC-004].
