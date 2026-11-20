@@ -1,19 +1,12 @@
 # Capability: translucent-header-brand-submenu
 
 ## Purpose
-Establishes the root-`ZStack` translucent `HeaderBrandSubmenuView` governed by `HeaderSubmenuStateMachine` (`120 ms` hover dwell, `180 ms` exit grace, `Escape` suppression latch, `0.0 pt` layout shift), replaces cryptic header buttons with descriptive verb-noun `HeaderCommandCatalog` items and shortcut badges, centralizes keyboard shortcuts in `SwiftEditCommands` (`Cmd+P` default-OFF preview, `⌥⇧⌘F` format section), and enforces synchronized binary quarantine command lockouts.
+Replaces hover dwell and auto-close timers in `HeaderSubmenuStateMachine` and `HeaderBrandSubmenuView` with click-and-keyboard-only sticky activation, full arrow/Escape accessibility navigation, exact header/backdrop geometry alignment, and Opt+Cmd+F shortcut badge parity (`BUG-006`, `PERF-004`).
 
 ## Requirements
 
-### Requirement: REQ-001 Dwell-Gated Root-ZStack Header Submenu With Zero Layout Shift
-WHEN the pointer hovers, exits, clicks, or presses `Escape` across the `36 pt` header or translucent submenu, `HeaderSubmenuStateMachine` and `HeaderBrandSubmenuView` SHALL open after `120 ms` continuous dwell (`0 ms` on click toggle), bridge `180 ms` travel, latch closed on `Escape` or active drag, clamp `submenuTranslucentSurface` alpha under accessibility flags, and keep `0.0 pt` vertical displacement [TEST-004][UI-001][UI-003][UI-010][UI-011][UI-012].
-
-#### Scenario: P1 Intentional 120ms Dwell Click Toggle and 180ms Travel Keep Submenu Open With Zero Shift
-- **Path**: P1
-- **Trait**: positive
-- **GIVEN** a closed `HeaderSubmenuStateMachine` with `topBarHeight == 36.0` and isolated trailing Zoom and Appearance controls
-- **WHEN** the pointer enters the brand header region for `120 ms`, exits toward the submenu and enters the submenu within `180 ms`, and trailing Zoom/Appearance regions receive hover events while closed
-- **THEN** the submenu opens at `120 ms`, remains open across the `<= 180 ms` gap, ignores trailing-control hover when closed, supports instant `0 ms` click toggle, and keeps `topBarHeight == 36.0` (`0.0 pt` editor shift)
+### Requirement: REQ-001 Click-and-Keyboard-Only Translucent Header Submenu With Zero Hover Auto-Open and Zero Layout Shift
+WHEN the user clicks the header brand trigger or activates it via keyboard or VoiceOver, the header submenu controller SHALL toggle open in `0 ms` and persist until outside click, trigger re-click, item click, `Escape`, or window resign-key, support arrow navigation, emit zero hover auto-open or 20 ms polling tasks, and keep `0.0 pt` shift [TEST-004][UI-001][UI-003][UI-009][UI-010][UI-011][UI-012].
 
 #### Scenario: N1 Sub-120ms Pass-Through Active Drag or Escape Latch Suppresses Submenu Opening
 - **Path**: N1
@@ -22,8 +15,22 @@ WHEN the pointer hovers, exits, clicks, or presses `Escape` across the `36 pt` h
 - **WHEN** dwell ticks advance during each condition
 - **THEN** the `90 ms` pass-through and active drag never open the submenu, and `Escape` closes the submenu immediately while latching `isSuppressedUntilPointerExit == true` until the pointer exits and re-enters or an explicit click occurs
 
+#### Scenario: P1 Click-and-Keyboard-Only Sticky Submenu Arrow Navigation and Zero Layout Shift
+- **Path**: P1
+- **Trait**: positive
+- **GIVEN** a closed `HeaderSubmenuStateMachine` over `toolbarBar` whose rendered height equals `topBarHeight` and click-outside backdrop positioned strictly below `topBarHeight`
+- **WHEN** `clickToggle()` activates, `1000 ms` elapse while the pointer moves off the trigger across trailing controls, `↓`/`↑`/`Home`/`End` navigate items, and `Return` activates the focused item
+- **THEN** `isOpen` stays `true` past `1000 ms`, row focus/hover styling and VoiceOver `Expanded`/`Collapsed` traits update accurately, `topBarHeight` causes `0.0 pt` vertical shift, and item activation runs once and closes the menu
+
+#### Scenario: N1 Prolonged Hover Never Opens or Auto-Closes Submenu While Esc and Outside Click Dismiss
+- **Path**: N1
+- **Trait**: negative
+- **GIVEN** a closed `HeaderSubmenuStateMachine` receiving `700 ms` continuous hover over the brand trigger or trailing controls, and subsequently an open state receiving `Escape`, outside click, or window resign-key
+- **WHEN** pointer hover enters/exits without clicking, then `clickToggle()` opens the menu and `escapePressed()` or click-outside dismiss triggers
+- **THEN** hover alone never opens the menu, moving off an opened menu never auto-closes it, zero 20 ms `.task` polling loops run, and `Escape`/outside-click/resign-key closes immediately
+
 ### Requirement: REQ-002 Descriptive Verb-Noun Command Catalog Format Section and Single-Source Shortcuts
-The `HeaderCommandCatalog`, `SwiftEditCommands`, and `SwiftEditWorkbenchModel` SHALL expose descriptive verb-noun command titles with shortcut badges, default `showMarkdownPreview` to `false` toggled in-memory via `Cmd+P` (`CommandGroup(replacing: .printItem)`), format selected Markdown sections via `⌥⇧⌘F` in one `BufferRevision` step, and omit duplicate `.keyboardShortcut` modifiers from header views [AR-006][AR-008][BC-004][BC-006][SEC-004][TEST-006][UI-009][UI-010].
+The header command catalog SHALL expose descriptive verb-noun command titles with shortcut badges, align `Find and Replace…` on `Opt+Cmd+F`, default `showMarkdownPreview` to `false` via `Cmd+P`, format Markdown sections via `⌥⇧⌘F` in one `BufferRevision`, and keep Views free of `.keyboardShortcut` duplicates [AR-006][AR-008][BC-004][BC-006][SEC-004][TEST-006][UI-009][UI-010].
 
 #### Scenario: P2 Descriptive Badges Default-Off Cmd+P Preview and Single-Revision Format Section
 - **Path**: P2
@@ -38,6 +45,13 @@ The `HeaderCommandCatalog`, `SwiftEditCommands`, and `SwiftEditWorkbenchModel` S
 - **GIVEN** an active degraded plain-text snapshot (`isDegradedPlainText == true`) or an already-formatted Markdown section
 - **WHEN** `formatActiveSection()` executes
 - **THEN** buffer text remains unchanged without throwing and a non-destructive status message is recorded
+
+#### Scenario: P4 Click-Only Header Submenu Dispatches Diff and Format Commands With Badge Parity
+- **Path**: P4
+- **Trait**: positive
+- **GIVEN** an open click-activated `HeaderBrandSubmenuView` over a Markdown tab after `1000 ms` delay
+- **WHEN** the user moves pointer down to `"Show File Compare Diff"` (`toggleDiffPane`) and clicks it, and audits shortcut sources
+- **THEN** `"Show File Compare Diff"` remains open until clicked (never auto-dismissed at `180 ms`), `showDiffPane` toggles `true`, and `scanSwiftEditUIViewsDirectory` reports zero duplicate shortcuts or polling loops
 
 ### Requirement: REQ-003 Synchronized Binary Quarantine Lockouts Across Submenu Menu Bar and Workbench
 IF the active document is binary read-only (`isBinaryReadOnly == true`), THEN `HeaderCommandCatalog`, `SwiftEditCommands`, and `SwiftEditWorkbenchModel` SHALL disable and reject `Save Document`, `Save Document As…`, `Duplicate Line or Selection`, `Format Markdown Document`, and `Format Markdown Section` without mutating `BufferRevision` or opening `NSSavePanel` [DATA-003][SEC-004][SEC-012][UI-008].

@@ -1,7 +1,7 @@
 # Capability: document-core-and-spm-scaffold
 
 ## Purpose
-Extends the `DocumentCore` lossless line-ending contract from `LF` and `CRLF` to the three-way set `LF`, `CRLF`, and Classic Mac `CR`, evaluating `\r\n` before bare `\r` so no document is misclassified or rewritten on save.
+Fixes `DocumentSession.activeSeparator` on single-line Classic Mac `CR` documents so `Cmd+D` never leaks raw `\r` bytes into the normalized in-memory LF buffer while preserving exact `LineEnding.cr` serialization on save (`BUG-016`), and removes per-keystroke full-buffer `Array(text.utf16)` copies (`PERF-007`).
 
 ## Requirements
 
@@ -78,7 +78,7 @@ IF an inbound file contains a `0x00` byte within its first `8 KiB` outside a val
 - **THEN** the operation aborts immediately and throws `DomainError.securityScopeViolation`
 
 ### Requirement: REQ-004 Deterministic Command-D Line and Selection Duplication on DocumentSession
-WHEN `duplicateLineOrSelection` or `applyEdit` is invoked on a mutable `DocumentSession`, the document core engine SHALL duplicate the current line when unselected or insert the selected text on a new line immediately after the cursor when selected while incrementing `BufferRevision` and emitting an immutable `DomainEvent` [AR-004][AR-008][AR-012][BC-003][BC-004][BC-006].
+WHEN `duplicateLineOrSelection` or `applyEdit` executes on a mutable `DocumentSession`, the document core engine SHALL normalize in-memory insertions to `"\n"` regardless of raw `\r` separators on single-line `CR`-only documents, preserve `LineEnding.cr` serialization on save, increment `BufferRevision`, and emit an immutable `DomainEvent` [AR-004][AR-008][AR-012][BC-003][BC-004][BC-006].
 
 #### Scenario: P3 Command-D Duplicates Unselected Line or Inserts Selected Text on New Line After Cursor
 - **Path**: P3
@@ -100,3 +100,17 @@ WHEN `duplicateLineOrSelection` or `applyEdit` is invoked on a mutable `Document
 - **GIVEN** a `DocumentSession` opened with `isBinaryReadOnly == true` at `BufferRevision(1)`
 - **WHEN** `applyEdit` or `duplicateLineOrSelection` (`Cmd+D`) is invoked on the session
 - **THEN** the call throws `DomainError.binaryFileSaveForbidden` and leaves the buffer text and `BufferRevision(1)` unchanged
+
+#### Scenario: P4 Single-Line CR-Only Document Cmd+D Preserves Clean Normalized Newlines and CR Save
+- **Path**: P4
+- **Trait**: positive
+- **GIVEN** a single-line Classic Mac `CR` file decoded into `DocumentSession` with `LineEnding.cr` and normalized text `"alpha"` (zero `\r` inside buffer)
+- **WHEN** `duplicateLineOrSelection` (`Cmd+D`) duplicates line `1` and `DocumentCodec.encode` serializes the session back to disk
+- **THEN** the in-memory `snapshot.text` becomes `"alpha\nalpha"` with zero raw `\r` characters (`hasRawCR == false`), `BufferRevision` increments, and encoded save bytes equal `"alpha\ralpha"`
+
+#### Scenario: N7 Mixed Raw Carriage Return Injection Is Normalized Safely Without Corrupting Line Counts
+- **Path**: N7
+- **Trait**: negative
+- **GIVEN** a single-line `LineEnding.cr` session receiving a programmatic edit containing `\r\n` or `\r`
+- **WHEN** `DocumentSession.applyEdit` validates and applies the edit and `CursorMetricsCalculator` computes metrics
+- **THEN** in-memory storage normalizes separators deterministically without dangling raw `\r` artifacts and cursor line metrics count every line accurately

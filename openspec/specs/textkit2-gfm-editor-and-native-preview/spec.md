@@ -1,7 +1,7 @@
 # Capability: textkit2-gfm-editor-and-native-preview
 
 ## Purpose
-Defines the two-speed viewport GFM highlighting, Markdown authoring commands with GFM table navigation, and the on-demand offline Zero-WebKit native preview with confined local images and mediated links, all without mutating binary buffers or opening sockets.
+Enforces document-wide 64-image preview admission, ordered list numbering (`1., 2.`), HTML-before-table termination, CR-aware source lines, async `NSCache` thumbnails, `(DocumentID, BufferRevision)` line index invalidation, single-pass viewport attributes, and undo-safe TextKit 2 edits (`BUG-001`, `BUG-005`, `BUG-014..016`, `BUG-019`, `BUG-021`, `PERF-001`, `PERF-002`).
 
 ## Requirements
 
@@ -71,7 +71,7 @@ WHEN the user presses `Tab` or `Shift+Tab` inside a GFM pipe table of at most 64
 - **THEN** the result is `notApplicable` and the dispatch chain continues to list then default handling
 
 ### Requirement: REQ-004 Hidden-By-Default Inert GFM Preview Projection
-WHILE `showMarkdownPreview` is false, the `MarkdownPreviewProjector` SHALL perform zero projections, and WHEN it is true SHALL project headings, paragraphs, tasks, quotes, tables within caps and thematic breaks with `sourceLine` anchors, rendering raw HTML block and inline as inert monospaced text [BC-004][SEC-004][SEC-012].
+WHEN `showMarkdownPreview` toggles or `MarkdownPreviewProjector` evaluates a document, the preview projector SHALL perform zero projections while hidden, project ordered list numerals (`1., 2.`), break HTML before adjacent GFM tables, track CR/CRLF/LF `sourceLine` anchors, and keep raw HTML inert [BC-004][SEC-004][SEC-012].
 
 #### Scenario: P4 Preview On Projects Table Task Quote and Inert HTML With Source Lines
 - **Path**: P4
@@ -87,8 +87,22 @@ WHILE `showMarkdownPreview` is false, the `MarkdownPreviewProjector` SHALL perfo
 - **WHEN** the editor edits the document and `project` is requested
 - **THEN** zero projections run, and a later projection renders the script text inertly
 
+#### Scenario: P7 Ordered List Numerals Adjacent HTML-Before-Table and CR/CRLF Source Lines Project Accurately
+- **Path**: P7
+- **Trait**: positive
+- **GIVEN** `showMarkdownPreview` true on `"<div>hi</div>\n| A | B |\n|---|---|\n| 1 | 2 |\n\n1. first\n2. second"` and a `CR`-separated snapshot `"# One\rTwo\rThree"`
+- **WHEN** `MarkdownPreviewProjector.project` and `previewSourceLine` evaluate both documents
+- **THEN** `<div>hi</div>` closes cleanly as inert HTML without absorbing the following GFM table (`table == true`), ordered list items render `"1."` and `"2."` instead of `"•"`, and `previewSourceLine` advances correctly across `\r` separators
+
+#### Scenario: N9 Malicious HTML Script Immediately Preceding Table Remains Inert Without Rendering Tags
+- **Path**: N9
+- **Trait**: security
+- **GIVEN** `"<script>alert(1)</script>\n| H |\n|---|\n| V |"` with `showMarkdownPreview` true
+- **WHEN** `MarkdownPreviewProjector.project(snapshot:)` runs
+- **THEN** the script block stays inert monospace plain text with zero WebKit evaluation while cleanly parsing the adjacent GFM table
+
 ### Requirement: REQ-005 Confined Image Admission and Mediated Links
-IF a preview image or link target is resolved, THEN the `PreviewResourceAndLinkGate` SHALL admit only local `png`/`jpg`/`jpeg`/`gif`/`webp`/`heic` files inside the granted scope via `FileSystemProviding` within 16 MiB, 8192 px and 16 MP, downsampled to 2048 px, at most 64 per document, SHALL open zero sockets, and SHALL allow links only after `https`/`http`/`mailto` confirmation [SEC-002][SEC-003][SEC-004].
+IF a preview image or link resolves, THEN the preview resource gate SHALL admit local raster images via `FileSystemProviding` within `16 MiB`, `8192 px`, and `16 MP`, downsample off-`@MainActor` into a bounded `NSCache` up to `2048 px`, enforce an aggregate `64`-image document budget, open zero sockets, and confirm `https`/`http`/`mailto` links [SEC-002][SEC-003][SEC-004].
 
 #### Scenario: P5 In-Scope Raster Image Loads Downsampled and Https Link Requires Confirmation
 - **Path**: P5
@@ -104,8 +118,22 @@ IF a preview image or link target is resolved, THEN the `PreviewResourceAndLinkG
 - **WHEN** the gate evaluates each
 - **THEN** each is blocked with a placeholder or rejection, zero sockets open, zero out-of-scope reads occur, and escapes raise `securityScopeViolation`
 
+#### Scenario: P8 Valid Images Across Multiple Paragraphs Cache Downsampled Thumbnails Asynchronously
+- **Path**: P8
+- **Trait**: positive
+- **GIVEN** a Markdown document with `10` valid local PNG images across distinct paragraphs
+- **WHEN** `MarkdownNativePreviewView` renders images with document-wide image admission and bounded `NSCache` thumbnails
+- **THEN** thumbnails decode off `@MainActor`, populate cached entries across re-renders without synchronous main-thread decoding spikes, and display all `10` admitted images
+
+#### Scenario: N10 Document With 70 Valid Images Across Separate Paragraphs Strictly Enforces Aggregate 64-Image Cap
+- **Path**: N10
+- **Trait**: security
+- **GIVEN** a Markdown snapshot placing `70` valid local images across `70` separate paragraphs
+- **WHEN** `MarkdownNativePreviewView` renders the full preview using a shared cumulative document counter (`remainingImageBudget = 64`)
+- **THEN** at most `64` images total decode and render while the `65th..70th` images are capped (`CWE-400`), never admitting `70/64`
+
 ### Requirement: REQ-006 Editor Pipeline Wiring With Dispatch Order and Binary Lockout
-WHEN the editor handles keystrokes, `Cmd+P` and `Tab`, the `SwiftEditUI` SHALL toggle a default-OFF preview, dispatch `Tab` as `Ctrl+Tab` escape, fence, GFM table, list, then default, debounce `SessionRecovery` writes by 500 ms, sync preview scrolling by `sourceLine`, and SHALL disable Markdown commands and preview on binary tabs without mutation [AR-003][UI-005][UI-007][UI-012][DATA-003].
+WHEN `TextKit2EditorView` and `SwiftEditUI` process keystrokes, `Cmd+P`, `Tab`, programmatic edits, or closing tabs, the shell SHALL route undo-safe edits preserving selection, assign one `NSUndoManager` per tab cleared in `dismantleNSView`, reset attributes only across dirty/visible ranges in one viewport pass, key `MarkdownLineIndex` by `(DocumentID, BufferRevision)`, and lock binary tabs [AR-003][DATA-003][UI-005][UI-007][UI-012].
 
 #### Scenario: P6 Cmd+P Toggles Preview and Tab Chain Honors Precedence
 - **Path**: P6
@@ -120,3 +148,17 @@ WHEN the editor handles keystrokes, `Cmd+P` and `Tab`, the `SwiftEditUI` SHALL t
 - **GIVEN** a quarantined binary tab
 - **WHEN** a Markdown command or `Cmd+P` is triggered
 - **THEN** the command is disabled, no preview is mounted, and `BufferRevision` is unchanged
+
+#### Scenario: P9 Revision-Keyed LineIndex Same-Length Edits and Single-Pass Viewport Styling Stay Coherent
+- **Path**: P9
+- **Trait**: positive
+- **GIVEN** a document edited from `"# a\n**b**"` (`rev 1`) to `"* a\n__b__"` (`rev 2`, identical UTF-16 length) inside `TextKit2EditorView`
+- **WHEN** `Coordinator` updates syntax/diagnostic styling across visible range and invokes `Cmd+Z` after `MarkdownAuthoringCommands` Bold
+- **THEN** `cachedLineIndex` invalidates on `BufferRevision` (`rev 1 -> rev 2`) even when length is unchanged, styling updates dirty/visible range in a single viewport layout pass, and Bold toggles undo in one `Cmd+Z`
+
+#### Scenario: N11 Degraded Binary or Dismantled Editor Performs Zero Full-Document Layout Sweeps
+- **Path**: N11
+- **Trait**: negative
+- **GIVEN** a `12 MiB` degraded plain-text buffer or a closed tab triggering `dismantleNSView`
+- **WHEN** `updateNSView` and teardown execute
+- **THEN** degraded buffers bypass full-document `setRenderingAttributes([:], for: docRange)` sweeps and dismantled views clear delegates and validators immediately

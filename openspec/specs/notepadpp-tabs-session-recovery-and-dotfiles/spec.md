@@ -1,7 +1,7 @@
 # Capability: notepadpp-tabs-session-recovery-and-dotfiles
 
 ## Purpose
-Extends `REQ-001` and `REQ-004` of `notepadpp-tabs-session-recovery-and-dotfiles` additively to support within-partition left/right tab reordering in `WorkspaceTabSession` and confined `8 KiB` binary classification (`isBinary`) in `DotfileFolderNavigator`.
+Adds `EscapingSymlinkPolicy` (`.failClosed` default preserving strict folder errors; `.skipAndReport` for sidebar browsing so escaping child symlinks are skipped cleanly prior to `8 KiB` probing and surfaced in a non-destructive UI warning banner) (`BUG-017`) and injects `PreferencesProviding` for stall-free persistence (`PERF-003`, `TEST-001`).
 
 ## Requirements
 
@@ -78,7 +78,7 @@ IF a recovery operation targets a binary read-only snapshot, exceeds the `64 MiB
 - **THEN** the store aborts before committing and throws `DomainError.binaryFileSaveForbidden`, `DomainError.sessionRecoveryQuotaExceeded`, or `DomainError.securityScopeViolation`
 
 ### Requirement: REQ-004 Shallow Dotfile Folder Navigation Security-Scope Lifecycle and Clamped Preferences
-WHEN listing a workspace directory or updating editor preferences, the folder navigator and preferences store SHALL return shallow directory entries including hidden dotfiles and `8 KiB`-probed `isBinary` flags sorted directories-first within symlink-verified scope using balanced security-scoped resource calls and persist `Light`, `Black`, or `Auto` appearance and `50%..300%` clamped zoom in isolated `UserDefaults` [BC-007][DATA-003][DATA-007][DATA-008][SEC-002][SEC-003][TEST-003][TEST-005].
+WHEN enumerating directories or persisting preferences, the dotfile folder navigator SHALL apply `EscapingSymlinkPolicy` (`.failClosed` default; `.skipAndReport` skipping escaping child symlinks prior to `8 KiB` probing while throwing if folder root escapes scope) with balanced `defer` release and `PreferencesProviding` injection [BC-007][DATA-003][DATA-007][DATA-008][SEC-002][SEC-003][TEST-003][TEST-005].
 
 #### Scenario: P3 Shallow Dotfile Enumeration and Schema-Clamped Preferences Round-Trip
 - **Path**: P3
@@ -114,3 +114,17 @@ WHEN listing a workspace directory or updating editor preferences, the folder na
 - **GIVEN** a granted directory containing a symbolic link pointing to an external binary file outside the workspace scope
 - **WHEN** `DotfileFolderNavigator.listEntries(in:withinScope:)` runs
 - **THEN** the call aborts with `DomainError.securityScopeViolation` before probing bytes and releases scope in `defer`
+
+#### Scenario: P6 Sidebar SkipAndReport Lists Valid Siblings and Exposes Escaping Symlink Count Without Reading Target
+- **Path**: P6
+- **Trait**: positive
+- **GIVEN** a granted directory containing valid `"notes.md"` plus child symlink `"escape.lnk"` pointing to `"/etc/passwd"` and a spy `FileSystemProviding` tracking probed paths
+- **WHEN** `DotfileFolderNavigator.listEntries(in:withinScope:escapingSymlinkPolicy: .skipAndReport)` runs
+- **THEN** `"notes.md"` loads normally, `"escape.lnk"` is omitted with `skippedExternalSymlinkCount == 1`, zero bytes of `"/etc/passwd"` or `"escape.lnk"` are read (`8 KiB` probe never runs on it), and `startCount == stopCount`
+
+#### Scenario: N9 Folder Root Escaping Scope Always Throws securityScopeViolation Under Any Policy
+- **Path**: N9
+- **Trait**: security
+- **GIVEN** a folder URL that is itself a symlink resolving outside the granted workspace root and `escapingSymlinkPolicy == .skipAndReport`
+- **WHEN** `DotfileFolderNavigator.listEntries` runs on that folder root
+- **THEN** the navigator aborts immediately with `DomainError.securityScopeViolation` before inspecting children and executes `stopAccessing` in `defer` (`startCount == stopCount`)

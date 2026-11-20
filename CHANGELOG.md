@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-20 UTC
+Branch: feature/FirstStub | Commit: a3bfc35
+
+### Added
+- Added `SwiftEditAppDelegate` (`@NSApplicationDelegateAdaptor`) and `SwiftEditAppLifecycleBridge` for cold/warm Finder `application(_:open:)` document handoff and sequential multi-tab dirty `Cmd+Q` save/cancel negotiation (`BUG-002`, `BUG-003`, `BUG-010`, `openspec/specs/debug-hardening-usability-and-automated-qa/spec.md`, archived at `openspec/changes/archive/2026-11-20-015-debug-hardening-usability-and-automated-qa/`).
+- Added `PreferencesProviding` (`UserDefaultsPreferencesStore` and `InMemoryKeyValueStore`) across `EditorPreferencesStore`, `RecentFilesStore`, and `SwiftEditWorkbenchModel` (`PERF-003`, `TEST-001`), plus `EscapingSymlinkPolicy` (`.failClosed` default, `.skipAndReport` for sidebar browsing) and `PreferredTerminalApp` (`.auto`, `.terminal`, `.iTerm2`) (`BUG-017`, `openspec/specs/notepadpp-tabs-session-recovery-and-dotfiles/spec.md`, `openspec/specs/ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions/spec.md`).
+- Added generation-guarded off-`@MainActor` large-file loading (`openFileAsync` for `>= 2 MiB`), bounded `NSCache` `PreviewThumbnailCache` downsampling, `(DocumentID, BufferRevision)` `BracketTopology` binary-search caching, and reproducible 3x macOS Debug QA audit verification (`PERF-002`, `PERF-005`, `PERF-007`, `docs/qa/debug-verification-report-2026-11-20.md`).
+
+### Changed
+- Converted `HeaderSubmenuStateMachine` and `HeaderBrandSubmenuView` from hover-dwell auto-open/auto-close timers to click-and-keyboard-only sticky activation (`>= 1000 ms` persistence, arrow/`Home`/`End`/`Return`/`Escape` navigation, VoiceOver `Expanded`/`Collapsed` state, and zero `20 ms` `.task` polling) (`BUG-006`, `PERF-004`, `openspec/specs/translucent-header-brand-submenu/spec.md`, `openspec/specs/editor-ux-highlighting-sidebar-pin-tabs-and-about/spec.md`).
+- Rebound `Find and Replace…` from `Cmd+H` to `Opt+Cmd+F` so `Cmd+H` preserves standard macOS Hide, removed duplicate `Redo` menu bindings, expanded `KeyboardShortcutsCheatSheetCatalog`, and aligned `AboutSheetDescriptor` fallback version to `0.0.1-alpha5` (`BUG-004`, `BUG-011`, `BUG-018`).
+- Offloaded large-document `26`-rule Markdown AST linting off `@MainActor` with `(DocumentID, BufferRevision)` cancellation, single-pass TextKit 2 viewport rendering attributes, and allocation-free `CursorMetricsCalculator` / `LineNumberGutterProjection` line counting to sustain `<= 16 ms` P99 typing and caret latency up to `20,000` lines (`PERF-001`, `PERF-006`, `PERF-007`, `MEM-001`, `MEM-003`, `MEM-004`).
+
+### Fixed
+- Fixed Undo/selection preservation on `Cmd+D` and programmatic TextKit 2 edits (`BUG-005`), Find/Replace auto-focus, single-occurrence `executeReplaceSingle()`, `programmaticSelectionToken` scroll-jump, and editor focus restoration on overlay dismissal (`BUG-008`, `BUG-009`).
+- Fixed `LineNumberGutterView` vertical scroll and soft-wrap fragment alignment, full wrapped-paragraph active-line highlighting, ordered list preview numerals (`1., 2.`), HTML-before-GFM-table boundary termination, `(DocumentID, BufferRevision)` `MarkdownLineIndex` invalidation on same-length edits, single-line Classic Mac `CR` separator normalization in `Cmd+D` and `applyEdit`, paired `.removed`/`.inserted` side-by-side modified diff highlights, and Xcode `ALWAYS_SEARCH_USER_PATHS` / `Stamp Info.plist` build warnings (`BUG-012..016`, `BUG-018..020`, `openspec/specs/textkit2-gfm-editor-and-native-preview/spec.md`, `openspec/specs/markdown-lint-format-bracket-and-diff/spec.md`, `openspec/specs/document-core-and-spm-scaffold/spec.md`).
+
+### Security
+- Eliminated cross-tab `_NSUndoStack` use-after-free crashes (`CWE-416`, `BUG-001`, `BUG-021`) via per-`DocumentID` `PerTabUndoManagerRegistry` isolation and deterministic `TextKit2EditorView.dismantleNSView` delegate/validator teardown.
+- Isolated binary NUL-quarantined files into transient read-only `BinaryInspectionPresentation` state released immediately on tab switch or dismissal without retaining buffers in `sessionsByID`, `savedBaselineByID`, or `SessionRecovery` (`BUG-007`, `MEM-002`, `DATA-003`).
+- Enforced pre-probe `resolvingSymlinksInPath()` containment before any `8 KiB` read under `.skipAndReport` (`CWE-59`, `SEC-003`), cumulative `64`-image document-wide preview admission (`CWE-400`, `BUG-014`), `64 MiB` pre-allocation checks on Finder `open-doc` and `openFileAsync`, and a bounded UTF-8 security URI/image fast-path (`lintSecurityFastPath`) so `.unsafeLinkScheme` and `.unsafeImagePath` errors never drop to `0` on `5kL`–`20kL` documents (`PERF-006`, `openspec/specs/comprehensive-markdown-linter-and-diagnostics-ui/spec.md`).
+
+## [Unreleased] - 2026-11-20 UTC
+Branch: feature/FirstStub | Commit: 6f13c46
+
+### Added
+- Added `MarkdownHeadingOutlineEngine` in `SwiftEditCore` and Alfred-style `DocumentNavigatorOverlayView` (`Option+\`) plus chrome-hidden full-screen distraction-free editing mode (`Option+1`) in `SwiftEditUI`, wired into `SwiftEditCommands` and `KeyboardShortcutsCheatSheetView`.
+- Added `Scripts/build-app.sh` for repeatable macOS `.app` builds with `Info.plist` version stamping (`0.0.1-alpha5`).
+
+## [Unreleased] - 2026-11-20 UTC
 Branch: feature/FirstStub | Commit: c102cbc
 
 ### Added

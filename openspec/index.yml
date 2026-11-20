@@ -5,11 +5,11 @@ always_read:
   - "openspec/Constitution.md"
 specs:
   - id: "015-debug-hardening-usability-and-automated-qa"
-    status: "draft"
+    status: "implemented"
     date: "2026-11-20"
-    capabilities: ["debug-hardening-usability-and-automated-qa", "translucent-header-brand-submenu", "editor-ux-highlighting-sidebar-pin-tabs-and-about", "ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions", "textkit2-gfm-editor-and-native-preview", "comprehensive-markdown-linter-and-diagnostics-ui", "markdown-lint-format-bracket-and-diff", "document-core-and-spm-scaffold", "notepadpp-tabs-session-recovery-and-dotfiles"]
-    path: "openspec/changes/015-debug-hardening-usability-and-automated-qa"
-    summary: "Fix all 33 debug audit findings, make header menu click-only & accessible, and add automated 3x debug verification."
+    capabilities: ["notepadpp-tabs-session-recovery-and-dotfiles", "editor-ux-highlighting-sidebar-pin-tabs-and-about", "document-core-and-spm-scaffold", "ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions", "textkit2-gfm-editor-and-native-preview", "comprehensive-markdown-linter-and-diagnostics-ui", "debug-hardening-usability-and-automated-qa", "markdown-lint-format-bracket-and-diff", "translucent-header-brand-submenu"]
+    path: "openspec/changes/archive/2026-11-20-015-debug-hardening-usability-and-automated-qa"
+    summary: "Debug Hardening, Click-Only Accessible Usability & Automated 3x QA Verification"
   - id: "014-markdown-document-navigator-and-distraction-free"
     status: "draft"
     date: "2026-11-20"

@@ -1,7 +1,7 @@
 # Capability: editor-ux-highlighting-sidebar-pin-tabs-and-about
 
 ## Purpose
-Extends `REQ-002` of `editor-ux-highlighting-sidebar-pin-tabs-and-about` additively so `Return` also continues manual pseudo-outline markers (`a.`, `1.1`) and exits empty nested ordered items in two stages while preserving every existing continuation and security scenario.
+Updates `REQ-006` from `120 ms` dwell header submenu opening to click/keyboard-only activation while aligning `REQ-007`'s About fallback version string to `"0.0.1-alpha5"` and preserving all sidebar confinement, theme, and external HTTPS confirmation security checks.
 
 ## Requirements
 
@@ -126,7 +126,7 @@ WHEN switching appearance modes, syncing unmasked system appearance, or adjustin
 - **THEN** `systemPrefersDark` remains `true` and `.auto` resolves `.black`
 
 ### Requirement: REQ-006 Percentage-Based Collapsible Pinned Sidebar Hover Topbar and Confined Right-Click Create
-WHEN laying out the left sidebar, interacting with the top bar brand region, or right-clicking the sidebar to create a file or folder, the workbench SHALL size sidebar width strictly as a clamped percentage ratio (`0.12...0.65`) of container width, support manual pin/collapse, gate `HeaderBrandSubmenuView` via `120 ms` dwell while keeping Logo, Zoom, and Theme always visible, and validate prompted creation names inside scope [BC-012][SEC-003][SEC-012][UI-001][UI-005][UI-011].
+WHEN laying out the left sidebar, interacting with the top bar brand region, or right-clicking the sidebar to create a file or folder, the workbench SHALL size sidebar width as `0.12...0.65` of container width, support manual pin/collapse, toggle `HeaderBrandSubmenuView` solely via click or keyboard, keep Logo, Zoom, and Theme visible, and validate prompted creation names inside scope [BC-012][SEC-003][SEC-012][UI-001][UI-005][UI-011].
 
 #### Scenario: P6 Proportional Sidebar Width Pin Collapse Hover Topbar and Empty-Area Right-Click Create
 - **Path**: P6
@@ -156,15 +156,22 @@ WHEN laying out the left sidebar, interacting with the top bar brand region, or 
 - **WHEN** `sidebarWidthRatio` updates to `0.40`, `toggleSidebarPinCollapse()` runs, brand header dwell reaches `120 ms`, and `resolveSidebarCreationDirectory(for: nil)` + `sidebarCreateFile(named: "new.md", in:)` execute
 - **THEN** computed widths scale strictly to `480pt` and `1024pt` (`40%`), unpinning collapses the sidebar, `HeaderBrandSubmenuView` opens without shifting editor layout while Logo, Zoom, and Theme remain visible, and `"new.md"` is created inside the current folder
 
-#### Scenario: N12 Active Sidebar Divider Drag Blocks Submenu Hover Opening
-- **Path**: N12
+#### Scenario: P10 Proportional Sidebar Width Pin Collapse Click Header Submenu and Empty-Area Create
+- **Path**: P10
+- **Trait**: positive
+- **GIVEN** `SidebarLayoutGeometry` across `1200pt` and `2560pt` widths, an expanded pinned sidebar, `HeaderSubmenuStateMachine`, and a mounted workspace folder
+- **WHEN** `sidebarWidthRatio` updates to `0.40`, `toggleSidebarPinCollapse()` runs, `clickToggle()` activates the brand button, and `sidebarCreateFile(named: "new.md", in:)` runs
+- **THEN** computed widths scale to `480pt` and `1024pt`, unpinning collapses the sidebar, `HeaderBrandSubmenuView` stays persistently open past `1000 ms` with `0.0 pt` shift, and `"new.md"` is created inside scope
+
+#### Scenario: N13 Pointer Hover and Active Sidebar Divider Drag Never Open Submenu
+- **Path**: N13
 - **Trait**: negative
-- **GIVEN** an active sidebar percentage divider drag (`isDraggingTabOrSidebar == true`)
-- **WHEN** the pointer crosses the brand header region for `120 ms`
-- **THEN** `HeaderSubmenuStateMachine` remains closed and sidebar ratio clamping (`0.12...0.65`) continues uninterrupted
+- **GIVEN** a `SwiftEditWorkbenchModel` during normal pointer hover over the brand header or an active sidebar divider drag (`isDraggingTabOrSidebar == true`)
+- **WHEN** hover ticks and drag events run without a click or keyboard activation
+- **THEN** `HeaderSubmenuStateMachine.isOpen` remains `false` and sidebar ratio clamping (`0.12...0.65`) operates uninterrupted
 
 ### Requirement: REQ-007 Concept E2 Vector Brand Logo and Help About Dialog With Validated Repo and License Links
-WHEN rendering the top bar brand header or opening `Help -> About PH.SwiftEdit`, the UI shell SHALL display the Concept E2 vector logo small beside `PH.SwiftEdit` and large inside the About dialog alongside App Name, `nbgv` version, validated GitHub repository link, and validated MIT License link [AR-014][SEC-004][UI-001][UI-008][UI-010].
+WHEN rendering the top bar brand header or opening `Help -> About PH.SwiftEdit`, the UI shell SHALL display the Concept E2 vector logo small beside `PH.SwiftEdit` and large inside the About dialog alongside App Name, `nbgv` version (fallback `"0.0.1-alpha5"`), validated GitHub repo link, and validated MIT License link [AR-014][SEC-004][UI-001][UI-008][UI-010].
 
 #### Scenario: P7 Small Topbar Logo Large About Logo Version and Validated Repo Plus License Links
 - **Path**: P7
@@ -179,3 +186,10 @@ WHEN rendering the top bar brand header or opening `Help -> About PH.SwiftEdit`,
 - **GIVEN** tampered license or repository URIs `"http://github.com/paoloinnocenti/PH.SwiftEdit/blob/main/LICENSE"`, `"javascript:alert(1)"`, and `"file:///LICENSE"`
 - **WHEN** `AboutSheetDescriptor.prepareExternalLinkConfirmation(rawURI:)` validates each URI
 - **THEN** all three calls return `nil` and block `NSWorkspace.shared.open`
+
+#### Scenario: P11 AboutSheetDescriptor Fallback Matches Bundle Version Alpha5 When Manifest Absent
+- **Path**: P11
+- **Trait**: positive
+- **GIVEN** a `nil` bundle resource and missing `CFBundleShortVersionString` in `AboutSheetDescriptor.resolve(versionManifestData: nil)`
+- **WHEN** `AboutSheetDescriptor` resolves its deterministic version fallback
+- **THEN** the resolved fallback string equals `"0.0.1-alpha5"` instead of stale `"0.0.1-alpha3"`, and official GitHub HTTPS repo and MIT License prompts remain valid

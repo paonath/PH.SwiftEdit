@@ -1,12 +1,12 @@
 # Capability: ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions
 
 ## Purpose
-Updates `REQ-004` of `ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions` to replace inline horizontal top-bar hover buttons with the root-`ZStack` translucent `HeaderBrandSubmenuView`, add `Cmd+P` (`Toggle Markdown Preview`) and `Cmd+Option+Shift+F` (`Format Markdown Section`) to `KeyboardShortcutsCheatSheetCatalog`, and enforce binary quarantine command lockouts across `SwiftEditCommands` while preserving all HTTPS external-link guards.
+Synchronizes `LineNumberGutterView` scroll and soft-wrap geometry (`BUG-012`, `BUG-013`), fixes Find/Replace auto-focus, single Replace, Go-to-Line jump (`BUG-008`, `BUG-009`), resolves `Cmd+H` and duplicate `Redo` collisions (`BUG-004`, `BUG-011`, `BUG-018`), and adds configurable allowlisted terminal preference (`BUG-017`).
 
 ## Requirements
 
 ### Requirement: REQ-001 Default-Collapsed Sidebar Right-Column Tabs Left Line Gutter and Live Status Counter
-WHEN initializing a workspace, opening a folder, pinning or resizing the sidebar, or moving the caret, the workbench SHALL default `isLeftSidebarCollapsed` to `true`, auto-expand on folder open, support manual `pin` collapse with percentage-only width (`12%..65%`) and zoom scaling, disable clicks on binary entries, place `EditorTabStrip` above the editor, project 1-based line numbers, and update status counters [DATA-003][DATA-004][UI-001][UI-002][UI-004][UI-005][UI-012].
+WHEN initializing a workspace, resizing or scrolling the editor, or moving the caret across wrapped paragraphs, the workbench SHALL default `isLeftSidebarCollapsed` to `true`, align `LineNumberGutterView` scroll offsets and soft-wrap heights to TextKit 2 fragments, and highlight every visual line fragment of the active wrapped line [DATA-003][DATA-004][UI-001][UI-002][UI-004][UI-005][UI-012].
 
 #### Scenario: P1 Default-Collapsed Sidebar Auto-Expand on Folder Open Right-Column Tabs and 1-Based Line Gutter
 - **Path**: P1
@@ -36,6 +36,20 @@ WHEN initializing a workspace, opening a folder, pinning or resizing the sidebar
 - **WHEN** `updateSidebarWidthRatio(_:)` runs
 - **THEN** `sidebarWidthRatio` clamps to `0.12` and `0.65` respectively
 
+#### Scenario: P12 Gutter Scroll Sync and Multi-Fragment Wrapped Active Line Highlight Match Editor
+- **Path**: P12
+- **Trait**: positive
+- **GIVEN** a hosted `TextKit2EditorView` containing wrapped long paragraphs scrolled vertically (`editorScrollY > 0`) alongside `LineNumberGutterView`
+- **WHEN** the user scrolls down to `y = 480 pt` and places the caret on wrap line `2` of a 3-visual-line paragraph
+- **THEN** the gutter clip offset synchronizes to the editor `NSClipView` offset, line number labels align with wrapped paragraph vertical positions, and `currentLineFullWidthRect()` spans all `3` `textLineFragments` of the active paragraph
+
+#### Scenario: N12 Degraded Single-Fragment Line Keeps Finite Bounds Without NaN Geometry
+- **Path**: N12
+- **Trait**: negative
+- **GIVEN** an empty document or zero-width layout container before initial viewport layout completes
+- **WHEN** `LineNumberGutterView` and `currentLineFullWidthRect()` compute vertical offsets
+- **THEN** both calculations clamp cleanly to finite non-negative coordinates with zero out-of-range array access
+
 ### Requirement: REQ-002 Left Sidebar Parent-Folder Dot-Dot-Dot Up-Navigation Within User Permissions
 WHEN the user activates the `...` parent-folder control in the left sidebar navigator, the workbench navigator SHALL ascend from the current folder to its parent directory whenever the current folder is not the filesystem root `"/"` and user permissions allow reading the parent directory within symlink-verified scope [BC-007][DATA-007][SEC-002][SEC-003][UI-001].
 
@@ -61,7 +75,7 @@ WHEN the user activates the `...` parent-folder control in the left sidebar navi
 - **THEN** the operation aborts with `DomainError.securityScopeViolation` and leaves `selectedFolderURL` and `folderEntries` unchanged
 
 ### Requirement: REQ-003 Interactive Find Replace Go-to-Line 3-Way LineEnding Switching MRU and Dirty Close/Quit Prompts
-WHEN the user executes Find, Replace, Go to Line, switches line endings, reopens a recent file, batch-opens a folder, or closes/quits with dirty tabs, the workbench model SHALL apply literal search edits, switch between `LF`, `CRLF`, and `CR`, maintain the 10-entry deduplicated MRU list, enforce the 50-file batch confirmation gate, and prompt `Save / Don't Save / Cancel` before discarding unsaved edits [BC-004][BC-006][BC-008][BC-011][DATA-004][DATA-006][DATA-008][UI-009].
+WHEN executing Find, Replace Single, Replace All, Go to Line, or multi-tab dirty Quit, the workbench model SHALL focus the bar input automatically, increment `programmaticSelectionToken` to scroll and select targets, restore editor focus on dismiss, support single Replace, and prompt sequentially across all dirty tabs on Quit [BC-004][BC-006][BC-008][BC-011][DATA-004][DATA-006][DATA-008][UI-009].
 
 #### Scenario: P3 Find Replace Go-to-Line LineEnding Switch MRU Reopen and Confirmed Dirty Close
 - **Path**: P3
@@ -77,15 +91,22 @@ WHEN the user executes Find, Replace, Go to Line, switches line endings, reopens
 - **WHEN** the user requests `requestCloseTab` or `requestApplicationTermination` and chooses `.cancel`, and invokes `openAllFilesInFolder` before confirming the batch alert
 - **THEN** the dirty tab stays open with its text intact, application termination is canceled (`false`), and the `52` files are not opened until `confirmPendingBatchOpen()` is called
 
-### Requirement: REQ-004 Classic FocusedValue Menus Graphical CheatSheet and Guarded About Dialog
-WHEN rendering the header, opening `HeaderBrandSubmenuView`, invoking `SwiftEditCommands`, or opening `About PH.SwiftEdit`, the UI shell SHALL show the Concept E2 logo with a dwell-gated translucent submenu, isolate Zoom and Appearance on the right, list `Cmd+P` and `Cmd+Option+Shift+F` in the CheatSheet, disable mutating commands on binary tabs, and guard external About links [AR-014][DATA-003][SEC-004][UI-001][UI-008][UI-009][UI-010][UI-011].
-
-#### Scenario: P4 Complete Keyboard Shortcuts CheatSheet Catalog and Validated About GitHub Link
-- **Path**: P4
+#### Scenario: P13 FindBar Auto-Focus Single Replace Programmatic Scroll Jump and Focus Restoration
+- **Path**: P13
 - **Trait**: positive
-- **GIVEN** `KeyboardShortcutsCheatSheetCatalog.allSections` and `AboutSheetDescriptor.resolve(versionManifestData:)` with root `version.json`
-- **WHEN** the user toggles the graphical CheatSheet or opens About PH.SwiftEdit
-- **THEN** the CheatSheet contains every required shortcut across `File` (`Cmd+N`, `Cmd+O`, `Cmd+Shift+O`, `Cmd+Shift+Option+O`, `Cmd+S`, `Cmd+Shift+S`, `Cmd+W`, `Cmd+Q`), `Edit` (`Cmd+Z`, `Cmd+Y`, `Cmd+X`, `Cmd+C`, `Cmd+V`, `Cmd+A`, `Cmd+D`), `Navigation` (`Cmd+F`, `Cmd+H`, `Cmd+G`, `Home`, `End`), `View` (`Cmd++`, `Cmd+-`, `Cmd+0`), and `Sidebar` (including `...` parent folder and the 11 sidebar actions), and `AboutSheetDescriptor` exposes version `"0.0.1-alpha1"` with a confirmed `"https://github.com/paoloinnocenti/PH.SwiftEdit"` prompt
+- **GIVEN** an editor containing `"one two one three"` with `FindReplaceGoToLineBar` closed and `Escape` restoring editor focus
+- **WHEN** `Opt+Cmd+F` opens Find & Replace, `"one"` finds `2` matches, `Replace` runs once, `Find Next` and `Go to Line 1` run, and `Escape` closes the bar
+- **THEN** `@FocusState` focuses the query field on open, `executeReplaceSingle()` replaces only the active occurrence leaving `"ONE two one three"`, `programmaticSelectionToken` bumps on every jump updating `NSTextView` selection and scroll, and `Escape` returns first responder to `SwiftEditNSTextView`
+
+#### Scenario: N13 Empty Replace Target Out-of-Range GoToLine and Dirty Multi-Tab Cancel Fail Safely
+- **Path**: N13
+- **Trait**: negative
+- **GIVEN** an empty Find query, Go-to-Line `"999"`, and `2` dirty tabs during `Cmd+Q` where the second prompt receives `.cancel`
+- **WHEN** `executeReplaceSingle()`, `executeGoToLine()`, and `resolvePendingDirtyClose(.cancel)` run
+- **THEN** single Replace does nothing, out-of-range Go-to-Line leaves selection untouched, and canceling aborts quit keeping remaining dirty tabs intact
+
+### Requirement: REQ-004 Classic FocusedValue Menus Graphical CheatSheet and Guarded About Dialog
+WHEN rendering header menus, invoking `SwiftEditCommands`, or opening the CheatSheet, the UI shell SHALL bind `Find and Replace…` to `Opt+Cmd+F` (leaving `Cmd+H` to macOS Hide), expose one single tab-aware `Redo` (`Shift+Cmd+Z`), use click-only header submenu open, list Diff/Markdown/Opt+Cmd+F in CheatSheet, and validate About HTTPS links [AR-014][DATA-003][SEC-004][UI-001][UI-008][UI-009][UI-010][UI-011].
 
 #### Scenario: N5 Unsafe or Tampered About URI Is Blocked by ExternalLinkGuard
 - **Path**: N5
@@ -108,13 +129,6 @@ WHEN rendering the header, opening `HeaderBrandSubmenuView`, invoking `SwiftEdit
 - **WHEN** `AboutSheetDescriptor.prepareExternalLinkConfirmation(rawURI:)` evaluates each URI
 - **THEN** both calls return `nil`
 
-#### Scenario: P9 Brand Header Translucent Submenu Updated CheatSheet and Validated About Links
-- **Path**: P9
-- **Trait**: positive
-- **GIVEN** `SwiftEditWorkbenchModel`, `HeaderCommandCatalog`, `KeyboardShortcutsCheatSheetCatalog.allSections`, and `AboutSheetDescriptor.resolve(versionManifestData:)`
-- **WHEN** the brand header dwell completes (`120 ms`), the CheatSheet catalog is inspected, and `AboutSheetDescriptor` validates repository and MIT License links
-- **THEN** `HeaderBrandSubmenuView` opens with descriptive titles and badges while Zoom and Appearance stay isolated on the right, the CheatSheet includes `Cmd+Option+Shift+F` (`Format Markdown Section`) and `Cmd+P` (`Toggle Markdown Preview`), and both official GitHub HTTPS URLs produce valid confirmation prompts
-
 #### Scenario: N11 Binary Tab Disables Duplicate Save and Format Entries in Command Descriptors
 - **Path**: N11
 - **Trait**: security
@@ -122,8 +136,22 @@ WHEN rendering the header, opening `HeaderBrandSubmenuView`, invoking `SwiftEdit
 - **WHEN** command enablement state is evaluated for `Save`, `Save As…`, `Duplicate Line or Selection`, `Format Markdown Document`, and `Format Markdown Section`
 - **THEN** all five mutating commands resolve as disabled while read-only navigation and inspection commands remain enabled
 
+#### Scenario: P14 Opt+Cmd+F Menu Single Redo Click Submenu Expanded CheatSheet and Alpha5 About
+- **Path**: P14
+- **Trait**: positive
+- **GIVEN** a live `PH.SwiftEdit` menu bar, `HeaderBrandSubmenuView`, `KeyboardShortcutsCheatSheetCatalog.allSections`, and `AboutSheetDescriptor`
+- **WHEN** inspecting `Edit -> Find and Replace…`, `Edit -> Redo`, `Hide PH.SwiftEdit`, clicking the header brand button, and opening CheatSheet and About
+- **THEN** `Cmd+H` stays bound solely to `Hide PH.SwiftEdit`, `Find and Replace…` binds to `Opt+Cmd+F`, only one `Redo` (`Shift+Cmd+Z`, tab-aware enabled) appears, CheatSheet includes `Opt+Cmd+F`, Diff, and Markdown authoring shortcuts, and About shows `"0.0.1-alpha5"` with HTTPS confirmations
+
+#### Scenario: N14 Pressing Cmd+H Hides App Without Intercepting Editor Or Opening Find Bar
+- **Path**: N14
+- **Trait**: negative
+- **GIVEN** an active editor window containing text with `FindReplaceGoToLineBar` hidden
+- **WHEN** the user triggers standard macOS `Cmd+H`
+- **THEN** macOS hides `PH.SwiftEdit` cleanly without opening `FindReplaceGoToLineBar`, while `Opt+Cmd+F` opens Find & Replace without hiding the application
+
 ### Requirement: REQ-005 Confined 11 Sidebar File/Folder Actions and Directory-Only Finder/Terminal/iTerm2 Handoff
-WHEN triggering sidebar actions on an entry or empty background or reordering tabs, the workbench and desktop adapter SHALL execute prompted Create File/Folder, CRUD, Cut/Copy/Paste, and Trash inside symlink-verified scope, reorder tabs within pinned or unpinned partitions, and launch verified directory-only URLs in `Finder`, `com.googlecode.iterm2`, or `com.apple.Terminal` with zero subprocesses [AR-003][AR-007][BC-008][BC-012][SEC-002][SEC-003][SEC-004].
+WHEN triggering sidebar actions on an entry or background, reordering tabs, or launching Terminal, the workbench and desktop adapter SHALL execute confined CRUD/Copy/Paste/Trash, respect user-configured `PreferredTerminalApp` (`.auto`, `.iTerm2`, `.terminal`), and launch strictly allowlisted bundles with verified directory-only URLs [AR-003][AR-007][BC-008][BC-012][SEC-002][SEC-003][SEC-004].
 
 #### Scenario: P5 Sidebar CRUD Cut/Copy/Paste Confirmed Trash Tab Sync and Directory-Only iTerm2/Terminal Resolution
 - **Path**: P5
@@ -159,3 +187,17 @@ WHEN triggering sidebar actions on an entry or empty background or reordering ta
 - **GIVEN** an interactive sidebar Create File or Create Folder name `"../outside.md"`
 - **WHEN** `sidebarCreateFile(named: "../outside.md", in:)` runs
 - **THEN** the operation fails closed with `DomainError.invalidItemName` and creates no file on disk
+
+#### Scenario: P15 PreferredTerminalApp Choice Respects Terminal or iTerm2 Without Auto-Forcing iTerm2
+- **Path**: P15
+- **Trait**: positive
+- **GIVEN** a recording `DesktopWorkspaceIntegrating` fake on a machine where both `iTerm2` and `Terminal` are installed and `PreferredTerminalApp.terminal` (or `.auto`) is configured
+- **WHEN** `openInTerminal` runs on a verified workspace file `"final.md"`
+- **THEN** `openInTerminal` resolves `"final.md"`'s verified parent directory URL and launches `"com.apple.Terminal"` when `.terminal` or system default applies, using `"com.googlecode.iterm2"` only when `.iTerm2` is chosen
+
+#### Scenario: N15 Disallowed Terminal Bundle or Escaping Directory Still Fails Closed
+- **Path**: N15
+- **Trait**: security
+- **GIVEN** an unallowlisted Terminal bundle identifier `"com.untrusted.term"` or symlinked parent folder resolving outside workspace scope
+- **WHEN** `openInTerminal` attempts launch
+- **THEN** the adapter rejects immediately with `DomainError.securityScopeViolation` and launches zero workspace URLs
