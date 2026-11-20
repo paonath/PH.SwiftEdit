@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "014-markdown-document-navigator-and-distraction-free"
+    status: "draft"
+    date: "2026-11-20"
+    capabilities: ["markdown-document-navigator-and-distraction-free"]
+    path: "openspec/changes/014-markdown-document-navigator-and-distraction-free"
+    summary: "Alfred-style Markdown heading navigator (Option+Backslash) and full-screen distraction-free mode (Option+1)"
   - id: "013-comprehensive-markdown-linter-and-diagnostics-ui"
     status: "implemented"
     date: "2026-11-20"
