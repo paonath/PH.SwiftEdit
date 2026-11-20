@@ -115,22 +115,34 @@ public struct StatusBarMetricsProjection: Equatable, Sendable {
 public struct LineNumberGutterView: View {
     public let projection: LineNumberGutterProjection
     public let palette: PurpleThemePalette
+    /// Worst lint severity per 1-based line; rendered as an `O(1)` badge dot with tooltip and VoiceOver text.
+    public let severityByLine: [Int: MarkdownLintSeverity]
 
-    public init(projection: LineNumberGutterProjection, palette: PurpleThemePalette) {
+    public init(projection: LineNumberGutterProjection, palette: PurpleThemePalette, severityByLine: [Int: MarkdownLintSeverity] = [:]) {
         self.projection = projection
         self.palette = palette
+        self.severityByLine = severityByLine
     }
 
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .trailing, spacing: 2) {
+            LazyVStack(alignment: .trailing, spacing: 2) {
                 ForEach(projection.lineNumbers, id: \.self) { lineNumber in
                     let isActive = lineNumber == projection.activeLine
                     let token = isActive ? palette.gutterActiveForeground : palette.gutterForeground
-                    Text("\(lineNumber)")
-                        .font(.system(size: projection.fontSizePoints, weight: isActive ? .semibold : .regular, design: .monospaced))
-                        .foregroundStyle(token.swiftUIColor)
-                        .frame(minWidth: 36, alignment: .trailing)
+                    HStack(spacing: 3) {
+                        if let severity = severityByLine[lineNumber] {
+                            Circle()
+                                .fill((severity == .error ? palette.unbalancedBracketHighlight : palette.bidiWarningForeground).swiftUIColor)
+                                .frame(width: 6, height: 6)
+                                .help(severity == .error ? "Markdown lint error on this line" : "Markdown lint warning on this line")
+                                .accessibilityLabel(severity == .error ? "Lint error" : "Lint warning")
+                        }
+                        Text("\(lineNumber)")
+                            .font(.system(size: projection.fontSizePoints, weight: isActive ? .semibold : .regular, design: .monospaced))
+                            .foregroundStyle(token.swiftUIColor)
+                    }
+                    .frame(minWidth: 36, alignment: .trailing)
                 }
             }
             .padding(.vertical, 16)

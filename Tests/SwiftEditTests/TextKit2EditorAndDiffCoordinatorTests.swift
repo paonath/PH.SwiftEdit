@@ -98,3 +98,107 @@ struct TextKit2EditorAndDiffCoordinatorTests {
         ])
     }
 }
+
+@Suite("GFMEditorPipelineWiringTests")
+struct GFMEditorPipelineWiringTests {
+
+    private static var tmp: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".tmp/test-results/gfmwiring-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    @MainActor
+    private static func makeModel(recovery: URL) -> (SwiftEditWorkbenchModel, String) {
+        let suite = "it.ph.SwiftEdit.test.gfmwiring.\(UUID().uuidString)"
+        let model = SwiftEditWorkbenchModel(
+            preferencesSuiteName: suite,
+            recentFilesSuiteName: "\(suite).recent",
+            recoveryDirectoryURL: recovery,
+            systemDarkDetector: { false },
+            savePanelProvider: { _ in nil }
+        )
+        return (model, suite)
+    }
+
+    private static func recoveryText(in dir: URL) -> String {
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        return files.filter { $0.pathExtension == "recovery" }
+            .compactMap { try? String(contentsOf: $0, encoding: .utf8) }.joined()
+    }
+
+    @Test("P6: Cmd+P toggles a default-OFF preview, the Tab chain prefers tables over lists, commands are one revision, recovery is debounced, and sourceLine follows the caret")
+    @MainActor
+    func p6PipelineWiring() async throws {
+        let dir = Self.tmp
+        let (model, suite) = Self.makeModel(recovery: dir)
+        defer {
+            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        model.recoveryDebounceNanoseconds = 60_000_000
+
+        // GIVEN a Markdown tab holding a table and a list, with the preview untouched
+        let text = "| a | b |\n|---|---|\n| 1 | 2 |\n\n- one\n- two\n"
+        model.handleEditorTextChanged(text)
+        #expect(model.showMarkdownPreview == false)
+        #expect(model.markdownPreviewDocument == nil)
+
+        // WHEN toggling the preview on
+        model.toggleMarkdownPreview()
+        // THEN a projection with source lines exists, and toggling off drops it
+        #expect(model.markdownPreviewDocument?.blocks.isEmpty == false)
+        model.toggleMarkdownPreview()
+        #expect(model.markdownPreviewDocument == nil)
+
+        // WHEN the caret sits in the table the table engine handles Tab, in the list it defers to the list engine
+        model.handleSelectionChanged(TextRange(location: 2, length: 0))
+        if case .edit = model.tableTabOutcome(backward: false) {} else { Issue.record("table Tab not handled") }
+        let listCaret = (text as NSString).range(of: "- two").location + 5
+        model.handleSelectionChanged(TextRange(location: listCaret, length: 0))
+        #expect(model.tableTabOutcome(backward: false) == .notApplicable)
+        if case .edit = model.listIndentationOutcome(outdent: false) {} else { Issue.record("list Tab not handled") }
+        #expect(model.previewSourceLine == 6)
+
+        // WHEN applying Bold to a selection through the workbench
+        model.handleSelectionChanged(TextRange(location: 2, length: 1))
+        let before = try #require(model.activeDocumentSession?.revision)
+        #expect(model.applyMarkdownCommand(.bold))
+        let after = try #require(model.activeDocumentSession?.revision)
+        #expect(after.value == before.value + 1)
+        #expect(model.activeDocumentSession?.text.hasPrefix("| **a** |") == true)
+
+        // THEN typing is not persisted immediately, but is after the debounce window
+        model.handleEditorTextChanged("# zzzmarker")
+        #expect(!Self.recoveryText(in: dir).contains("zzzmarker"))
+        var persisted = false
+        for _ in 0..<60 where !persisted {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            persisted = Self.recoveryText(in: dir).contains("zzzmarker")
+        }
+        #expect(persisted)
+    }
+
+    @Test("N7 [Security]: binary tab disables the Markdown menu and preview without mutation")
+    @MainActor
+    func n7BinaryTabLockout() throws {
+        let dir = Self.tmp
+        let (model, suite) = Self.makeModel(recovery: dir)
+        defer {
+            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let binaryURL = dir.appendingPathComponent("payload.bin")
+        try Data([0x50, 0x4B, 0x00, 0x04, 0x41]).write(to: binaryURL)
+        model.openFile(at: binaryURL, withinScope: dir)
+        model.showMarkdownPreview = true
+        let revision = try #require(model.activeDocumentSession?.revision)
+
+        #expect(model.isMarkdownMenuEnabled == false)
+        #expect(model.markdownPreviewDocument == nil)
+        #expect(model.applyMarkdownCommand(.bold) == false)
+        #expect(model.tableTabOutcome(backward: false) == .notApplicable)
+        #expect(model.activeDocumentSession?.revision == revision)
+    }
+}

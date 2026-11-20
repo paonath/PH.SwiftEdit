@@ -63,6 +63,7 @@ public enum KeyboardShortcutsCheatSheetCatalog {
             KeyboardShortcutDescriptor(title: "Zoom Out", shortcut: "Cmd+-", summary: "Decrease editor font zoom (-10% down to 50%)"),
             KeyboardShortcutDescriptor(title: "Reset Zoom", shortcut: "Cmd+0", summary: "Reset editor font zoom to 100%"),
             KeyboardShortcutDescriptor(title: "Toggle Markdown Preview", shortcut: "Cmd+P", summary: "Show or hide the native Markdown preview (off by default)"),
+            KeyboardShortcutDescriptor(title: "Toggle Markdown Diagnostics", shortcut: "Shift+Cmd+M", summary: "Open the Markdown lint diagnostics popover with Jump-to-Range and Fix All"),
             KeyboardShortcutDescriptor(title: "Keyboard Shortcuts CheatSheet", shortcut: "Cmd+/", summary: "Open graphical keyboard shortcuts reference"),
         ]),
         KeyboardShortcutSection(category: "Sidebar", items: [

@@ -132,6 +132,35 @@ public struct SwiftEditCommands: Commands {
             .disabled(model == nil)
         }
 
+        CommandMenu("Markdown") {
+          Group {
+            Group {
+                Button("Bold") { model?.applyMarkdownCommand(.bold) }.keyboardShortcut("b", modifiers: [.command, .shift])
+                Button("Italic") { model?.applyMarkdownCommand(.italic) }.keyboardShortcut("i", modifiers: .command)
+                Button("Strikethrough") { model?.applyMarkdownCommand(.strikethrough) }.keyboardShortcut("x", modifiers: [.command, .shift])
+                Button("Inline Code") { model?.applyMarkdownCommand(.inlineCode) }.keyboardShortcut("e", modifiers: .command)
+                Button("Code Fence") { model?.applyMarkdownCommand(.codeFence) }.keyboardShortcut("c", modifiers: [.command, .shift])
+                Divider()
+                Button("Insert Link") { model?.applyMarkdownCommand(.link) }.keyboardShortcut("k", modifiers: .command)
+                Button("Insert Image") { model?.applyMarkdownCommand(.image) }.keyboardShortcut("i", modifiers: [.command, .shift])
+                Button("Toggle Task Checkbox") { model?.applyMarkdownCommand(.taskToggle) }.keyboardShortcut("l", modifiers: [.command, .shift])
+                Button("Blockquote") { model?.applyMarkdownCommand(.blockquote) }.keyboardShortcut(".", modifiers: [.command, .shift])
+                Button("Insert Table") { model?.applyMarkdownCommand(.insertTable) }.keyboardShortcut("t", modifiers: [.command, .option])
+                Divider()
+                Button("Toggle Markdown Diagnostics") { model?.toggleDiagnosticsPopover() }.keyboardShortcut("m", modifiers: [.command, .shift])
+                Button("Fix All Markdown Issues") { model?.applyFixAll() }
+            }
+            Divider()
+            Menu("Heading") {
+                ForEach(1...6, id: \.self) { level in
+                    Button("Heading \(level)") { model?.applyMarkdownCommand(.heading(level: level)) }
+                        .keyboardShortcut(KeyEquivalent(Character(String(level))), modifiers: [.command, .control])
+                }
+            }
+          }
+          .disabled(model?.isMarkdownMenuEnabled != true)
+        }
+
         CommandGroup(replacing: .help) {
             Button("Keyboard Shortcuts CheatSheet") {
                 model?.isCheatSheetPresented = true

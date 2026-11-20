@@ -6,282 +6,6 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-/// Custom TextKit 2 `NSTextView` painting a full-width subtle current-line background highlight (`UI-002`, `UI-012`).
-@MainActor
-final class SwiftEditNSTextView: NSTextView {
-    var currentLineHighlightColor: NSColor = .clear
-
-    override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
-        super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
-        needsDisplay = true
-    }
-
-    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
-        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
-        needsDisplay = true
-    }
-
-    override func drawBackground(in rect: NSRect) {
-        super.drawBackground(in: rect)
-        guard currentLineHighlightColor.alphaComponent > 0 else { return }
-
-        if let lineRect = currentLineFullWidthRect() {
-            currentLineHighlightColor.setFill()
-            lineRect.fill()
-        }
-    }
-
-    private func currentLineFullWidthRect() -> NSRect? {
-        let origin = textContainerOrigin
-        let fallbackHeight = max(14.0, (font?.ascender ?? 12.0) - (font?.descender ?? -3.0) + (font?.leading ?? 2.0))
-        guard let textLayoutManager,
-              let contentManager = textLayoutManager.textContentManager else {
-            return NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
-        }
-
-        let caretOffset = min(selectedRange().location, (string as NSString).length)
-        guard let caretLocation = contentManager.location(contentManager.documentRange.location, offsetBy: caretOffset) else {
-            return NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
-        }
-
-        var resolvedRect: NSRect?
-        textLayoutManager.enumerateTextLayoutFragments(from: caretLocation, options: [.ensuresLayout]) { fragment in
-            let fragmentOrigin = fragment.layoutFragmentFrame.origin
-            for lineFragment in fragment.textLineFragments {
-                let lineFrame = lineFragment.typographicBounds
-                let y = origin.y + fragmentOrigin.y + lineFrame.minY
-                resolvedRect = NSRect(x: 0, y: y, width: bounds.width, height: max(lineFrame.height, fallbackHeight))
-                return false
-            }
-            let fallbackY = origin.y + fragmentOrigin.y
-            resolvedRect = NSRect(x: 0, y: fallbackY, width: bounds.width, height: max(fragment.layoutFragmentFrame.height, fallbackHeight))
-            return false
-        }
-        return resolvedRect ?? NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
-    }
-}
-
-/// `@MainActor` TextKit 2 `NSTextView` wrapper enforcing `#FFFFFF`/`#000000` inverted canvas colors, current-line highlight, non-mutating nested bracket and backtick highlights, Markdown smart Enter continuation, `50%..300%` monospaced zoom, and read-only binary protection (`UI-002..008`, `UI-012`).
-@MainActor
-struct TextKit2EditorView: NSViewRepresentable {
-    let text: String
-    let isEditable: Bool
-    let palette: PurpleThemePalette
-    let fontSizePoints: Double
-    let highlightProjection: EditorHighlightProjection
-    let onTextChange: (String) -> Void
-    let onSelectionChange: (SwiftEditCore.TextRange) -> Void
-    let onSmartNewline: (Int) -> Int?
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(
-            onTextChange: onTextChange,
-            onSelectionChange: onSelectionChange,
-            onSmartNewline: onSmartNewline
-        )
-    }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.borderType = .noBorder
-
-        let textView = SwiftEditNSTextView(usingTextLayoutManager: true)
-        textView.delegate = context.coordinator
-        textView.isRichText = false
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.allowsUndo = true
-        textView.usesFindBar = true
-        textView.autoresizingMask = [.width]
-        textView.textContainerInset = NSSize(width: 16, height: 16)
-        textView.minSize = NSSize(width: 0, height: 0)
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.textContainer?.widthTracksTextView = true
-
-        applyStyling(to: textView, in: scrollView)
-        textView.string = text
-        applyNonMutatingHighlights(to: textView)
-        scrollView.documentView = textView
-        return scrollView
-    }
-
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? SwiftEditNSTextView else { return }
-        context.coordinator.onTextChange = onTextChange
-        context.coordinator.onSelectionChange = onSelectionChange
-        context.coordinator.onSmartNewline = onSmartNewline
-
-        applyStyling(to: textView, in: scrollView)
-        if textView.string != text {
-            let previousSelection = textView.selectedRange()
-            let targetLocation = context.coordinator.pendingProgrammaticCaret ?? previousSelection.location
-            context.coordinator.pendingProgrammaticCaret = nil
-            context.coordinator.isApplyingProgrammaticUpdate = true
-            textView.string = text
-            let clampedLocation = min(max(0, targetLocation), (text as NSString).length)
-            textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
-            context.coordinator.isApplyingProgrammaticUpdate = false
-        }
-        applyNonMutatingHighlights(to: textView)
-        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
-        textView.needsDisplay = true
-    }
-
-    /// Applies canvas, selection, insertion-point, and `NSScrollView` scroller appearance tokens in `O(viewport)` without invoking whole-document `ensureLayout` (`UI-002`, `UI-003`, `UI-007`, `UI-012`).
-    ///
-    /// Disables `usesAdaptiveColorMappingForDarkAppearance` so AppKit never auto-inverts explicit `#FFFFFF`/`#000000` canvas tokens, and restarts the insertion-point blink timer when `textView` is first responder so caret color updates immediately.
-    private func applyStyling(to textView: SwiftEditNSTextView, in scrollView: NSScrollView) {
-        let editorFont = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .regular)
-        let canvasBg = palette.editorCanvasBackground.nsColor
-        let canvasFg = palette.editorCanvasText.nsColor
-
-        scrollView.drawsBackground = true
-        scrollView.backgroundColor = canvasBg
-        scrollView.appearance = NSAppearance(named: palette.mode == .black ? .darkAqua : .aqua)
-        scrollView.scrollerKnobStyle = (palette.mode == .black) ? .light : .dark
-
-        textView.usesAdaptiveColorMappingForDarkAppearance = false
-        textView.isEditable = isEditable
-        textView.backgroundColor = canvasBg
-        textView.textColor = canvasFg
-        textView.insertionPointColor = canvasFg
-        textView.currentLineHighlightColor = palette.currentLineHighlight.nsColor
-        textView.font = editorFont
-        textView.selectedTextAttributes = [
-            .backgroundColor: palette.selectionBackground.nsColor,
-            .foregroundColor: canvasFg,
-        ]
-        textView.typingAttributes = [
-            .font: editorFont,
-            .foregroundColor: canvasFg,
-        ]
-        if textView.window?.firstResponder === textView {
-            textView.updateInsertionPointStateAndRestartTimer(true)
-        }
-    }
-
-    /// Applies non-mutating TextKit 2 rendering attributes for backtick code spans, nested depth-colored brackets, active bracket pair, and unbalanced brackets without mutating `NSTextStorage` (`UI-005`, `UI-006`, `UI-012`).
-    private func applyNonMutatingHighlights(to textView: SwiftEditNSTextView) {
-        guard let layoutManager = textView.textLayoutManager,
-              let contentManager = layoutManager.textContentManager else {
-            return
-        }
-        let docRange = contentManager.documentRange
-        let totalUTF16 = (textView.string as NSString).length
-        guard totalUTF16 > 0 else { return }
-
-        layoutManager.setRenderingAttributes([:], for: docRange)
-
-        func makeTextRange(location: Int, length: Int) -> NSTextRange? {
-            guard location >= 0, length > 0, location + length <= totalUTF16,
-                  let start = contentManager.location(docRange.location, offsetBy: location),
-                  let end = contentManager.location(start, offsetBy: length) else {
-                return nil
-            }
-            return NSTextRange(location: start, end: end)
-        }
-
-        // 1. Backtick inline and multiline fenced code highlights
-        for span in highlightProjection.backtickSpans {
-            guard let nsTextRange = makeTextRange(location: span.range.location, length: span.range.length) else { continue }
-            let bgColor = span.kind == .fencedMultiline
-                ? palette.backtickMultilineBackground.nsColor
-                : palette.backtickInlineBackground.nsColor
-            layoutManager.addRenderingAttribute(.backgroundColor, value: bgColor, for: nsTextRange)
-            layoutManager.addRenderingAttribute(.foregroundColor, value: palette.backtickForeground.nsColor, for: nsTextRange)
-        }
-
-        let boldFont = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .bold)
-
-        // 2. Nested depth-colored bracket pairs ({}, [], ())
-        for pair in highlightProjection.bracketPairs {
-            let depthColor = palette.nestedBracketColor(forDepth: pair.nestingDepth).nsColor
-            if let openRange = makeTextRange(location: pair.openOffset, length: 1) {
-                layoutManager.addRenderingAttribute(.foregroundColor, value: depthColor, for: openRange)
-                layoutManager.addRenderingAttribute(.font, value: boldFont, for: openRange)
-            }
-            if let closeRange = makeTextRange(location: pair.closeOffset, length: 1) {
-                layoutManager.addRenderingAttribute(.foregroundColor, value: depthColor, for: closeRange)
-                layoutManager.addRenderingAttribute(.font, value: boldFont, for: closeRange)
-            }
-        }
-
-        // 3. Active caret bracket pair background emphasis
-        if let active = highlightProjection.activeBracketPair {
-            let activeBg = palette.activeBracketHighlight.nsColor
-            if let openRange = makeTextRange(location: active.openOffset, length: 1) {
-                layoutManager.addRenderingAttribute(.backgroundColor, value: activeBg, for: openRange)
-            }
-            if let closeRange = makeTextRange(location: active.closeOffset, length: 1) {
-                layoutManager.addRenderingAttribute(.backgroundColor, value: activeBg, for: closeRange)
-            }
-        }
-
-        // 4. Unbalanced bracket error emphasis
-        let errorColor = palette.unbalancedBracketHighlight.nsColor
-        let errorBg = palette.unbalancedBracketBackground.nsColor
-        for stray in highlightProjection.unbalancedBrackets {
-            if let strayRange = makeTextRange(location: stray.offset, length: 1) {
-                layoutManager.addRenderingAttribute(.foregroundColor, value: errorColor, for: strayRange)
-                layoutManager.addRenderingAttribute(.backgroundColor, value: errorBg, for: strayRange)
-                layoutManager.addRenderingAttribute(.font, value: boldFont, for: strayRange)
-            }
-        }
-    }
-
-    @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var onTextChange: (String) -> Void
-        var onSelectionChange: (SwiftEditCore.TextRange) -> Void
-        var onSmartNewline: (Int) -> Int?
-        var isApplyingProgrammaticUpdate = false
-        var pendingProgrammaticCaret: Int?
-
-        init(
-            onTextChange: @escaping (String) -> Void,
-            onSelectionChange: @escaping (SwiftEditCore.TextRange) -> Void,
-            onSmartNewline: @escaping (Int) -> Int?
-        ) {
-            self.onTextChange = onTextChange
-            self.onSelectionChange = onSelectionChange
-            self.onSmartNewline = onSmartNewline
-        }
-
-        func textDidChange(_ notification: Notification) {
-            guard !isApplyingProgrammaticUpdate,
-                  let textView = notification.object as? NSTextView else { return }
-            onTextChange(textView.string)
-        }
-
-        func textViewDidChangeSelection(_ notification: Notification) {
-            guard !isApplyingProgrammaticUpdate,
-                  let textView = notification.object as? NSTextView else { return }
-            let range = textView.selectedRange()
-            onSelectionChange(SwiftEditCore.TextRange(location: range.location, length: range.length))
-            textView.needsDisplay = true
-        }
-
-        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            guard commandSelector == #selector(NSResponder.insertNewline(_:)),
-                  textView.isEditable,
-                  textView.selectedRange().length == 0 else {
-                return false
-            }
-            if let newCaret = onSmartNewline(textView.selectedRange().location) {
-                pendingProgrammaticCaret = newCaret
-                return true
-            }
-            return false
-        }
-    }
-}
-
 /// Non-mutating `@MainActor` visual highlight snapshot projecting active line, nested brackets, active pair, unbalanced brackets, and backtick code spans (`UI-005`, `UI-006`, `UI-012`).
 public struct EditorHighlightProjection: Equatable, Sendable {
     public let activeLineRange: SwiftEditCore.TextRange
@@ -902,7 +626,7 @@ public final class SwiftEditWorkbenchModel {
         _ = try? session.applyEdit(replacing: fullRange, with: newText)
         sessionsByID[activeID] = session
         try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
-        persistRecoveryState()
+        scheduleRecoveryPersist()
         refreshDiagnosticsForActiveDocument()
     }
 
@@ -1030,7 +754,12 @@ public final class SwiftEditWorkbenchModel {
         }
         let snap = session.snapshot
         safetyBanner = InspectionSafetyBannerState.evaluate(snapshot: snap)
-        lintDiagnostics = MarkdownLintAndFormatEngine.lint(snapshot: snap).completedValue?.diagnostics ?? []
+        if MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle) {
+            lintDiagnostics = MarkdownLintAndFormatEngine.lint(snapshot: snap, profile: .allConstructs).completedValue?.diagnostics ?? []
+        } else {
+            lintDiagnostics = []
+        }
+        if case .off = activeLintStatus { isDiagnosticsPopoverPresented = false }
         bracketResult = SearchDiffAndBracketEngine.evaluateBrackets(in: snap, caretLocation: currentSelection.location).completedValue
         backtickResult = BacktickHighlightScanner.scan(in: snap).completedValue
         if showDiffPane, let baseline = savedBaselineByID[session.id] {
@@ -1250,6 +979,190 @@ public final class SwiftEditWorkbenchModel {
     private func openBatchPlan(_ plan: BatchOpenPlan, withinScope scopeURL: URL) {
         for fileURL in plan.files {
             openFile(at: fileURL, withinScope: scopeURL)
+        }
+    }
+
+    /// Evaluates `Tab` (`outdent == false`) or `Shift+Tab` for the active tab without mutating it; binary read-only, quarantined, and non-Markdown tabs are `.notApplicable` (`DATA-003`, `SEC-012`).
+    public func listIndentationOutcome(outdent: Bool) -> SmartListOutcome {
+        guard let session = activeDocumentSession, !session.isBinaryReadOnly, safetyBanner.canSave else {
+            return .notApplicable
+        }
+        return MarkdownSmartListEngine.evaluateIndent(
+            in: session.snapshot,
+            selection: currentSelection,
+            outdent: outdent,
+            isMarkdownDocument: MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle)
+        )
+    }
+
+    /// Applies list indentation to the active session as exactly one `BufferRevision` and translates `currentSelection`.
+    ///
+    /// The editor view applies the same outcome through `NSTextView.insertText` to keep a single native undo step; this model-level path serves headless callers and tests.
+    /// - Returns: `true` when the key was consumed (edit applied or safe no-op), `false` when default handling should proceed.
+    @discardableResult
+    public func applyListIndentation(outdent: Bool) -> Bool {
+        switch listIndentationOutcome(outdent: outdent) {
+        case .notApplicable:
+            return false
+        case .consumedNoOp:
+            return true
+        case .edit(let listEdit):
+            guard let activeID = tabSession.activeTabID, var session = sessionsByID[activeID] else { return false }
+            do {
+                _ = try session.applyTextEdits(listEdit.edits, expectedRevision: session.revision)
+                sessionsByID[activeID] = session
+                try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+                currentSelection = listEdit.newSelection
+                persistRecoveryState()
+                refreshDiagnosticsForActiveDocument()
+                return true
+            } catch {
+                statusBannerMessage = "List indentation failed: \(error)"
+                return true
+            }
+        }
+    }
+
+    /// Debounce window for per-keystroke `SessionRecovery` writes; tab switch, close, and other lifecycle events flush immediately (`UI-012`, `DATA-005`).
+    public var recoveryDebounceNanoseconds: UInt64 = 500_000_000
+    @ObservationIgnored private var recoveryDebounceTask: Task<Void, Never>?
+    @ObservationIgnored private var previewCache: (id: DocumentID, revision: BufferRevision, document: GFMPreviewDocument?)?
+
+    /// Monotonic token bumped whenever the model requests a caret/selection the editor view must adopt (`currentSelection`).
+    public var programmaticSelectionToken: Int = 0
+
+    /// `true` only for a writable, non-binary Markdown tab; gates the `Markdown` menu, table `Tab`, and preview (`DATA-003`, `UI-005`).
+    public var isMarkdownMenuEnabled: Bool {
+        guard let session = activeDocumentSession, !session.isBinaryReadOnly, safetyBanner.canSave else { return false }
+        return MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle)
+    }
+
+    /// Preview projection for the active tab; `nil` (zero work) while `showMarkdownPreview == false` or on binary and non-Markdown tabs (`SEC-004`, `SEC-012`).
+    public var markdownPreviewDocument: GFMPreviewDocument? {
+        guard showMarkdownPreview, isMarkdownMenuEnabled, let session = activeDocumentSession else { return nil }
+        if let cache = previewCache, cache.id == session.id, cache.revision == session.revision { return cache.document }
+        let document = MarkdownPreviewProjector.project(snapshot: session.snapshot, showPreview: true)
+        previewCache = (session.id, session.revision, document)
+        return document
+    }
+
+    /// 1-based source line of the caret, used as the single scroll driver of the preview (`UI-007`).
+    public var previewSourceLine: Int {
+        guard let session = activeDocumentSession else { return 0 }
+        let units = session.text.utf16
+        let limit = min(max(0, currentSelection.location), units.count)
+        return units.prefix(limit).reduce(1) { $0 + ($1 == 0x0A ? 1 : 0) }
+    }
+
+    /// Image and link gate bound to the active file's directory and the granted workspace scope; `nil` (all images blocked) for unsaved tabs or without a granted folder (`SEC-002`, `SEC-003`).
+    public var previewResourceGate: PreviewResourceAndLinkGate? {
+        guard let scope = grantedScopeRootURL, let fileURL = activeDocumentSession?.fileURL else { return nil }
+        return PreviewResourceAndLinkGate(fileSystem: fileSystem, scopeRoot: scope, documentDirectory: fileURL.deletingLastPathComponent())
+    }
+
+    /// Whether the `⇧⌘M` diagnostics popover is shown; only presentable while lint is active for the tab (`UI-005`).
+    public var isDiagnosticsPopoverPresented = false
+
+    /// Status-bar lint state: Off for non-Markdown and binary tabs, Paused for degraded buffers, Active otherwise (`DATA-003`).
+    public var activeLintStatus: ActiveLintStatus {
+        guard let session = activeDocumentSession else { return .off }
+        return ActiveLintStatus.classify(
+            isMarkdownDocument: MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle),
+            snapshot: session.snapshot,
+            diagnosticCount: lintDiagnostics.count
+        )
+    }
+
+    /// Diagnostics for inline underlines and gutter badges after active-line suppression of transient warnings (security errors always remain).
+    public var visibleLintDiagnostics: [MarkdownLintDiagnostic] {
+        ActiveLineLintSuppressionPolicy.visibleDiagnostics(lintDiagnostics, caretLine: previewSourceLine)
+    }
+
+    /// Worst severity per 1-based line (errors win) for gutter badges, built in one pass over at most `1000` diagnostics.
+    public var gutterSeverityByLine: [Int: MarkdownLintSeverity] {
+        var result: [Int: MarkdownLintSeverity] = [:]
+        for d in visibleLintDiagnostics where result[d.line] != .error { result[d.line] = d.severity }
+        return result
+    }
+
+    /// Toggles the diagnostics popover (`⇧⌘M`); ignored while lint is Off or Paused.
+    public func toggleDiagnosticsPopover() {
+        guard case .active = activeLintStatus else { isDiagnosticsPopoverPresented = false; return }
+        isDiagnosticsPopoverPresented.toggle()
+    }
+
+    /// Moves the selection to `diagnostic.range` (Jump-to-Range) and asks the editor to adopt it.
+    public func jumpToDiagnostic(_ diagnostic: MarkdownLintDiagnostic) {
+        guard let range = diagnostic.range, let session = activeDocumentSession, range.upperBound <= session.text.utf16.count else { return }
+        currentSelection = SwiftEditCore.TextRange(location: range.location, length: 0)
+        programmaticSelectionToken += 1
+    }
+
+    /// Applies the diagnostic's own `quickFix` as one revision; security diagnostics have none (`SEC-004`).
+    @discardableResult
+    public func applyQuickFix(_ diagnostic: MarkdownLintDiagnostic) -> Bool {
+        guard let fix = diagnostic.quickFix else { return false }
+        return applyLintEdit(MarkdownAuthoringEdit(edits: [fix], newSelection: SwiftEditCore.TextRange(location: fix.range.location + (fix.replacement as NSString).length, length: 0)))
+    }
+
+    /// Applies the idempotent revision-pinned Fix All as exactly one `BufferRevision` (one `Cmd+Z` step); rejected on stale, binary, degraded or non-Markdown tabs (`CWE-362`, `DATA-003`).
+    @discardableResult
+    public func applyFixAll() -> Bool {
+        guard isMarkdownMenuEnabled, let session = activeDocumentSession else { return false }
+        guard case .edit(let edit) = MarkdownQuickFixResolver.fixAll(snapshot: session.snapshot, expectedRevision: session.revision) else { return false }
+        return applyLintEdit(edit)
+    }
+
+    private func applyLintEdit(_ edit: MarkdownAuthoringEdit) -> Bool {
+        guard isMarkdownMenuEnabled, let activeID = tabSession.activeTabID, var session = sessionsByID[activeID] else { return false }
+        do {
+            _ = try session.applyTextEdits(edit.edits, expectedRevision: session.revision)
+            sessionsByID[activeID] = session
+            try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            currentSelection = edit.newSelection
+            programmaticSelectionToken += 1
+            scheduleRecoveryPersist()
+            refreshDiagnosticsForActiveDocument()
+            return true
+        } catch {
+            statusBannerMessage = "Lint fix failed: \(error)"
+            return false
+        }
+    }
+
+    /// Evaluates GFM table `Tab` / `Shift+Tab` for the active tab; anything else defers to the list engine (`notApplicable`).
+    public func tableTabOutcome(backward: Bool) -> TableEditOutcome {
+        guard isMarkdownMenuEnabled, let session = activeDocumentSession else { return .notApplicable }
+        return GFMTableEditEngine.evaluateTab(in: session.snapshot, selection: currentSelection, backward: backward, isMarkdownDocument: true)
+    }
+
+    /// Applies a `Markdown` menu command as one `BufferRevision` on the active tab; returns `false` (no mutation) when disabled or not applicable (`BC-006`, `DATA-003`).
+    @discardableResult
+    public func applyMarkdownCommand(_ command: MarkdownAuthoringCommand) -> Bool {
+        guard isMarkdownMenuEnabled, let activeID = tabSession.activeTabID, var session = sessionsByID[activeID],
+              let edit = MarkdownAuthoringCommands.evaluate(command, in: session.snapshot, selection: currentSelection, isMarkdownDocument: true) else { return false }
+        do {
+            _ = try session.applyTextEdits(edit.edits, expectedRevision: session.revision)
+            sessionsByID[activeID] = session
+            try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            currentSelection = edit.newSelection
+            programmaticSelectionToken += 1
+            scheduleRecoveryPersist()
+            refreshDiagnosticsForActiveDocument()
+            return true
+        } catch {
+            statusBannerMessage = "Markdown command failed: \(error)"
+            return false
+        }
+    }
+
+    private func scheduleRecoveryPersist() {
+        recoveryDebounceTask?.cancel()
+        let delay = recoveryDebounceNanoseconds
+        recoveryDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+            self?.persistRecoveryState()
         }
     }
 
@@ -1558,6 +1471,7 @@ public final class SwiftEditWorkbenchModel {
     }
 
     private func persistRecoveryState() {
+        recoveryDebounceTask?.cancel()
         let manifest = SessionRecoveryManifest(tabs: tabSession.tabs, activeTabID: tabSession.activeTabID)
         try? recoveryStore.saveManifest(manifest)
         for tab in tabSession.tabs {
@@ -2226,7 +2140,8 @@ public struct SwiftEditRootView: View {
                 HStack(spacing: 0) {
                     LineNumberGutterView(
                         projection: model.activeLineNumberGutter,
-                        palette: model.palette
+                        palette: model.palette,
+                        severityByLine: model.gutterSeverityByLine
                     )
                     TextKit2EditorView(
                         text: session.text,
@@ -2236,47 +2151,30 @@ public struct SwiftEditRootView: View {
                         highlightProjection: model.activeHighlightProjection,
                         onTextChange: { model.handleEditorTextChanged($0) },
                         onSelectionChange: { model.handleSelectionChanged($0) },
-                        onSmartNewline: { model.applySmartNewlineIfApplicable(at: $0) }
+                        onSmartNewline: { model.applySmartNewlineIfApplicable(at: $0) },
+                        onListIndent: { model.listIndentationOutcome(outdent: $0) },
+                        onTableTab: { model.tableTabOutcome(backward: $0) },
+                        isMarkdownDocument: model.isMarkdownMenuEnabled,
+                        programmaticSelection: model.currentSelection,
+                        programmaticSelectionToken: model.programmaticSelectionToken,
+                        lintDiagnostics: model.visibleLintDiagnostics
                     )
                 }
             }
-            if model.showMarkdownPreview, let session = model.activeDocumentSession {
-                markdownPreviewPanel(for: session.snapshot)
-                    .frame(minWidth: 260, idealWidth: 340)
+            if model.showMarkdownPreview, model.isMarkdownMenuEnabled {
+                MarkdownNativePreviewView(
+                    document: model.markdownPreviewDocument,
+                    palette: model.palette,
+                    gate: model.previewResourceGate,
+                    activeSourceLine: model.previewSourceLine
+                )
+                .frame(minWidth: 260, idealWidth: 340)
             }
             if model.showDiffPane {
                 diffPanel
                     .frame(minWidth: 300, idealWidth: 420)
             }
         }
-    }
-
-    private func markdownPreviewPanel(for snapshot: DocumentSnapshot) -> some View {
-        let blocks = WorkspaceEditorCoordinator(session: DocumentSession(text: snapshot.text)).projectMarkdownPreview(from: snapshot)
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Native Preview (Zero-WebKit)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
-                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                    Text(block.text)
-                        .font(block.kind == .heading ? .title3.bold() : (block.kind == .codeBlock || block.isInertPlainTextHTML ? .body.monospaced() : .body))
-                        .foregroundStyle((block.isInertPlainTextHTML ? model.palette.inertHTMLWarningForeground : model.palette.chromeForeground).swiftUIColor)
-                        .padding(block.isInertPlainTextHTML ? 6 : 0)
-                        .background(block.isInertPlainTextHTML ? model.palette.inertHTMLWarningBackground.swiftUIColor : Color.clear)
-                        .overlay {
-                            if block.isInertPlainTextHTML {
-                                RoundedRectangle(cornerRadius: 4)
-                                    .stroke(model.palette.inertHTMLWarningBorder.swiftUIColor, lineWidth: 1)
-                            }
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            .padding(12)
-        }
-        .background(model.palette.chromeSurface.swiftUIColor)
     }
 
     private var diffPanel: some View {
@@ -2310,7 +2208,13 @@ public struct SwiftEditRootView: View {
     private var statusBar: some View {
         let metrics = model.activeStatusBarMetrics
         return HStack(spacing: 14) {
-            Text("Lint: \(model.lintDiagnostics.count)")
+            Button(model.activeLintStatus.label) { model.toggleDiagnosticsPopover() }
+                .buttonStyle(.plain)
+                .accessibilityLabel(model.activeLintStatus.label)
+                .accessibilityHint("Opens the Markdown diagnostics popover")
+                .popover(isPresented: Binding(get: { model.isDiagnosticsPopoverPresented }, set: { model.isDiagnosticsPopoverPresented = $0 })) {
+                    MarkdownDiagnosticsPopoverView(model: model)
+                }
             Text("Brackets: \(model.bracketResult?.unbalancedBrackets.isEmpty == true ? "Balanced" : "Unbalanced (\(model.bracketResult?.unbalancedBrackets.count ?? 0))")")
             Text("Mode: \(model.palette.mode.rawValue.capitalized)")
             Spacer()

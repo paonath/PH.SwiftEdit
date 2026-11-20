@@ -2,23 +2,57 @@ import Foundation
 import Markdown
 
 /// Canonical rule identifiers emitted by `MarkdownLintAndFormatEngine.lint` (`AR-011`, `BC-004`, `SEC-004`).
-public enum MarkdownLintRuleID: String, Codable, Sendable {
+public enum MarkdownLintRuleID: String, Codable, Sendable, CaseIterable {
     case missingHeadingSpace
     case emptyLinkTarget
     case unsafeLinkScheme
     case unbalancedFencedCodeBlock
+    case nonStandardOutlineMarker
+    // `.allConstructs` additions (`MD001`..`MD058` plus hardened security rules).
+    case headingIncrement, multipleSpacesAfterHash, blanksAroundHeadings
+    case listMarkerStyle, inconsistentListIndent, listIndentStep, orderedListPrefix, listMarkerSpacing, blanksAroundLists, malformedTaskCheckbox
+    case tablePipeStyle, tableColumnCountMismatch, blanksAroundTables
+    case missingImageAltText, unsafeImagePath
+    case blanksAroundFences, missingFenceLanguage, multipleSpacesAfterBlockquote
+    case trailingSpaces, hardTabs, multipleBlankLines
+
+    /// `true` for the hardened URI/image rules whose diagnostics are never auto-fixed nor suppressed (`SEC-004`, `SEC-LINT-01`).
+    public var isSecurityRule: Bool {
+        self == .unsafeLinkScheme || self == .unsafeImagePath || self == .emptyLinkTarget
+    }
+
+    /// Severity classification: structural and security findings are errors, style findings are warnings.
+    public var severity: MarkdownLintSeverity {
+        switch self {
+        case .unsafeLinkScheme, .unsafeImagePath, .unbalancedFencedCodeBlock, .emptyLinkTarget: return .error
+        default: return .warning
+        }
+    }
 }
 
+/// Diagnostic severity used to retain errors ahead of warnings under the output cap.
+public enum MarkdownLintSeverity: String, Codable, Sendable { case error, warning }
+
+/// Rule-set selector; `.legacyBaseline` is the default so pre-existing callers keep their exact diagnostics (`BC-004`).
+public enum MarkdownLintProfile: Sendable { case legacyBaseline, allConstructs }
+
 /// Immutable 1-based line diagnostic emitted during offline Markdown AST and structural linting (`BC-004`).
+///
+/// `range` (UTF-16) and `quickFix` are populated only by the `.allConstructs` profile; `quickFix` is always `nil` for security rules.
 public struct MarkdownLintDiagnostic: Equatable, Sendable {
     public let rule: MarkdownLintRuleID
     public let line: Int
     public let message: String
+    public let range: TextRange?
+    public let quickFix: TextEdit?
+    public var severity: MarkdownLintSeverity { rule.severity }
 
-    public init(rule: MarkdownLintRuleID, line: Int, message: String) {
+    public init(rule: MarkdownLintRuleID, line: Int, message: String, range: TextRange? = nil, quickFix: TextEdit? = nil) {
         self.rule = rule
         self.line = line
         self.message = message
+        self.range = range
+        self.quickFix = rule.isSecurityRule ? nil : quickFix
     }
 }
 
@@ -27,11 +61,14 @@ public struct MarkdownLintResult: Equatable, Sendable {
     public let documentID: DocumentID
     public let revision: BufferRevision
     public let diagnostics: [MarkdownLintDiagnostic]
+    /// `true` when more than `MarkdownLintAndFormatEngine.maxDiagnostics` findings were produced and warnings were dropped first.
+    public let isTruncated: Bool
 
-    public init(documentID: DocumentID, revision: BufferRevision, diagnostics: [MarkdownLintDiagnostic]) {
+    public init(documentID: DocumentID, revision: BufferRevision, diagnostics: [MarkdownLintDiagnostic], isTruncated: Bool = false) {
         self.documentID = documentID
         self.revision = revision
         self.diagnostics = diagnostics
+        self.isTruncated = isTruncated
     }
 }
 
@@ -62,10 +99,13 @@ public enum MarkdownLintAndFormatEngine {
     public static let deadlineMilliseconds: Int = 250
     /// Explicit URI schemes permitted in Markdown links and images without triggering `.unsafeLinkScheme` (`SEC-004`, `SEC-012`).
     public static let allowedLinkSchemes: Set<String> = ["https", "http", "mailto"]
+    /// Maximum diagnostics returned by `.allConstructs`; `.error` findings are retained before `.warning` findings (`CWE-400`, `SEC-012`).
+    public static let maxDiagnostics: Int = 1_000
 
     /// Parses `snapshot` via `swift-markdown`, enforces `128`-level AST depth and `250 ms` clock bounds, and emits sorted `MarkdownLintDiagnostic` findings including `.unsafeLinkScheme`.
     public static func lint(
         snapshot: DocumentSnapshot,
+        profile: MarkdownLintProfile = .legacyBaseline,
         clock: any ElapsedTimeProviding = ContinuousClockElapsedTimer()
     ) -> EngineEvaluationOutcome<MarkdownLintResult> {
         let document: Document
@@ -81,6 +121,7 @@ public enum MarkdownLintAndFormatEngine {
 
         var diagnostics = walker.diagnostics
         var fenceTracker = FencedCodeBlockTracker()
+        var inListContext = false
 
         for line in splitLinesUTF16(in: snapshot.text) {
             if clock.elapsedMilliseconds() > deadlineMilliseconds {
@@ -96,6 +137,21 @@ public enum MarkdownLintAndFormatEngine {
                     message: "ATX heading requires a space after '#' markers"
                 ))
             }
+            let lineUnits = ArraySlice(line.content.utf16)
+            if lineUnits.allSatisfy({ $0 == 0x20 || $0 == 0x09 }) {
+                continue
+            }
+            if MarkdownListGrammar.parseListLine(lineUnits) != nil {
+                inListContext = true
+            } else if inListContext, MarkdownListGrammar.isPseudoOutlineMarker(lineUnits) {
+                diagnostics.append(MarkdownLintDiagnostic(
+                    rule: .nonStandardOutlineMarker,
+                    line: line.lineNumber,
+                    message: "Pseudo-outline marker (a. or 1.1) is not a CommonMark list item"
+                ))
+            } else if lineUnits.first != 0x20 {
+                inListContext = false
+            }
         }
 
         if let unclosedLine = fenceTracker.unclosedOpeningLine {
@@ -106,6 +162,23 @@ public enum MarkdownLintAndFormatEngine {
             ))
         }
 
+        var isTruncated = false
+        if profile == .allConstructs {
+            let index = MarkdownLineIndex(text: snapshot.text)
+            guard let extra = MarkdownAllConstructsLinter.diagnostics(index: index, deadlineExceeded: { clock.elapsedMilliseconds() > deadlineMilliseconds }) else {
+                return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
+            }
+            let mine = Set(extra.diagnostics.map { "\($0.rule.rawValue)@\($0.line)" })
+            diagnostics = diagnostics.filter { $0.line > extra.maskedLines && !mine.contains("\($0.rule.rawValue)@\($0.line)") }
+            diagnostics.append(contentsOf: extra.diagnostics)
+            if diagnostics.count > maxDiagnostics {
+                isTruncated = true
+                let errors = diagnostics.filter { $0.severity == .error }
+                let warnings = diagnostics.filter { $0.severity == .warning }
+                diagnostics = Array(errors.prefix(maxDiagnostics)) + Array(warnings.prefix(max(0, maxDiagnostics - errors.count)))
+            }
+        }
+
         diagnostics.sort { lhs, rhs in
             if lhs.line != rhs.line { return lhs.line < rhs.line }
             return lhs.rule.rawValue < rhs.rule.rawValue
@@ -114,7 +187,8 @@ public enum MarkdownLintAndFormatEngine {
         return .completed(MarkdownLintResult(
             documentID: snapshot.id,
             revision: snapshot.revision,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            isTruncated: isTruncated
         ))
     }
 

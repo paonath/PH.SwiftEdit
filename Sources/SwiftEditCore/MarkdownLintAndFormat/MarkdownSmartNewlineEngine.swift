@@ -78,6 +78,17 @@ public enum MarkdownSmartNewlineEngine {
             return nil
         }
 
+        if parsed.isEmptyContent, parsed.isNestedOrdered,
+           case .edit(let outdented) = MarkdownSmartListEngine.evaluateIndent(
+               in: snapshot,
+               selection: TextRange(location: caretLocation, length: 0),
+               outdent: true,
+               isMarkdownDocument: true
+           ),
+           let outdentEdit = outdented.edits.first {
+            return SmartNewlineEdit(edit: outdentEdit, newCaretLocation: outdented.newSelection.location)
+        }
+
         if parsed.isEmptyContent {
             return SmartNewlineEdit(
                 edit: TextEdit(range: TextRange(location: lineStart, length: lineEnd - lineStart), replacement: ""),
@@ -96,6 +107,7 @@ public enum MarkdownSmartNewlineEngine {
         let markerUTF16Length: Int
         let nextLinePrefix: String
         let isEmptyContent: Bool
+        var isNestedOrdered: Bool = false
     }
 
     private static func currentLineBounds(in units: [UInt16], around caret: Int) -> (start: Int, end: Int) {
@@ -209,6 +221,14 @@ public enum MarkdownSmartNewlineEngine {
         if let ordered = parseOrderedList(chars: chars, from: idx, indent: indent) {
             return ordered
         }
+        if let pseudo = MarkdownListGrammar.pseudoOutlineContinuation(ArraySlice(line.utf16)) {
+            let remainder = String(chars[min(chars.count, pseudo.indent + pseudo.markerLength)...])
+            return ParsedMarker(
+                markerUTF16Length: pseudo.indent + pseudo.markerLength,
+                nextLinePrefix: String(repeating: " ", count: pseudo.indent) + pseudo.nextMarker,
+                isEmptyContent: remainder.trimmingCharacters(in: .whitespaces).isEmpty
+            )
+        }
         return nil
     }
 
@@ -297,7 +317,8 @@ public enum MarkdownSmartNewlineEngine {
         return ParsedMarker(
             markerUTF16Length: markerString.utf16.count,
             nextLinePrefix: "\(indent)\(nextNumber)\(punctuation) ",
-            isEmptyContent: remainder.trimmingCharacters(in: .whitespaces).isEmpty
+            isEmptyContent: remainder.trimmingCharacters(in: .whitespaces).isEmpty,
+            isNestedOrdered: indent.utf16.count >= 4
         )
     }
 }
