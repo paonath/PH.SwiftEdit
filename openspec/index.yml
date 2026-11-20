@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "012-textkit2-gfm-editor-and-native-preview"
+    status: "draft"
+    date: "2026-11-20"
+    capabilities: ["textkit2-gfm-editor-and-native-preview"]
+    path: "openspec/changes/012-textkit2-gfm-editor-and-native-preview"
+    summary: "Two-Speed GFM TextKit 2 Editor, Markdown CommandMenu, GFM Table Tab and Cmd+P Zero-WebKit Native Preview"
   - id: "011-adaptive-markdown-lists-tab-indentation"
     status: "implemented"
     date: "2026-11-20"
