@@ -592,6 +592,7 @@ public final class SwiftEditWorkbenchModel {
     private let parentPermissionChecker: (URL) -> Bool
     /// Unmasked host OS dark-mode detector consulted on Frame 0 initialization and `.auto` restoration (`UI-003`, `TEST-004`).
     private let systemDarkDetector: @MainActor () -> Bool
+    private let savePanelProvider: @MainActor (String) -> URL?
     @ObservationIgnored private var distributedThemeObserver: (any NSObjectProtocol)?
 
     public init(
@@ -606,6 +607,11 @@ public final class SwiftEditWorkbenchModel {
         },
         systemDarkDetector: @escaping @MainActor () -> Bool = {
             MacOSAppearanceSynchronizer.readUnmaskedSystemPrefersDark()
+        },
+        savePanelProvider: @escaping @MainActor (String) -> URL? = { suggestedName in
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = suggestedName
+            return panel.runModal() == .OK ? panel.url : nil
         }
     ) {
         self.fileSystem = fileSystem
@@ -619,6 +625,7 @@ public final class SwiftEditWorkbenchModel {
         )
         self.parentPermissionChecker = parentPermissionChecker
         self.systemDarkDetector = systemDarkDetector
+        self.savePanelProvider = savePanelProvider
         self.preferencesStore = EditorPreferencesStore(suiteName: preferencesSuiteName)
         let prefs = preferencesStore.load()
         let initialSystemDark = systemDarkDetector()
@@ -909,6 +916,10 @@ public final class SwiftEditWorkbenchModel {
     public func performCommandD() {
         guard let activeID = tabSession.activeTabID,
               var session = sessionsByID[activeID] else { return }
+        guard !session.isBinaryReadOnly, safetyBanner.canSave else {
+            statusBannerMessage = "Duplicate blocked: binary read-only file."
+            return
+        }
         do {
             _ = try session.duplicateLineOrSelection(selection: currentSelection)
             sessionsByID[activeID] = session
@@ -924,6 +935,10 @@ public final class SwiftEditWorkbenchModel {
     public func formatActiveDocument() {
         guard let activeID = tabSession.activeTabID,
               var session = sessionsByID[activeID] else { return }
+        guard !session.isBinaryReadOnly, safetyBanner.canFormat else {
+            statusBannerMessage = "Format blocked: binary read-only file."
+            return
+        }
         let snap = session.snapshot
         guard let batch = MarkdownLintAndFormatEngine.formatDocument(snapshot: snap).completedValue else {
             statusBannerMessage = "Formatting skipped (degraded, binary, AST depth > 128, or > 250 ms)."
@@ -944,7 +959,7 @@ public final class SwiftEditWorkbenchModel {
     public func saveActiveDocument() {
         guard let activeID = tabSession.activeTabID,
               let session = sessionsByID[activeID] else { return }
-        guard !session.isBinaryReadOnly else {
+        guard !session.isBinaryReadOnly, safetyBanner.canSave else {
             statusBannerMessage = "Save blocked: binary read-only file."
             return
         }
@@ -953,19 +968,20 @@ public final class SwiftEditWorkbenchModel {
         if let existingURL = session.fileURL {
             targetURL = existingURL
         } else {
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = activeTabTitle
-            guard panel.runModal() == .OK, let chosen = panel.url else { return }
+            guard let chosen = savePanelProvider(activeTabTitle) else { return }
             targetURL = chosen
         }
         saveDocument(to: targetURL)
     }
 
+    /// Prompts for a destination via the injected save-panel seam and saves the active document there; rejected fail-closed on binary read-only buffers before any panel is shown (`DATA-003`, `UI-008`).
     public func saveActiveDocumentAsViaPanel() {
-        guard activeDocumentSession != nil else { return }
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = activeTabTitle
-        guard panel.runModal() == .OK, let chosen = panel.url else { return }
+        guard let session = activeDocumentSession else { return }
+        guard !session.isBinaryReadOnly, safetyBanner.canSave else {
+            statusBannerMessage = "Save As blocked: binary read-only file."
+            return
+        }
+        guard let chosen = savePanelProvider(activeTabTitle) else { return }
         saveDocument(to: chosen)
     }
 
@@ -1234,6 +1250,72 @@ public final class SwiftEditWorkbenchModel {
     private func openBatchPlan(_ plan: BatchOpenPlan, withinScope scopeURL: URL) {
         for fileURL in plan.files {
             openFile(at: fileURL, withinScope: scopeURL)
+        }
+    }
+
+    /// Toggles the in-memory Zero-WebKit Markdown preview (`Cmd+P`, default off); never invokes the print spooler (`SEC-004`).
+    public func toggleMarkdownPreview() {
+        showMarkdownPreview.toggle()
+    }
+
+    /// Formats only the Markdown lines intersecting `currentSelection` in one atomic `BufferRevision` step (`Option+Shift+Cmd+F`); rejected fail-closed on binary read-only buffers (`BC-004`, `DATA-003`, `UI-009`).
+    public func formatActiveSection() {
+        guard let activeID = tabSession.activeTabID,
+              var session = sessionsByID[activeID] else { return }
+        guard !session.isBinaryReadOnly, safetyBanner.canFormat else {
+            statusBannerMessage = "Format blocked: binary read-only file."
+            return
+        }
+        let snap = session.snapshot
+        do {
+            guard let batch = try MarkdownLintAndFormatEngine.formatSection(snapshot: snap, range: currentSelection).completedValue else {
+                statusBannerMessage = "Section formatting skipped (degraded, AST depth > 128, or > 250 ms)."
+                return
+            }
+            guard !batch.edits.isEmpty else {
+                statusBannerMessage = "Markdown section already formatted."
+                return
+            }
+            _ = try session.applyTextEdits(batch.edits, expectedRevision: snap.revision)
+            sessionsByID[activeID] = session
+            try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            statusBannerMessage = "Formatted \(batch.edits.count) line(s) in selection."
+            persistRecoveryState()
+            refreshDiagnosticsForActiveDocument()
+        } catch {
+            statusBannerMessage = "Section format failed: \(error)"
+        }
+    }
+
+    /// Lifecycle of the translucent header submenu (`HeaderSubmenuStateMachine`).
+    public var headerSubmenu = HeaderSubmenuStateMachine()
+
+    /// Descriptive submenu rows reflecting the active tab's quarantine state and the preview/diff toggles.
+    public var headerCommandItems: [HeaderCommandItem] {
+        HeaderCommandCatalog.items(
+            canSave: safetyBanner.canSave,
+            canFormat: safetyBanner.canFormat,
+            showMarkdownPreview: showMarkdownPreview,
+            showDiffPane: showDiffPane
+        )
+    }
+
+    /// Executes a submenu command if it is currently enabled, then dismisses the submenu with the `Escape` latch.
+    public func performHeaderCommand(_ id: HeaderCommandID) {
+        guard headerCommandItems.first(where: { $0.id == id })?.isEnabled == true else { return }
+        headerSubmenu.dismissAfterCommand()
+        switch id {
+        case .newDocument: newUntitledTab()
+        case .openFile: openFileViaPanel()
+        case .openFolder: openFolderViaPanel()
+        case .saveDocument: saveActiveDocument()
+        case .saveDocumentAs: saveActiveDocumentAsViaPanel()
+        case .duplicateLineOrSelection: performCommandD()
+        case .formatDocument: formatActiveDocument()
+        case .formatSection: formatActiveSection()
+        case .toggleMarkdownPreview: toggleMarkdownPreview()
+        case .toggleDiffPane: toggleDiffPane()
+        case .showCheatSheet: isCheatSheetPresented = true
         }
     }
 
@@ -1524,7 +1606,7 @@ public struct SwiftEditRootView: View {
 
     public init() {}
 
-    public var body: some View {
+    private var layoutContent: some View {
         VStack(spacing: 0) {
             toolbarBar
             GeometryReader { geometry in
@@ -1560,6 +1642,29 @@ public struct SwiftEditRootView: View {
             }
             statusBar
         }
+        .overlay(alignment: .topLeading) {
+            headerSubmenuOverlay
+        }
+        .onExitCommand {
+            model.headerSubmenu.escapePressed()
+        }
+        .task(id: "\(model.headerSubmenu.pointerRegion)-\(model.headerSubmenu.isOpen)") {
+            for _ in 0..<40 {
+                try? await Task.sleep(for: .milliseconds(20))
+                if Task.isCancelled { return }
+                model.headerSubmenu.advance(by: .milliseconds(20))
+            }
+        }
+        .onChange(of: draggingTabID) { _, newValue in
+            model.headerSubmenu.setDragging(newValue != nil || dragStartSidebarRatio != nil)
+        }
+        .onChange(of: dragStartSidebarRatio) { _, newValue in
+            model.headerSubmenu.setDragging(newValue != nil || draggingTabID != nil)
+        }
+    }
+
+    public var body: some View {
+        layoutContent
         .background(model.palette.chromeSurface.swiftUIColor)
         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
         .preferredColorScheme(model.preferredSwiftUIColorScheme)
@@ -1641,52 +1746,70 @@ public struct SwiftEditRootView: View {
         }
     }
 
+    /// Root-level overlay: `.zIndex(99)` click-outside shield beneath the `.zIndex(100)` translucent submenu, offset below the fixed header so the editor never shifts (`UI-012`).
+    @ViewBuilder
+    private var headerSubmenuOverlay: some View {
+        if model.headerSubmenu.isOpen {
+            ZStack(alignment: .topLeading) {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.headerSubmenu.clickToggle() }
+                    .zIndex(99)
+                HeaderBrandSubmenuView(
+                    items: model.headerCommandItems,
+                    palette: model.palette,
+                    onSelect: { model.performHeaderCommand($0) }
+                )
+                .onHover { hovering in
+                    model.headerSubmenu.pointerEntered(hovering ? .panel : .outside)
+                }
+                .padding(.leading, 12)
+                .offset(y: CGFloat(HeaderSubmenuStateMachine.topBarHeight))
+                .zIndex(100)
+            }
+        }
+    }
+
     private var toolbarBar: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                SwiftEditBrandLogoView(size: CGFloat(SwiftEditBrandLogoGeometry.topBarLogoSize))
-                Text("PH.SwiftEdit")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
+            Button(action: { model.headerSubmenu.clickToggle() }) {
+                HStack(spacing: 6) {
+                    SwiftEditBrandLogoView(size: CGFloat(SwiftEditBrandLogoGeometry.topBarLogoSize))
+                    Text("PH.SwiftEdit")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .fixedSize()
-
-            HStack(spacing: 8) {
-                Button("Folder…") { model.openFolderViaPanel() }
-                Button("File…") { model.openFileViaPanel() }
-                Button("New") { model.newUntitledTab() }
-                Button("Save") { model.saveActiveDocument() }
-                    .keyboardShortcut("s", modifiers: .command)
-                    .disabled(!model.safetyBanner.canSave)
-                Button("Cmd+D") { model.performCommandD() }
-                    .keyboardShortcut("d", modifiers: .command)
-                Button("Format") { model.formatActiveDocument() }
-                    .disabled(!model.safetyBanner.canFormat)
-                Toggle("Preview", isOn: $model.showMarkdownPreview)
-                    .toggleStyle(.button)
-                Button(model.showDiffPane ? "Hide Diff" : "Compare Diff") { model.toggleDiffPane() }
-                Button("Shortcuts") { model.isCheatSheetPresented = true }
-                    .help("Open Keyboard Shortcuts CheatSheet (Cmd+/)")
+            .accessibilityLabel("PH.SwiftEdit commands menu")
+            .onHover { hovering in
+                model.headerSubmenu.pointerEntered(hovering ? .trigger : .outside)
             }
-            .opacity(model.isToolbarHovered ? 1.0 : 0.0)
-            .allowsHitTesting(model.isToolbarHovered)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: model.isToolbarHovered)
 
             Spacer(minLength: 8)
 
             HStack(spacing: 4) {
                 Button("-") { model.zoomController.zoomOut() }
-                    .keyboardShortcut("-", modifiers: .command)
                 Button("\(model.zoomController.zoomPercent)%") { model.zoomController.resetZoom() }
-                    .keyboardShortcut("0", modifiers: .command)
                     .monospacedDigit()
                 Button("+") { model.zoomController.zoomIn() }
-                    .keyboardShortcut("+", modifiers: .command)
             }
             .fixedSize()
+            .onHover { hovering in
+                model.headerSubmenu.pointerEntered(hovering ? .trailingControls : .outside)
+            }
 
             appearanceSelectorControl
+                .onHover { hovering in
+                    model.headerSubmenu.pointerEntered(hovering ? .trailingControls : .outside)
+                }
         }
+        .frame(height: CGFloat(HeaderSubmenuStateMachine.topBarHeight))
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
@@ -2209,132 +2332,6 @@ public struct SwiftEditRootView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
         .background(model.palette.statusBarSurface.swiftUIColor)
-    }
-}
-
-private struct FocusedWorkbenchModelKey: FocusedValueKey {
-    typealias Value = SwiftEditWorkbenchModel
-}
-
-public extension FocusedValues {
-    var workbenchModel: SwiftEditWorkbenchModel? {
-        get { self[FocusedWorkbenchModelKey.self] }
-        set { self[FocusedWorkbenchModelKey.self] = newValue }
-    }
-}
-
-/// Classic macOS menu bar `Commands` routed to the focused `SwiftEditWorkbenchModel` (`File`, `Edit`, `View`, `Help`, `About`) (`UI-009`, `UI-010`, `SEC-004`).
-public struct SwiftEditCommands: Commands {
-    @FocusedValue(\.workbenchModel) private var model
-
-    public init() {}
-
-    public var body: some Commands {
-        CommandGroup(replacing: .appInfo) {
-            Button("About PH.SwiftEdit") {
-                model?.isAboutSheetPresented = true
-            }
-            .disabled(model == nil)
-        }
-
-        CommandGroup(replacing: .newItem) {
-            Button("New Document") { model?.newUntitledTab() }
-                .keyboardShortcut("n", modifiers: .command)
-                .disabled(model == nil)
-            Button("Open File…") { model?.openFileViaPanel() }
-                .keyboardShortcut("o", modifiers: .command)
-                .disabled(model == nil)
-            Button("Open Folder…") { model?.openFolderViaPanel() }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
-                .disabled(model == nil)
-            Button("Open All Files in Folder…") { model?.openAllFilesInFolderViaPanel() }
-                .keyboardShortcut("o", modifiers: [.command, .shift, .option])
-                .disabled(model == nil)
-            Menu("Open Recent") {
-                if let entries = model?.recentFiles, !entries.isEmpty {
-                    ForEach(entries, id: \.standardizedPath) { entry in
-                        Button(entry.displayName) {
-                            model?.openRecentFile(entry)
-                        }
-                    }
-                    Divider()
-                    Button("Clear Recent") {
-                        model?.clearRecentFiles()
-                    }
-                } else {
-                    Text("No Recent Files")
-                }
-            }
-        }
-
-        CommandGroup(replacing: .saveItem) {
-            Button("Save") { model?.saveActiveDocument() }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(model?.safetyBanner.canSave != true)
-            Button("Save As…") { model?.saveActiveDocumentAsViaPanel() }
-                .keyboardShortcut("s", modifiers: [.command, .shift])
-                .disabled(model?.safetyBanner.canSave != true)
-            Divider()
-            Button("Close Document") { model?.requestCloseActiveTab() }
-                .keyboardShortcut("w", modifiers: .command)
-                .disabled(model == nil)
-        }
-
-        CommandGroup(after: .undoRedo) {
-            Button("Redo") {
-                NSApp.sendAction(Selector(("redo:")), to: nil, from: nil)
-            }
-            .keyboardShortcut("y", modifiers: .command)
-        }
-
-        CommandGroup(after: .pasteboard) {
-            Divider()
-            Button("Duplicate Line or Selection") { model?.performCommandD() }
-                .keyboardShortcut("d", modifiers: .command)
-                .disabled(model == nil)
-            Button("Format Markdown") { model?.formatActiveDocument() }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-                .disabled(model?.safetyBanner.canFormat != true)
-            Divider()
-            Button("Find…") { model?.presentFindBar(mode: .find) }
-                .keyboardShortcut("f", modifiers: .command)
-                .disabled(model == nil)
-            Button("Find and Replace…") { model?.presentFindBar(mode: .findAndReplace) }
-                .keyboardShortcut("h", modifiers: .command)
-                .disabled(model == nil)
-            Button("Go to Line…") { model?.presentFindBar(mode: .goToLine) }
-                .keyboardShortcut("g", modifiers: .command)
-                .disabled(model == nil)
-        }
-
-        CommandGroup(after: .sidebar) {
-            Button("Toggle Folder Navigator") { model?.toggleLeftSidebar() }
-                .keyboardShortcut("b", modifiers: .command)
-                .disabled(model == nil)
-            Divider()
-            Button("Zoom In") { model?.zoomController.zoomIn() }
-                .keyboardShortcut("+", modifiers: .command)
-                .disabled(model == nil)
-            Button("Zoom Out") { model?.zoomController.zoomOut() }
-                .keyboardShortcut("-", modifiers: .command)
-                .disabled(model == nil)
-            Button("Actual Size (100%)") { model?.zoomController.resetZoom() }
-                .keyboardShortcut("0", modifiers: .command)
-                .disabled(model == nil)
-        }
-
-        CommandGroup(replacing: .help) {
-            Button("Keyboard Shortcuts CheatSheet") {
-                model?.isCheatSheetPresented = true
-            }
-            .keyboardShortcut("/", modifiers: .command)
-            .disabled(model == nil)
-            Divider()
-            Button("About PH.SwiftEdit") {
-                model?.isAboutSheetPresented = true
-            }
-            .disabled(model == nil)
-        }
     }
 }
 #endif

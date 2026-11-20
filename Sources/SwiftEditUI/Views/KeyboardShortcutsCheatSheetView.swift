@@ -47,7 +47,8 @@ public enum KeyboardShortcutsCheatSheetCatalog {
             KeyboardShortcutDescriptor(title: "Paste", shortcut: "Cmd+V", summary: "Paste plain text from pasteboard"),
             KeyboardShortcutDescriptor(title: "Select All", shortcut: "Cmd+A", summary: "Select all text in the active buffer"),
             KeyboardShortcutDescriptor(title: "Duplicate Line or Selection", shortcut: "Cmd+D", summary: "Duplicate current line or selected range"),
-            KeyboardShortcutDescriptor(title: "Format Markdown", shortcut: "Cmd+Shift+F", summary: "Format Markdown document via swift-markdown AST"),
+            KeyboardShortcutDescriptor(title: "Format Markdown Document", shortcut: "Cmd+Shift+F", summary: "Format Markdown document via swift-markdown AST"),
+            KeyboardShortcutDescriptor(title: "Format Markdown Section", shortcut: "Cmd+Option+Shift+F", summary: "Format only the selected Markdown lines"),
         ]),
         KeyboardShortcutSection(category: "Navigation", items: [
             KeyboardShortcutDescriptor(title: "Find in Document", shortcut: "Cmd+F", summary: "Open literal Find bar"),
@@ -61,6 +62,7 @@ public enum KeyboardShortcutsCheatSheetCatalog {
             KeyboardShortcutDescriptor(title: "Zoom In", shortcut: "Cmd++", summary: "Increase editor font zoom (+10% up to 300%)"),
             KeyboardShortcutDescriptor(title: "Zoom Out", shortcut: "Cmd+-", summary: "Decrease editor font zoom (-10% down to 50%)"),
             KeyboardShortcutDescriptor(title: "Reset Zoom", shortcut: "Cmd+0", summary: "Reset editor font zoom to 100%"),
+            KeyboardShortcutDescriptor(title: "Toggle Markdown Preview", shortcut: "Cmd+P", summary: "Show or hide the native Markdown preview (off by default)"),
             KeyboardShortcutDescriptor(title: "Keyboard Shortcuts CheatSheet", shortcut: "Cmd+/", summary: "Open graphical keyboard shortcuts reference"),
         ]),
         KeyboardShortcutSection(category: "Sidebar", items: [
