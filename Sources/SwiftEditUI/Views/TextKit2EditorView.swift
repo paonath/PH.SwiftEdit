@@ -9,6 +9,13 @@ import AppKit
 @MainActor
 final class SwiftEditNSTextView: NSTextView {
     var currentLineHighlightColor: NSColor = .clear
+    /// ESC hook (navigator / distraction-free); returns `true` when consumed.
+    var onEscape: (() -> Bool)?
+
+    override func cancelOperation(_ sender: Any?) {
+        if onEscape?() == true { return }
+        super.cancelOperation(sender)
+    }
 
     override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
         super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
@@ -80,6 +87,7 @@ struct TextKit2EditorView: NSViewRepresentable {
     let programmaticSelectionToken: Int
     /// Diagnostics (after active-line suppression) drawn as dotted underlines; capped at `1000` by the engine.
     var lintDiagnostics: [MarkdownLintDiagnostic] = []
+    var onEscape: () -> Bool = { false }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -99,6 +107,7 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         let textView = SwiftEditNSTextView(usingTextLayoutManager: true)
         textView.delegate = context.coordinator
+        textView.onEscape = onEscape
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -152,6 +161,8 @@ struct TextKit2EditorView: NSViewRepresentable {
                 context.coordinator.isApplyingProgrammaticUpdate = true
                 textView.setSelectedRange(NSRange(location: programmaticSelection.location, length: programmaticSelection.length))
                 context.coordinator.isApplyingProgrammaticUpdate = false
+                textView.scrollRangeToVisible(NSRange(location: programmaticSelection.location, length: programmaticSelection.length))
+                textView.window?.makeFirstResponder(textView)
             }
         }
         textView.textLayoutManager?.textViewportLayoutController.layoutViewport()

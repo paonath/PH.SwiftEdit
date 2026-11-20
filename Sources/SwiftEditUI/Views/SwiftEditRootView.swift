@@ -1031,6 +1031,59 @@ public final class SwiftEditWorkbenchModel {
     /// Monotonic token bumped whenever the model requests a caret/selection the editor view must adopt (`currentSelection`).
     public var programmaticSelectionToken: Int = 0
 
+    // MARK: Document navigator & distraction-free (014)
+
+    /// Open navigator palette state; `nil` while closed (nothing is parsed or retained when closed).
+    public var navigatorState: DocumentNavigatorState?
+    /// `true` while only the active editor is visible in full screen.
+    public var isDistractionFree: Bool = false
+    private var fullScreenWasActiveBeforeDistractionFree = false
+    /// Window seams injected by the root view (kept closures so the model stays AppKit-free and testable).
+    @ObservationIgnored public var windowFullScreenQuery: () -> Bool = { false }
+    @ObservationIgnored public var windowFullScreenToggle: () -> Void = {}
+
+    /// `Option+\`: toggles the heading navigator of the active non-binary Markdown tab only.
+    public func toggleDocumentNavigator() {
+        if navigatorState != nil { closeDocumentNavigator(); return }
+        guard isMarkdownMenuEnabled, let session = activeDocumentSession else { return }
+        navigatorState = DocumentNavigatorState(headings: MarkdownHeadingOutlineEngine.outline(for: session.text))
+    }
+
+    public func closeDocumentNavigator() { navigatorState = nil }
+
+    /// Jumps the caret to the selected heading (clamped to the current text) and closes the navigator.
+    public func confirmDocumentNavigator() {
+        defer { navigatorState = nil }
+        guard let state = navigatorState, let session = activeDocumentSession,
+              let offset = state.confirm(documentLength: session.text.utf16.count) else { return }
+        currentSelection = SwiftEditCore.TextRange(location: offset, length: 0)
+        programmaticSelectionToken += 1
+    }
+
+    /// `Option+1`: enters or leaves distraction-free mode; full screen is toggled only when the state differs.
+    public func toggleDistractionFree() {
+        if isDistractionFree {
+            isDistractionFree = false
+            if !fullScreenWasActiveBeforeDistractionFree, windowFullScreenQuery() { windowFullScreenToggle() }
+        } else {
+            fullScreenWasActiveBeforeDistractionFree = windowFullScreenQuery()
+            isDistractionFree = true
+            navigatorState = nil
+            if !fullScreenWasActiveBeforeDistractionFree { windowFullScreenToggle() }
+        }
+    }
+
+    /// Resyncs the flag when the user leaves full screen with the system control.
+    public func windowDidExitFullScreen() { isDistractionFree = false }
+
+    /// ESC layering: navigator first, then distraction-free. Returns `true` when consumed.
+    @discardableResult
+    public func handleEscape() -> Bool {
+        if navigatorState != nil { closeDocumentNavigator(); return true }
+        if isDistractionFree { toggleDistractionFree(); return true }
+        return false
+    }
+
     /// `true` only for a writable, non-binary Markdown tab; gates the `Markdown` menu, table `Tab`, and preview (`DATA-003`, `UI-005`).
     public var isMarkdownMenuEnabled: Bool {
         guard let session = activeDocumentSession, !session.isBinaryReadOnly, safetyBanner.canSave else { return false }
@@ -1522,10 +1575,12 @@ public struct SwiftEditRootView: View {
 
     private var layoutContent: some View {
         VStack(spacing: 0) {
-            toolbarBar
+            if !model.isDistractionFree { toolbarBar }
             GeometryReader { geometry in
                 HStack(spacing: 0) {
-                    if !model.isLeftSidebarCollapsed {
+                    if model.isDistractionFree {
+                        EmptyView()
+                    } else if !model.isLeftSidebarCollapsed {
                         let sidebarWidth = SidebarLayoutGeometry.resolvedWidth(
                             forContainerWidth: Double(geometry.size.width),
                             ratio: model.sidebarWidthRatio
@@ -1537,9 +1592,8 @@ public struct SwiftEditRootView: View {
                         collapsedSidebarEdgeHandle
                     }
                     VStack(spacing: 0) {
-                        tabBar
-                        safetyAndErrorBanners
-                        FindReplaceGoToLineBar(
+                        if !model.isDistractionFree { tabBar; safetyAndErrorBanners }
+                        if !model.isDistractionFree { FindReplaceGoToLineBar(
                             state: $model.findReplaceState,
                             palette: model.palette,
                             onFind: { model.executeFind() },
@@ -1548,18 +1602,22 @@ public struct SwiftEditRootView: View {
                             onReplaceAll: { model.executeReplaceAll() },
                             onGoToLine: { model.executeGoToLine() },
                             onClose: { model.presentFindBar(mode: .hidden) }
-                        )
+                        ) }
                         editorAndOptionalPanels
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            statusBar
+            if !model.isDistractionFree { statusBar }
+        }
+        .overlay(alignment: .top) {
+            DocumentNavigatorOverlayView(model: model)
         }
         .overlay(alignment: .topLeading) {
             headerSubmenuOverlay
         }
         .onExitCommand {
+            if model.handleEscape() { return }
             model.headerSubmenu.escapePressed()
         }
         .task(id: "\(model.headerSubmenu.pointerRegion)-\(model.headerSubmenu.isOpen)") {
@@ -1583,6 +1641,8 @@ public struct SwiftEditRootView: View {
         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
         .preferredColorScheme(model.preferredSwiftUIColorScheme)
         .onAppear {
+            model.windowFullScreenQuery = { NSApp.keyWindow?.styleMask.contains(.fullScreen) ?? false }
+            model.windowFullScreenToggle = { NSApp.keyWindow?.toggleFullScreen(nil) }
             model.refreshUnmaskedSystemAppearance()
             model.updateAccessibilityPreferences(
                 reduceTransparency: reduceTransparency,
@@ -1605,6 +1665,9 @@ public struct SwiftEditRootView: View {
                 reduceTransparency: reduceTransparency,
                 increasedContrast: newContrast == .increased
             )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+            if model.isDistractionFree { model.windowDidExitFullScreen() }
         }
         .frame(minWidth: 960, minHeight: 620)
         .focusedSceneValue(\.workbenchModel, model)
@@ -2138,11 +2201,13 @@ public struct SwiftEditRootView: View {
         HSplitView {
             if let session = model.activeDocumentSession {
                 HStack(spacing: 0) {
-                    LineNumberGutterView(
-                        projection: model.activeLineNumberGutter,
-                        palette: model.palette,
-                        severityByLine: model.gutterSeverityByLine
-                    )
+                    if !model.isDistractionFree {
+                        LineNumberGutterView(
+                            projection: model.activeLineNumberGutter,
+                            palette: model.palette,
+                            severityByLine: model.gutterSeverityByLine
+                        )
+                    }
                     TextKit2EditorView(
                         text: session.text,
                         isEditable: !session.isBinaryReadOnly,
@@ -2157,11 +2222,12 @@ public struct SwiftEditRootView: View {
                         isMarkdownDocument: model.isMarkdownMenuEnabled,
                         programmaticSelection: model.currentSelection,
                         programmaticSelectionToken: model.programmaticSelectionToken,
-                        lintDiagnostics: model.visibleLintDiagnostics
+                        lintDiagnostics: model.visibleLintDiagnostics,
+                        onEscape: { model.handleEscape() }
                     )
                 }
             }
-            if model.showMarkdownPreview, model.isMarkdownMenuEnabled {
+            if !model.isDistractionFree, model.showMarkdownPreview, model.isMarkdownMenuEnabled {
                 MarkdownNativePreviewView(
                     document: model.markdownPreviewDocument,
                     palette: model.palette,
@@ -2170,7 +2236,7 @@ public struct SwiftEditRootView: View {
                 )
                 .frame(minWidth: 260, idealWidth: 340)
             }
-            if model.showDiffPane {
+            if !model.isDistractionFree, model.showDiffPane {
                 diffPanel
                     .frame(minWidth: 300, idealWidth: 420)
             }

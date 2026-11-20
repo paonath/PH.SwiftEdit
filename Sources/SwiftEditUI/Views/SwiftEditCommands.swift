@@ -132,6 +132,15 @@ public struct SwiftEditCommands: Commands {
             .disabled(model == nil)
         }
 
+        CommandMenu("Navigate") {
+            Button("Document Navigator") { model?.toggleDocumentNavigator() }
+                .keyboardShortcut("\\", modifiers: .option)
+                .disabled(model?.isMarkdownMenuEnabled != true && model?.navigatorState == nil)
+            Button(model?.isDistractionFree == true ? "Exit Distraction-Free" : "Distraction-Free") { model?.toggleDistractionFree() }
+                .keyboardShortcut("1", modifiers: .option)
+                .disabled(model == nil)
+        }
+
         CommandMenu("Markdown") {
           Group {
             Group {
