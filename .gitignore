@@ -30,6 +30,7 @@ playground.xcworkspace
 # .swiftpm
 
 .build/
+build/
 
 # CocoaPods
 #
@@ -60,3 +61,15 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# MySpec security exclusions
+openspec/debug/**
+specs/debug/**
+**/*.har
+openspec/**/.env*
+specs/**/.env*
+.tmp/
+
+tokensave/**
+reasoning/**
+.openspec/**
