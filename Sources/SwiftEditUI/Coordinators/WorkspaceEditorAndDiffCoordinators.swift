@@ -82,15 +82,28 @@ public final class TextKit2BufferAdapter {
         let clampedStart = min(max(0, viewportRange.location), maxLen)
         let clampedLen = min(max(0, viewportRange.length), maxLen - clampedStart)
         let clampedRange = SwiftEditCore.TextRange(location: clampedStart, length: clampedLen)
+        guard clampedRange != lastHighlightedRange else { return }
+        let previousRange = lastHighlightedRange
         textContentStorage.performEditingTransaction {
-            textContentStorage.textStorage?.addAttribute(
-                Self.viewportHighlightKey,
-                value: true,
-                range: NSRange(location: clampedRange.location, length: clampedRange.length)
-            )
+            guard let storage = textContentStorage.textStorage else { return }
+            if let prev = previousRange, prev.length > 0 {
+                let prevStart = min(max(0, prev.location), storage.length)
+                let prevLen = min(prev.length, storage.length - prevStart)
+                if prevLen > 0 {
+                    storage.removeAttribute(Self.viewportHighlightKey, range: NSRange(location: prevStart, length: prevLen))
+                }
+            }
+            if clampedRange.length > 0 {
+                storage.addAttribute(
+                    Self.viewportHighlightKey,
+                    value: true,
+                    range: NSRange(location: clampedRange.location, length: clampedRange.length)
+                )
+            }
         }
         #else
         let clampedRange = viewportRange
+        guard clampedRange != lastHighlightedRange else { return }
         #endif
         lastHighlightedRange = clampedRange
         scopedTransactionCount += 1
@@ -146,6 +159,9 @@ public final class WorkspaceEditorCoordinator {
     public private(set) var reduceMotionEnabled: Bool = false
     public private(set) var bufferReloadCount: Int = 0
     private let systemDarkDetector: @MainActor () -> Bool
+    @ObservationIgnored private var cachedBracketTopology: BracketTopology?
+    @ObservationIgnored private var cachedPreviewKey: (DocumentID, BufferRevision)?
+    @ObservationIgnored private var cachedPreviewBlocks: [MarkdownPreviewBlock] = []
 
     /// Returns `false` when system Reduce Motion is enabled (`UI-011`).
     public var shouldAnimateTransitions: Bool {
@@ -231,12 +247,24 @@ public final class WorkspaceEditorCoordinator {
         }
     }
 
-    /// Evaluates active bracket highlights at `caretLocation` and applies scoped viewport highlight attributes (`UI-007`).
+    /// Evaluates active bracket highlights at `caretLocation` in `O(log P + depth)` using a revision-cached `BracketTopology` and applies scoped viewport highlight attributes (`UI-007`, `PERF-002`).
     public func updateCaretAndHighlightViewport(caretLocation: Int, viewportRange: SwiftEditCore.TextRange) {
-        activeBracketPair = SearchDiffAndBracketEngine
-            .evaluateBrackets(in: activeSession.snapshot, caretLocation: caretLocation)
-            .completedValue?
-            .activePair
+        let topology: BracketTopology?
+        if let cached = cachedBracketTopology,
+           cached.documentID == activeSession.id,
+           cached.revision == activeSession.revision {
+            topology = cached
+        } else if let scanned = SearchDiffAndBracketEngine.scanTopology(in: activeSession.snapshot).completedValue {
+            cachedBracketTopology = scanned
+            topology = scanned
+        } else {
+            cachedBracketTopology = nil
+            topology = nil
+        }
+
+        activeBracketPair = topology.flatMap {
+            SearchDiffAndBracketEngine.resolveActivePair(in: $0, caretLocation: caretLocation)
+        }
         bufferAdapter.applyViewportHighlight(in: viewportRange)
         try? tabSession.updateTabState(id: activeSession.id, caretLocation: caretLocation)
     }
@@ -244,14 +272,20 @@ public final class WorkspaceEditorCoordinator {
     /// Projects Markdown blocks for native zero-WebKit preview, rendering raw HTML (`<script>`, `<iframe>`, etc.) strictly as inert literal plain text (`UI-006`, `SEC-004`).
     public func projectMarkdownPreview(from snapshot: DocumentSnapshot) -> [MarkdownPreviewBlock] {
         guard !snapshot.isBinaryReadOnly else { return [] }
-        let normalized = LineEnding.normalizeToLF(snapshot.text)
-        let lines = normalized.components(separatedBy: "\n")
+        if let key = cachedPreviewKey, key.0 == snapshot.id, key.1 == snapshot.revision {
+            return cachedPreviewBlocks
+        }
 
         var blocks: [MarkdownPreviewBlock] = []
         var activeFence: (marker: Character, count: Int)?
-        var codeBuffer: [String] = []
+        var codeBuffer: [Substring] = []
 
-        for line in lines {
+        let text = snapshot.text
+        let utf8 = text.utf8
+        var lineStart = utf8.startIndex
+        var cursor = lineStart
+
+        func processLine(_ line: Substring) {
             if let currentFence = activeFence {
                 if Self.isClosingFence(line, marker: currentFence.marker, minCount: currentFence.count) {
                     blocks.append(MarkdownPreviewBlock(
@@ -264,26 +298,43 @@ public final class WorkspaceEditorCoordinator {
                 } else {
                     codeBuffer.append(line)
                 }
-                continue
+                return
             }
 
             if let openedFence = Self.parseOpeningFence(line) {
                 activeFence = openedFence
                 codeBuffer.removeAll(keepingCapacity: true)
-                continue
+                return
             }
 
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { continue }
+            let trimmed = Self.trimHorizontalWhitespace(line)
+            guard !trimmed.isEmpty else { return }
 
             if let headingText = Self.extractATXHeadingText(from: trimmed) {
                 blocks.append(MarkdownPreviewBlock(kind: .heading, text: headingText, isInertPlainTextHTML: false))
             } else if Self.containsRawHTMLTag(trimmed) {
-                blocks.append(MarkdownPreviewBlock(kind: .rawHTML, text: trimmed, isInertPlainTextHTML: true))
+                blocks.append(MarkdownPreviewBlock(kind: .rawHTML, text: String(trimmed), isInertPlainTextHTML: true))
             } else {
-                blocks.append(MarkdownPreviewBlock(kind: .paragraph, text: trimmed, isInertPlainTextHTML: false))
+                blocks.append(MarkdownPreviewBlock(kind: .paragraph, text: String(trimmed), isInertPlainTextHTML: false))
             }
         }
+
+        while cursor < utf8.endIndex {
+            let b = utf8[cursor]
+            if b == 0x0A {
+                processLine(text[lineStart..<cursor])
+                cursor = utf8.index(after: cursor)
+                lineStart = cursor
+            } else if b == 0x0D {
+                processLine(text[lineStart..<cursor])
+                let next = utf8.index(after: cursor)
+                cursor = (next < utf8.endIndex && utf8[next] == 0x0A) ? utf8.index(after: next) : next
+                lineStart = cursor
+            } else {
+                cursor = utf8.index(after: cursor)
+            }
+        }
+        processLine(text[lineStart..<utf8.endIndex])
 
         if activeFence != nil {
             blocks.append(MarkdownPreviewBlock(
@@ -293,46 +344,94 @@ public final class WorkspaceEditorCoordinator {
             ))
         }
 
+        cachedPreviewKey = (snapshot.id, snapshot.revision)
+        cachedPreviewBlocks = blocks
         return blocks
     }
 
-    private static func parseOpeningFence(_ line: String) -> (marker: Character, count: Int)? {
-        let leadingSpaces = line.prefix(while: { $0 == " " }).count
-        guard leadingSpaces <= 3 else { return nil }
-        let rest = line.dropFirst(leadingSpaces)
-        guard let first = rest.first, first == "`" || first == "~" else { return nil }
-        let count = rest.prefix(while: { $0 == first }).count
+    private static func trimHorizontalWhitespace(_ line: Substring) -> Substring {
+        var lo = line.startIndex
+        var hi = line.endIndex
+        while lo < hi && (line[lo] == " " || line[lo] == "\t") {
+            lo = line.index(after: lo)
+        }
+        while hi > lo {
+            let prev = line.index(before: hi)
+            if line[prev] == " " || line[prev] == "\t" {
+                hi = prev
+            } else {
+                break
+            }
+        }
+        return line[lo..<hi]
+    }
+
+    private static func parseOpeningFence(_ line: Substring) -> (marker: Character, count: Int)? {
+        var idx = line.startIndex
+        var leadingSpaces = 0
+        while idx < line.endIndex && line[idx] == " " && leadingSpaces < 4 {
+            idx = line.index(after: idx)
+            leadingSpaces += 1
+        }
+        guard leadingSpaces <= 3, idx < line.endIndex else { return nil }
+        let first = line[idx]
+        guard first == "`" || first == "~" else { return nil }
+        var count = 0
+        while idx < line.endIndex && line[idx] == first {
+            idx = line.index(after: idx)
+            count += 1
+        }
         guard count >= 3 else { return nil }
-        if first == "`" && rest.dropFirst(count).contains("`") { return nil }
+        if first == "`" && line[idx...].contains("`") { return nil }
         return (first, count)
     }
 
-    private static func isClosingFence(_ line: String, marker: Character, minCount: Int) -> Bool {
-        let leadingSpaces = line.prefix(while: { $0 == " " }).count
+    private static func isClosingFence(_ line: Substring, marker: Character, minCount: Int) -> Bool {
+        var idx = line.startIndex
+        var leadingSpaces = 0
+        while idx < line.endIndex && line[idx] == " " && leadingSpaces < 4 {
+            idx = line.index(after: idx)
+            leadingSpaces += 1
+        }
         guard leadingSpaces <= 3 else { return false }
-        let rest = line.dropFirst(leadingSpaces)
-        let count = rest.prefix(while: { $0 == marker }).count
+        var count = 0
+        while idx < line.endIndex && line[idx] == marker {
+            idx = line.index(after: idx)
+            count += 1
+        }
         guard count >= minCount else { return false }
-        return rest.dropFirst(count).allSatisfy { $0 == " " || $0 == "\t" }
+        while idx < line.endIndex {
+            let ch = line[idx]
+            if ch != " " && ch != "\t" { return false }
+            idx = line.index(after: idx)
+        }
+        return true
     }
 
-    private static func extractATXHeadingText(from trimmedLine: String) -> String? {
-        let hashCount = trimmedLine.prefix(while: { $0 == "#" }).count
-        guard (1...6).contains(hashCount) else { return nil }
-        let afterHashes = trimmedLine.dropFirst(hashCount)
-        guard let first = afterHashes.first, first == " " || first == "\t" else { return nil }
-        return String(afterHashes.drop(while: { $0 == " " || $0 == "\t" }))
+    private static func extractATXHeadingText(from trimmedLine: Substring) -> String? {
+        var idx = trimmedLine.startIndex
+        var hashCount = 0
+        while idx < trimmedLine.endIndex && trimmedLine[idx] == "#" {
+            idx = trimmedLine.index(after: idx)
+            hashCount += 1
+        }
+        guard (1...6).contains(hashCount), idx < trimmedLine.endIndex else { return nil }
+        let first = trimmedLine[idx]
+        guard first == " " || first == "\t" else { return nil }
+        while idx < trimmedLine.endIndex && (trimmedLine[idx] == " " || trimmedLine[idx] == "\t") {
+            idx = trimmedLine.index(after: idx)
+        }
+        return String(trimmedLine[idx...])
     }
 
-    private static func containsRawHTMLTag(_ line: String) -> Bool {
+    private static func containsRawHTMLTag(_ line: Substring) -> Bool {
         guard let openIdx = line.firstIndex(of: "<"),
               let closeIdx = line[openIdx...].firstIndex(of: ">") else {
             return false
         }
         let afterOpen = line.index(after: openIdx)
-        guard afterOpen < closeIdx, let firstTagChar = line[afterOpen...].first else {
-            return false
-        }
+        guard afterOpen < closeIdx else { return false }
+        let firstTagChar = line[afterOpen]
         return firstTagChar.isLetter || firstTagChar == "/" || firstTagChar == "!"
     }
 
@@ -371,13 +470,27 @@ public struct SideBySideDiffRow: Equatable, Sendable {
     public let rhsLineNumber: Int?
     public let rhsText: String?
     public let kind: DiffHunkKind
+    /// Left-hand pane semantic highlight kind (`BUG-020`: `.removed` for modified pairs).
+    public let lhsKind: DiffHunkKind
+    /// Right-hand pane semantic highlight kind (`BUG-020`: `.inserted` for modified pairs).
+    public let rhsKind: DiffHunkKind
 
-    public init(lhsLineNumber: Int?, lhsText: String?, rhsLineNumber: Int?, rhsText: String?, kind: DiffHunkKind) {
+    public init(
+        lhsLineNumber: Int?,
+        lhsText: String?,
+        rhsLineNumber: Int?,
+        rhsText: String?,
+        kind: DiffHunkKind,
+        lhsKind: DiffHunkKind? = nil,
+        rhsKind: DiffHunkKind? = nil
+    ) {
         self.lhsLineNumber = lhsLineNumber
         self.lhsText = lhsText
         self.rhsLineNumber = rhsLineNumber
         self.rhsText = rhsText
         self.kind = kind
+        self.lhsKind = lhsKind ?? ((kind == .inserted && lhsText != nil && rhsText != nil) ? .removed : kind)
+        self.rhsKind = rhsKind ?? kind
     }
 }
 
@@ -388,11 +501,17 @@ public final class DiffPaneCoordinator {
     public private(set) var rows: [SideBySideDiffRow] = []
     public private(set) var hasDifferences: Bool = false
     public private(set) var degradedReason: DegradedEvaluationReason?
+    @ObservationIgnored private var lastComparedKey: (lhsID: DocumentID, lhsRev: BufferRevision, rhsID: DocumentID, rhsRev: BufferRevision)?
 
     public init() {}
 
-    /// Evaluates `SearchDiffAndBracketEngine.computeMyersDiff` and aligns adjacent `.removed`/`.inserted` pairs into Side-by-Side rows.
+    /// Evaluates `SearchDiffAndBracketEngine.computeMyersDiff` (with revision-pair memoization) and aligns adjacent `.removed`/`.inserted` pairs into Side-by-Side rows.
     public func compare(lhs: DocumentSnapshot, rhs: DocumentSnapshot) {
+        if let last = lastComparedKey,
+           last.lhsID == lhs.id, last.lhsRev == lhs.revision,
+           last.rhsID == rhs.id, last.rhsRev == rhs.revision {
+            return
+        }
         switch SearchDiffAndBracketEngine.computeMyersDiff(lhs: lhs, rhs: rhs) {
         case .completed(let result):
             degradedReason = nil
@@ -403,10 +522,20 @@ public final class DiffPaneCoordinator {
             hasDifferences = false
             rows = []
         }
+        lastComparedKey = (lhs.id, lhs.revision, rhs.id, rhs.revision)
+    }
+
+    /// Releases computed diff rows and error state when closing the diff pane or closing tabs (`MEM-003`).
+    public func clear() {
+        lastComparedKey = nil
+        rows = []
+        hasDifferences = false
+        degradedReason = nil
     }
 
     private static func alignSideBySideRows(from hunks: [DiffHunk]) -> [SideBySideDiffRow] {
         var aligned: [SideBySideDiffRow] = []
+        aligned.reserveCapacity(hunks.count)
         var index = 0
 
         while index < hunks.count {
@@ -429,7 +558,9 @@ public final class DiffPaneCoordinator {
                         lhsText: current.lineText,
                         rhsLineNumber: next.rhsLineNumber,
                         rhsText: next.lineText,
-                        kind: .inserted
+                        kind: .inserted,
+                        lhsKind: .removed,
+                        rhsKind: .inserted
                     ))
                     index += 2
                 } else {

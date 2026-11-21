@@ -28,25 +28,26 @@ public struct EditorHighlightProjection: Equatable, Sendable {
         self.backtickSpans = backtickSpans
     }
 
-    /// Computes a deterministic highlight projection without mutating `session` or incrementing `BufferRevision`.
+    /// Computes a deterministic highlight projection without mutating `session`, incrementing `BufferRevision`, or copying the full UTF-16 buffer (`PERF-007`).
     public static func evaluate(
         text: String,
         caretLocation: Int,
         bracketResult: BracketBalanceResult?,
         backtickResult: BacktickHighlightResult?
     ) -> EditorHighlightProjection {
-        let units = Array(text.utf16)
-        let clampedCaret = min(max(0, caretLocation), units.count)
-        var lineStart = clampedCaret
-        while lineStart > 0 && units[lineStart - 1] != 0x0A && units[lineStart - 1] != 0x0D {
-            lineStart -= 1
-        }
-        var lineEnd = clampedCaret
-        while lineEnd < units.count && units[lineEnd] != 0x0A && units[lineEnd] != 0x0D {
-            lineEnd += 1
+        let nsString = text as NSString
+        let clampedCaret = min(max(0, caretLocation), nsString.length)
+        var lineRange = nsString.lineRange(for: NSRange(location: clampedCaret, length: 0))
+        while lineRange.length > 0 {
+            let unit = nsString.character(at: lineRange.location + lineRange.length - 1)
+            if unit == 0x0A || unit == 0x0D {
+                lineRange.length -= 1
+            } else {
+                break
+            }
         }
         return EditorHighlightProjection(
-            activeLineRange: SwiftEditCore.TextRange(location: lineStart, length: lineEnd - lineStart),
+            activeLineRange: SwiftEditCore.TextRange(location: lineRange.location, length: lineRange.length),
             bracketPairs: bracketResult?.matchedPairs ?? [],
             activeBracketPair: bracketResult?.activePair,
             unbalancedBrackets: bracketResult?.unbalancedBrackets ?? [],
@@ -91,6 +92,21 @@ public enum SwiftEditHelpMenuCatalog {
         "Keyboard Shortcuts CheatSheet",
         "About PH.SwiftEdit",
     ]
+}
+
+/// Transient read-only presentation for NUL-bearing binary files excluded from persistent tabs, pinning, and `SessionRecovery` (`BUG-007`, `MEM-002`, `DATA-003`).
+public struct BinaryInspectionPresentation: Equatable, Sendable {
+    public let id: DocumentID
+    public let title: String
+    public let fileURL: URL
+    public let snapshot: DocumentSnapshot
+
+    public init(id: DocumentID, title: String, fileURL: URL, snapshot: DocumentSnapshot) {
+        self.id = id
+        self.title = title
+        self.fileURL = fileURL
+        self.snapshot = snapshot
+    }
 }
 
 /// `@MainActor @Observable` application controller wiring `SwiftEditCore` engines and `SessionRecoveryStore` to the Zed-minimal Purple SwiftUI shell (`UI-001..012`).
@@ -281,6 +297,8 @@ public final class SwiftEditWorkbenchModel {
     public private(set) var tabSession: WorkspaceTabSession
     public private(set) var sessionsByID: [DocumentID: DocumentSession]
     public private(set) var savedBaselineByID: [DocumentID: DocumentSnapshot]
+    /// Transient quarantined binary payload excluded from `sessionsByID` and released immediately on dismiss or tab switch (`BUG-007`, `MEM-002`, `DATA-003`).
+    public private(set) var activeBinaryInspection: BinaryInspectionPresentation?
     public private(set) var selectedFolderURL: URL?
     public private(set) var grantedScopeRootURL: URL?
     public private(set) var folderEntries: [FolderEntryDescriptor] = []
@@ -305,10 +323,12 @@ public final class SwiftEditWorkbenchModel {
     public private(set) var pendingTrashItemURL: URL?
 
     public let diffCoordinator = DiffPaneCoordinator()
+    public let undoRegistry = PerTabUndoManagerRegistry()
+    private var terminationReplyHandler: (@MainActor (Bool) -> Void)?
     private let fileSystem: any FileSystemProviding
     private let desktopWorkspace: any DesktopWorkspaceIntegrating
     private let loader: DocumentLoader
-    private let navigator = DotfileFolderNavigator()
+    private let navigator: DotfileFolderNavigator
     private let batchLoader: ShallowFolderBatchLoader
     private let recentFilesStore: RecentFilesStore
     private let preferencesStore: EditorPreferencesStore
@@ -318,17 +338,23 @@ public final class SwiftEditWorkbenchModel {
     private let systemDarkDetector: @MainActor () -> Bool
     private let savePanelProvider: @MainActor (String) -> URL?
     @ObservationIgnored private var distributedThemeObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var cachedParentNavigation: (folder: URL?, scope: URL?, canNavigate: Bool)?
+    @ObservationIgnored private var cachedGutterProjection: (id: DocumentID, revision: BufferRevision, caret: Int, fontSize: Double, value: LineNumberGutterProjection)?
+    @ObservationIgnored private var cachedStatusBarMetrics: (id: DocumentID, revision: BufferRevision, caret: Int, value: StatusBarMetricsProjection)?
+    @ObservationIgnored private var cachedPreviewSourceLine: (id: DocumentID, revision: BufferRevision, caret: Int, value: Int)?
+    @ObservationIgnored private var cachedVisibleLint: (diagnostics: [MarkdownLintDiagnostic], caretLine: Int, visible: [MarkdownLintDiagnostic], severityByLine: [Int: MarkdownLintSeverity])?
+    @ObservationIgnored private var lastPersistedRecoveryRevisions: [DocumentID: BufferRevision] = [:]
 
     public init(
-        preferencesSuiteName: String = "it.ph.SwiftEdit.preferences",
-        recentFilesSuiteName: String = "it.ph.SwiftEdit.recentFiles",
+        preferencesSuiteName: String? = nil,
+        recentFilesSuiteName: String? = nil,
+        preferencesStore: (any PreferencesProviding)? = nil,
+        recentFilesStore: (any PreferencesProviding)? = nil,
         recoveryDirectoryURL: URL? = nil,
         fileSystem: any FileSystemProviding = LocalFileSystemAdapter(),
         bookmarkCoder: any SecurityScopedBookmarkCoding = SystemSecurityScopedBookmarkCoder(),
         desktopWorkspace: any DesktopWorkspaceIntegrating = MacOSWorkspaceAdapter(),
-        parentPermissionChecker: @escaping (URL) -> Bool = { url in
-            (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil
-        },
+        parentPermissionChecker: @escaping (URL) -> Bool = DotfileFolderNavigator.isDirectoryReadable,
         systemDarkDetector: @escaping @MainActor () -> Bool = {
             MacOSAppearanceSynchronizer.readUnmaskedSystemPrefersDark()
         },
@@ -341,17 +367,23 @@ public final class SwiftEditWorkbenchModel {
         self.fileSystem = fileSystem
         self.desktopWorkspace = desktopWorkspace
         self.loader = DocumentLoader(fileSystem: fileSystem)
-        self.batchLoader = ShallowFolderBatchLoader(navigator: navigator, fileSystem: fileSystem)
+        let nav = DotfileFolderNavigator(fileSystem: fileSystem)
+        self.navigator = nav
+        self.batchLoader = ShallowFolderBatchLoader(navigator: nav, fileSystem: fileSystem)
+        let resolvedRecentStore: any PreferencesProviding = recentFilesStore
+            ?? UserDefaultsPreferencesStore(suiteName: recentFilesSuiteName)
         self.recentFilesStore = RecentFilesStore(
-            suiteName: recentFilesSuiteName,
+            store: resolvedRecentStore,
             fileSystem: fileSystem,
             bookmarkCoder: bookmarkCoder
         )
         self.parentPermissionChecker = parentPermissionChecker
         self.systemDarkDetector = systemDarkDetector
         self.savePanelProvider = savePanelProvider
-        self.preferencesStore = EditorPreferencesStore(suiteName: preferencesSuiteName)
-        let prefs = preferencesStore.load()
+        let resolvedPrefsStore: any PreferencesProviding = preferencesStore
+            ?? UserDefaultsPreferencesStore(suiteName: preferencesSuiteName)
+        self.preferencesStore = EditorPreferencesStore(store: resolvedPrefsStore)
+        let prefs = self.preferencesStore.load()
         let initialSystemDark = systemDarkDetector()
         self.systemPrefersDark = initialSystemDark
         self.appearanceMode = prefs.appearanceMode
@@ -389,7 +421,7 @@ public final class SwiftEditWorkbenchModel {
         self.safetyBanner = InspectionSafetyBannerState.evaluate(snapshot: initialSession.snapshot)
 
         restoreSessionRecoveryIfPresent()
-        recentFiles = recentFilesStore.entries()
+        recentFiles = self.recentFilesStore.entries()
         refreshDiagnosticsForActiveDocument()
 
         distributedThemeObserver = DistributedNotificationCenter.default().addObserver(
@@ -404,42 +436,94 @@ public final class SwiftEditWorkbenchModel {
     }
 
     isolated deinit {
+        diagnosticsTask?.cancel()
+        recoveryDebounceTask?.cancel()
+        undoRegistry.removeAll()
+        bracketTopologyCache = nil
+        backtickCache = nil
+        previewCache = nil
+        diffCoordinator.clear()
+        PreviewThumbnailCache.shared.clear()
         if let observer = distributedThemeObserver {
             DistributedNotificationCenter.default().removeObserver(observer)
         }
     }
 
     public var activeDocumentSession: DocumentSession? {
+        if let bin = activeBinaryInspection {
+            return DocumentSession(
+                id: bin.id,
+                fileURL: bin.fileURL,
+                revision: bin.snapshot.revision,
+                text: bin.snapshot.text,
+                encoding: bin.snapshot.encoding,
+                lineEnding: bin.snapshot.lineEnding,
+                isDirty: false,
+                isDegradedPlainText: bin.snapshot.isDegradedPlainText,
+                isBinaryReadOnly: true
+            )
+        }
         guard let activeID = tabSession.activeTabID else { return nil }
         return sessionsByID[activeID]
     }
 
     public var activeLineNumberGutter: LineNumberGutterProjection {
-        let text = activeDocumentSession?.text ?? ""
-        return LineNumberGutterProjection.evaluate(
-            text: text,
-            caretLocation: currentSelection.location,
-            fontSizePoints: zoomController.scaledFontSizePoints
+        let fontSize = zoomController.scaledFontSizePoints
+        let caret = currentSelection.location
+        guard let session = activeDocumentSession else {
+            return LineNumberGutterProjection.evaluate(text: "", caretLocation: caret, fontSizePoints: fontSize)
+        }
+        if let cached = cachedGutterProjection,
+           cached.id == session.id,
+           cached.revision == session.revision,
+           cached.caret == caret,
+           cached.fontSize == fontSize {
+            return cached.value
+        }
+        let value = LineNumberGutterProjection.evaluate(
+            text: session.text,
+            caretLocation: caret,
+            fontSizePoints: fontSize
         )
+        cachedGutterProjection = (session.id, session.revision, caret, fontSize, value)
+        return value
     }
 
     public var activeStatusBarMetrics: StatusBarMetricsProjection {
-        let snapshot = activeDocumentSession?.snapshot ?? DocumentSession(text: "").snapshot
-        return StatusBarMetricsProjection.evaluate(
-            snapshot: snapshot,
-            caretLocation: currentSelection.location
+        let caret = currentSelection.location
+        guard let session = activeDocumentSession else {
+            return StatusBarMetricsProjection.evaluate(snapshot: DocumentSession(text: "").snapshot, caretLocation: caret)
+        }
+        if let cached = cachedStatusBarMetrics,
+           cached.id == session.id,
+           cached.revision == session.revision,
+           cached.caret == caret {
+            return cached.value
+        }
+        let value = StatusBarMetricsProjection.evaluate(
+            snapshot: session.snapshot,
+            caretLocation: caret
         )
+        cachedStatusBarMetrics = (session.id, session.revision, caret, value)
+        return value
     }
 
     /// Returns `true` when `selectedFolderURL` is not `"/"` and the parent folder (`...`) is within `grantedScopeRootURL` or readable under active user permissions (`UI-001`, `BC-007`).
     public var canNavigateToParentFolder: Bool {
         guard let currentFolder = selectedFolderURL else { return false }
+        if let cached = cachedParentNavigation,
+           cached.folder == currentFolder,
+           cached.scope == grantedScopeRootURL {
+            return cached.canNavigate
+        }
         let resolved = try? navigator.resolveParentDirectory(
             from: currentFolder,
             withinScope: grantedScopeRootURL,
             isParentReadable: parentPermissionChecker
         )
-        return resolved != nil
+        let result = resolved != nil
+        cachedParentNavigation = (currentFolder, grantedScopeRootURL, result)
+        return result
     }
 
     /// Ascends one folder level (`...`) in the left sidebar when permitted by workspace scope or user directory read permissions (`UI-001`, `DATA-007`, `SEC-002`).
@@ -471,6 +555,9 @@ public final class SwiftEditWorkbenchModel {
     }
 
     public var activeTabTitle: String {
+        if let bin = activeBinaryInspection {
+            return bin.title
+        }
         guard let activeID = tabSession.activeTabID,
               let tab = tabSession.tabs.first(where: { $0.id == activeID }) else {
             return "Untitled"
@@ -497,12 +584,21 @@ public final class SwiftEditWorkbenchModel {
         openFile(at: fileURL, withinScope: fileURL.deletingLastPathComponent())
     }
 
+    /// Refreshes shallow workspace entries using `.skipAndReport` so one external symlink never hides valid siblings while folder-root escape remains fail-closed (`BUG-017`, `SEC-003`).
     public func refreshFolderEntries() {
+        cachedParentNavigation = nil
         guard let folderURL = selectedFolderURL else { return }
         let scope = grantedScopeRootURL ?? folderURL
         do {
-            folderEntries = try navigator.listEntries(in: folderURL, withinScope: scope)
-            statusBannerMessage = nil
+            let listing = try navigator.listEntriesWithDiagnostics(
+                in: folderURL,
+                withinScope: scope,
+                symlinkPolicy: .skipAndReport
+            )
+            folderEntries = listing.entries
+            statusBannerMessage = listing.skippedExternalSymlinkCount > 0
+                ? "Skipped \(listing.skippedExternalSymlinkCount) external symlink(s) outside workspace scope."
+                : nil
         } catch {
             statusBannerMessage = "Folder access error: \(error)"
         }
@@ -524,34 +620,109 @@ public final class SwiftEditWorkbenchModel {
     }
 
     public func openFile(at url: URL, withinScope scope: URL?) {
+        asyncOpenGeneration &+= 1
         let standardizedURL = url.standardizedFileURL
-        if let existingTab = tabSession.tabs.first(where: { $0.fileURL?.standardizedFileURL == standardizedURL }) {
-            activateTab(id: existingTab.id)
-            recordRecentFileIfEligible(url: standardizedURL, withinScope: scope)
+        if activateExistingOrBinaryIfPresent(at: standardizedURL, withinScope: scope) {
             return
         }
         do {
             let loaded = try loader.load(from: standardizedURL, withinScope: scope)
-            sessionsByID[loaded.id] = loaded
-            savedBaselineByID[loaded.id] = loaded.snapshot
-            if loaded.isBinaryReadOnly {
-                statusBannerMessage = "Binary file opened in transient read-only inspection mode (Save, Format, Pin & SessionRecovery disabled)."
-                safetyBanner = InspectionSafetyBannerState.evaluate(snapshot: loaded.snapshot)
-                return
-            }
-            try tabSession.openOrActivate(
-                snapshot: loaded.snapshot,
-                title: standardizedURL.lastPathComponent,
-                fileURL: standardizedURL,
-                isDirty: false
-            )
-            recordRecentFileIfEligible(url: standardizedURL, withinScope: scope)
-            statusBannerMessage = nil
-            persistRecoveryState()
-            refreshDiagnosticsForActiveDocument()
+            try completeOpenLoadedSession(loaded, at: standardizedURL, withinScope: scope)
         } catch {
             statusBannerMessage = "Open failed: \(error)"
         }
+    }
+
+    /// Asynchronously opens `url` within `scope`, enforcing `64 MiB` fail-fast size checks before any payload read, offloading `>= 2 MiB` decoding off `@MainActor`, and discarding superseded completions if another tab opens or activates mid-flight (`PERF-004`, `CWE-400`, `REQ-004/N7`).
+    public func openFileAsync(at url: URL, withinScope scope: URL?) async {
+        asyncOpenGeneration &+= 1
+        let expectedGeneration = asyncOpenGeneration
+        let standardizedURL = url.standardizedFileURL
+        if activateExistingOrBinaryIfPresent(at: standardizedURL, withinScope: scope) {
+            return
+        }
+        do {
+            let attrs = try fileSystem.fileAttributes(at: standardizedURL, withinScope: scope)
+            if attrs.byteSize > DocumentLoader.maxAllowedFileBytes {
+                throw DomainError.fileTooLarge(byteCount: attrs.byteSize)
+            }
+            let loaded: DocumentSession
+            if attrs.byteSize >= Self.asyncFileLoadThresholdBytes {
+                let loaderCopy = loader
+                loaded = try await Task.detached(priority: .userInitiated) {
+                    try loaderCopy.load(from: standardizedURL, withinScope: scope)
+                }.value
+                guard asyncOpenGeneration == expectedGeneration, !Task.isCancelled else {
+                    return
+                }
+            } else {
+                loaded = try loader.load(from: standardizedURL, withinScope: scope)
+            }
+            try completeOpenLoadedSession(loaded, at: standardizedURL, withinScope: scope)
+        } catch {
+            if asyncOpenGeneration == expectedGeneration {
+                statusBannerMessage = "Open failed: \(error)"
+            }
+        }
+    }
+
+    private func activateExistingOrBinaryIfPresent(at standardizedURL: URL, withinScope scope: URL?) -> Bool {
+        if let existingBinary = activeBinaryInspection, existingBinary.fileURL == standardizedURL {
+            statusBannerMessage = "Binary file opened in transient read-only inspection mode (Save, Format, Pin & SessionRecovery disabled)."
+            safetyBanner = InspectionSafetyBannerState.evaluate(snapshot: existingBinary.snapshot)
+            return true
+        }
+        if let existingTab = tabSession.tabs.first(where: { $0.fileURL?.standardizedFileURL == standardizedURL }) {
+            activateTab(id: existingTab.id)
+            recordRecentFileIfEligible(url: standardizedURL, withinScope: scope)
+            return true
+        }
+        return false
+    }
+
+    private func completeOpenLoadedSession(_ loaded: DocumentSession, at standardizedURL: URL, withinScope scope: URL?) throws {
+        if loaded.isBinaryReadOnly {
+            activeBinaryInspection = BinaryInspectionPresentation(
+                id: loaded.id,
+                title: standardizedURL.lastPathComponent,
+                fileURL: standardizedURL,
+                snapshot: loaded.snapshot
+            )
+            currentSelection = SwiftEditCore.TextRange(location: 0, length: 0)
+            programmaticSelectionToken += 1
+            showMarkdownPreview = false
+            previewCache = nil
+            PreviewThumbnailCache.shared.clear()
+            isDiagnosticsPopoverPresented = false
+            statusBannerMessage = "Binary file opened in transient read-only inspection mode (Save, Format, Pin & SessionRecovery disabled)."
+            refreshDiagnosticsForActiveDocument()
+            return
+        }
+        activeBinaryInspection = nil
+        sessionsByID[loaded.id] = loaded
+        savedBaselineByID[loaded.id] = loaded.snapshot
+        try tabSession.openOrActivate(
+            snapshot: loaded.snapshot,
+            title: standardizedURL.lastPathComponent,
+            fileURL: standardizedURL,
+            isDirty: false
+        )
+        recordRecentFileIfEligible(url: standardizedURL, withinScope: scope)
+        statusBannerMessage = nil
+        persistRecoveryState()
+        refreshDiagnosticsForActiveDocument()
+    }
+
+    /// Dismisses transient binary read-only inspection, releasing the inspection buffer immediately and restoring the underlying active tab (`BUG-007`, `MEM-002`).
+    public func dismissBinaryInspection() {
+        asyncOpenGeneration &+= 1
+        guard let bin = activeBinaryInspection else { return }
+        activeBinaryInspection = nil
+        undoRegistry.removeUndoManager(for: bin.id)
+        currentSelection = SwiftEditCore.TextRange(location: 0, length: 0)
+        programmaticSelectionToken += 1
+        statusBannerMessage = nil
+        refreshDiagnosticsForActiveDocument()
     }
 
     public func openRecentFile(_ entry: RecentFileEntry) {
@@ -579,6 +750,8 @@ public final class SwiftEditWorkbenchModel {
     }
 
     public func newUntitledTab() {
+        asyncOpenGeneration &+= 1
+        activeBinaryInspection = nil
         let count = tabSession.tabs.count + 1
         let session = DocumentSession(text: "")
         sessionsByID[session.id] = session
@@ -590,6 +763,8 @@ public final class SwiftEditWorkbenchModel {
     }
 
     public func activateTab(id: DocumentID) {
+        asyncOpenGeneration &+= 1
+        activeBinaryInspection = nil
         try? tabSession.activateTab(id: id)
         currentSelection = SwiftEditCore.TextRange(location: 0, length: 0)
         persistRecoveryState()
@@ -597,17 +772,29 @@ public final class SwiftEditWorkbenchModel {
     }
 
     public func togglePin(id: DocumentID) {
-        guard let tab = tabSession.tabs.first(where: { $0.id == id }) else { return }
+        guard id != activeBinaryInspection?.id,
+              let tab = tabSession.tabs.first(where: { $0.id == id }) else { return }
         try? tabSession.setPinned(!tab.isPinned, for: id)
         persistRecoveryState()
     }
 
     public func closeTab(id: DocumentID) {
+        asyncOpenGeneration &+= 1
         do {
             _ = try tabSession.closeTab(id: id)
             sessionsByID.removeValue(forKey: id)
             savedBaselineByID.removeValue(forKey: id)
+            undoRegistry.removeUndoManager(for: id)
+            if bracketTopologyCache?.id == id { bracketTopologyCache = nil }
+            if backtickCache?.id == id { backtickCache = nil }
+            if previewCache?.id == id { previewCache = nil }
+            if tabSession.tabs.isEmpty {
+                diagnosticsTask?.cancel()
+                diffCoordinator.clear()
+                PreviewThumbnailCache.shared.clear()
+            }
             try? recoveryStore.removeRecoverySnapshot(for: id)
+            lastPersistedRecoveryRevisions.removeValue(forKey: id)
             persistRecoveryState()
             refreshDiagnosticsForActiveDocument()
         } catch DomainError.pinnedTabCloseForbidden {
@@ -618,12 +805,11 @@ public final class SwiftEditWorkbenchModel {
     }
 
     public func handleEditorTextChanged(_ newText: String) {
-        guard let activeID = tabSession.activeTabID,
+        guard activeBinaryInspection == nil,
+              let activeID = tabSession.activeTabID,
               var session = sessionsByID[activeID],
               !session.isBinaryReadOnly,
-              session.text != newText else { return }
-        let fullRange = SwiftEditCore.TextRange(location: 0, length: session.text.utf16.count)
-        _ = try? session.applyEdit(replacing: fullRange, with: newText)
+              (try? session.replaceFullTextIfChanged(newText)) == true else { return }
         sessionsByID[activeID] = session
         try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
         scheduleRecoveryPersist()
@@ -633,7 +819,16 @@ public final class SwiftEditWorkbenchModel {
     public func handleSelectionChanged(_ range: SwiftEditCore.TextRange) {
         currentSelection = range
         guard let session = activeDocumentSession else { return }
-        bracketResult = SearchDiffAndBracketEngine.evaluateBrackets(in: session.snapshot, caretLocation: range.location).completedValue
+        if let cached = bracketTopologyCache, cached.id == session.id, cached.revision == session.revision {
+            bracketResult = SearchDiffAndBracketEngine.balanceResult(from: cached.topology, caretLocation: range.location)
+        } else if session.text.utf8.count <= Self.syncDiagnosticThresholdUTF8 {
+            if let topology = SearchDiffAndBracketEngine.scanTopology(in: session.snapshot).completedValue {
+                bracketTopologyCache = (session.id, session.revision, topology)
+                bracketResult = SearchDiffAndBracketEngine.balanceResult(from: topology, caretLocation: range.location)
+            } else {
+                bracketResult = nil
+            }
+        }
         try? tabSession.updateTabState(id: session.id, caretLocation: range.location)
     }
 
@@ -724,6 +919,7 @@ public final class SwiftEditWorkbenchModel {
             savedBaselineByID[activeID] = saved.snapshot
             try? tabSession.updateTabState(id: activeID, title: standardizedTarget.lastPathComponent, fileURL: .some(standardizedTarget), isDirty: false, revision: saved.revision)
             try? recoveryStore.removeRecoverySnapshot(for: activeID)
+            lastPersistedRecoveryRevisions.removeValue(forKey: activeID)
             recordRecentFileIfEligible(url: standardizedTarget, withinScope: effectiveScope)
             statusBannerMessage = "Saved \(standardizedTarget.lastPathComponent)."
             persistRecoveryState()
@@ -745,7 +941,10 @@ public final class SwiftEditWorkbenchModel {
         return targetURL.deletingLastPathComponent()
     }
 
+    /// Refreshes lint, bracket topology, backticks, safety banner, and diff state: synchronous below `4096` UTF-8 bytes, off-`@MainActor` with `(DocumentID, BufferRevision)` race protection above `4096` (`PERF-002`, `PERF-006`, `N11`).
     public func refreshDiagnosticsForActiveDocument() {
+        diagnosticsTask?.cancel()
+        diagnosticsTask = nil
         guard let session = activeDocumentSession else {
             lintDiagnostics = []
             bracketResult = nil
@@ -753,26 +952,134 @@ public final class SwiftEditWorkbenchModel {
             return
         }
         let snap = session.snapshot
-        safetyBanner = InspectionSafetyBannerState.evaluate(snapshot: snap)
-        if MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle) {
-            lintDiagnostics = MarkdownLintAndFormatEngine.lint(snapshot: snap, profile: .allConstructs).completedValue?.diagnostics ?? []
-        } else {
-            lintDiagnostics = []
+        let caret = currentSelection.location
+        let isMarkdown = MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle)
+
+        if snap.text.utf8.count <= Self.syncDiagnosticThresholdUTF8 {
+            safetyBanner = InspectionSafetyBannerState.evaluate(snapshot: snap)
+            if isMarkdown {
+                lintDiagnostics = MarkdownLintAndFormatEngine.lint(snapshot: snap, profile: .allConstructs).completedValue?.diagnostics ?? []
+            } else {
+                lintDiagnostics = []
+            }
+            if case .off = activeLintStatus { isDiagnosticsPopoverPresented = false }
+            if let topology = SearchDiffAndBracketEngine.scanTopology(in: snap).completedValue {
+                bracketTopologyCache = (snap.id, snap.revision, topology)
+                bracketResult = SearchDiffAndBracketEngine.balanceResult(from: topology, caretLocation: caret)
+            } else {
+                bracketTopologyCache = nil
+                bracketResult = nil
+            }
+            let backticks = BacktickHighlightScanner.scan(in: snap).completedValue
+            backtickCache = (snap.id, snap.revision, backticks)
+            backtickResult = backticks
+            if showDiffPane, let baseline = savedBaselineByID[session.id] {
+                diffCoordinator.compare(lhs: baseline, rhs: snap)
+            }
+            return
         }
-        if case .off = activeLintStatus { isDiagnosticsPopoverPresented = false }
-        bracketResult = SearchDiffAndBracketEngine.evaluateBrackets(in: snap, caretLocation: currentSelection.location).completedValue
-        backtickResult = BacktickHighlightScanner.scan(in: snap).completedValue
+
+        safetyBanner = InspectionSafetyBannerState(
+            isBinaryReadOnlyBannerVisible: snap.isBinaryReadOnly,
+            canSave: !snap.isBinaryReadOnly,
+            canFormat: !snap.isBinaryReadOnly && !snap.isDegradedPlainText,
+            canPinTab: !snap.isBinaryReadOnly,
+            bidiWarnings: safetyBanner.bidiWarnings
+        )
+        if let cached = bracketTopologyCache, cached.id == snap.id, cached.revision == snap.revision {
+            bracketResult = SearchDiffAndBracketEngine.balanceResult(from: cached.topology, caretLocation: caret)
+        }
+        if !isMarkdown {
+            lintDiagnostics = []
+            isDiagnosticsPopoverPresented = false
+        }
+
+        let targetID = snap.id
+        let targetRevision = snap.revision
+        diagnosticsTask = Task { @MainActor [weak self] in
+            let worker = Task.detached(priority: .userInitiated) { () -> (lint: [MarkdownLintDiagnostic], topology: BracketTopology?, backticks: BacktickHighlightResult?, safety: InspectionSafetyBannerState)? in
+                guard !Task.isCancelled else { return nil }
+                let safety = InspectionSafetyBannerState.evaluate(snapshot: snap)
+                guard !Task.isCancelled else { return nil }
+                let lint: [MarkdownLintDiagnostic]
+                if isMarkdown {
+                    switch MarkdownLintAndFormatEngine.lint(snapshot: snap, profile: .allConstructs) {
+                    case .completed(let result):
+                        lint = result.diagnostics
+                    case .degradedOrTimedOut(.deadlineExceeded):
+                        guard !Task.isCancelled else { return nil }
+                        lint = MarkdownLintAndFormatEngine.lintSecurityFastPath(snapshot: snap).completedValue?.diagnostics ?? []
+                    case .degradedOrTimedOut:
+                        lint = []
+                    }
+                } else {
+                    lint = []
+                }
+                guard !Task.isCancelled else { return nil }
+                let topology = SearchDiffAndBracketEngine.scanTopology(in: snap).completedValue
+                guard !Task.isCancelled else { return nil }
+                let backticks = BacktickHighlightScanner.scan(in: snap).completedValue
+                return (lint, topology, backticks, safety)
+            }
+            let computed = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+
+            guard let self,
+                  let computed,
+                  !Task.isCancelled,
+                  let current = self.activeDocumentSession,
+                  current.id == targetID,
+                  current.revision == targetRevision else {
+                return
+            }
+            self.safetyBanner = computed.safety
+            self.lintDiagnostics = computed.lint
+            if case .off = self.activeLintStatus { self.isDiagnosticsPopoverPresented = false }
+            if let topology = computed.topology {
+                self.bracketTopologyCache = (targetID, targetRevision, topology)
+                self.bracketResult = SearchDiffAndBracketEngine.balanceResult(from: topology, caretLocation: self.currentSelection.location)
+            } else {
+                self.bracketTopologyCache = nil
+                self.bracketResult = nil
+            }
+            self.backtickCache = (targetID, targetRevision, computed.backticks)
+            self.backtickResult = computed.backticks
+        }
         if showDiffPane, let baseline = savedBaselineByID[session.id] {
             diffCoordinator.compare(lhs: baseline, rhs: snap)
         }
     }
 
-    /// Presents or hides the inline Find / Find & Replace / Go-to-Line bar (`Cmd+F`, `Cmd+H`, `Cmd+G`).
-    public func presentFindBar(mode: FindBarPresentationMode) {
-        findReplaceState.mode = mode
+    /// Awaits any in-flight background diagnostic pass for deterministic verification (`PERF-006`, `N11`).
+    public func awaitPendingDiagnostics() async {
+        await diagnosticsTask?.value
     }
 
-    /// Evaluates literal search matches for `findReplaceState.query` in the active document and selects the first match (`BC-004`, `BC-011`).
+    /// Presents or hides the inline Find / Find & Replace / Go-to-Line bar (`Cmd+F`, `Opt+Cmd+F`, `Cmd+G`), restoring editor focus when hidden (`BUG-009`).
+    public func presentFindBar(mode: FindBarPresentationMode) {
+        findReplaceState.mode = mode
+        if mode == .hidden {
+            requestEditorFocus()
+        }
+    }
+
+    /// Requests first-responder restoration onto the active `SwiftEditNSTextView` after dismissing modal chrome or bars (`BUG-009`).
+    public func requestEditorFocus() {
+        editorFocusRequestToken += 1
+    }
+
+    private func applyProgrammaticSelection(_ range: SwiftEditCore.TextRange, focusEditor: Bool) {
+        handleSelectionChanged(range)
+        programmaticSelectionToken += 1
+        if focusEditor {
+            requestEditorFocus()
+        }
+    }
+
+    /// Evaluates literal search matches for `findReplaceState.query` in the active document and selects the first match (`BC-004`, `BC-011`, `BUG-008`).
     public func executeFind() {
         guard let session = activeDocumentSession else { return }
         let options = SearchOptions(isCaseSensitive: findReplaceState.isCaseSensitive)
@@ -781,7 +1088,7 @@ public final class SwiftEditWorkbenchModel {
             findReplaceState.matches = ranges
             findReplaceState.activeMatchIndex = 0
             if let first = ranges.first {
-                handleSelectionChanged(first)
+                applyProgrammaticSelection(first, focusEditor: false)
             }
             statusBannerMessage = nil
         case .degradedOrTimedOut(let reason):
@@ -790,17 +1097,46 @@ public final class SwiftEditWorkbenchModel {
         }
     }
 
-    /// Selects the next literal match in `findReplaceState.matches`.
+    /// Selects the next literal match in `findReplaceState.matches` (`BUG-008`).
     public func findNextMatch() {
         if let next = findReplaceState.selectNextMatch() {
-            handleSelectionChanged(next)
+            applyProgrammaticSelection(next, focusEditor: false)
         }
     }
 
-    /// Selects the previous literal match in `findReplaceState.matches`.
+    /// Selects the previous literal match in `findReplaceState.matches` (`BUG-008`).
     public func findPreviousMatch() {
         if let previous = findReplaceState.selectPreviousMatch() {
-            handleSelectionChanged(previous)
+            applyProgrammaticSelection(previous, focusEditor: false)
+        }
+    }
+
+    /// Replaces the currently selected match in one `BufferRevision` step and re-runs `Find` to highlight the next occurrence (`BUG-009`).
+    public func executeReplaceSingle() {
+        guard let activeID = tabSession.activeTabID,
+              var session = sessionsByID[activeID],
+              !session.isBinaryReadOnly,
+              !findReplaceState.query.isEmpty,
+              !findReplaceState.matches.isEmpty else { return }
+        let idx = min(max(0, findReplaceState.activeMatchIndex), findReplaceState.matches.count - 1)
+        let targetRange = findReplaceState.matches[idx]
+        let edit = TextEdit(range: targetRange, replacement: findReplaceState.replacement)
+        do {
+            let expectedRev = session.revision
+            _ = try session.applyTextEdits([edit], expectedRevision: expectedRev)
+            sessionsByID[activeID] = session
+            try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            let replacedSelection = SwiftEditCore.TextRange(
+                location: targetRange.location,
+                length: (findReplaceState.replacement as NSString).length
+            )
+            applyProgrammaticSelection(replacedSelection, focusEditor: false)
+            statusBannerMessage = "Replaced 1 occurrence."
+            persistRecoveryState()
+            refreshDiagnosticsForActiveDocument()
+            executeFind()
+        } catch {
+            statusBannerMessage = "Replace failed: \(error)"
         }
     }
 
@@ -833,7 +1169,7 @@ public final class SwiftEditWorkbenchModel {
         }
     }
 
-    /// Moves the selection to the 1-based line parsed from `findReplaceState.goToLineText` (`Cmd+G`).
+    /// Moves the selection to the 1-based line parsed from `findReplaceState.goToLineText` (`Cmd+G`, `BUG-008`).
     public func executeGoToLine() {
         guard let session = activeDocumentSession,
               let targetLine = Int(findReplaceState.goToLineText.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -841,7 +1177,7 @@ public final class SwiftEditWorkbenchModel {
             statusBannerMessage = "Line number out of range."
             return
         }
-        handleSelectionChanged(range)
+        applyProgrammaticSelection(range, focusEditor: true)
         statusBannerMessage = nil
     }
 
@@ -903,33 +1239,57 @@ public final class SwiftEditWorkbenchModel {
         case .cancel:
             isPendingTerminationPrompt = false
             pendingDirtyCloseTabID = nil
+            completeTerminationPrompt(allowQuit: false)
         case .dontSave:
             for id in tabSession.tabs.map(\.id) {
                 _ = try? tabSession.closeTab(id: id, forcePinned: true)
                 sessionsByID.removeValue(forKey: id)
                 savedBaselineByID.removeValue(forKey: id)
+                undoRegistry.removeUndoManager(for: id)
                 try? recoveryStore.removeRecoverySnapshot(for: id)
             }
             isPendingTerminationPrompt = false
             pendingDirtyCloseTabID = nil
             persistRecoveryState()
+            completeTerminationPrompt(allowQuit: true)
         case .save:
             if let targetID = pendingDirtyCloseTabID {
                 activateTab(id: targetID)
                 saveActiveDocument()
+                if sessionsByID[targetID]?.isDirty == true {
+                    isPendingTerminationPrompt = false
+                    pendingDirtyCloseTabID = nil
+                    completeTerminationPrompt(allowQuit: false)
+                    return
+                }
+            }
+            if let nextDirty = tabSession.tabs.first(where: \.isDirty) {
+                pendingDirtyCloseTabID = nextDirty.id
+                isPendingTerminationPrompt = true
+                return
             }
             isPendingTerminationPrompt = false
             pendingDirtyCloseTabID = nil
+            persistRecoveryState()
+            completeTerminationPrompt(allowQuit: true)
         }
     }
 
-    /// Returns `true` when the application may terminate immediately, or `false` while staging a dirty-tab confirmation prompt (`Cmd+Q`).
-    public func requestApplicationTermination() -> Bool {
+    private func completeTerminationPrompt(allowQuit: Bool) {
+        let handler = terminationReplyHandler
+        terminationReplyHandler = nil
+        handler?(allowQuit)
+    }
+
+    /// Returns `true` when the application may terminate immediately, or `false` while staging sequential dirty-tab prompts (`Cmd+Q`) (`BUG-003`, `BUG-010`).
+    public func requestApplicationTermination(reply: (@MainActor (Bool) -> Void)? = nil) -> Bool {
         if let firstDirty = tabSession.tabs.first(where: \.isDirty) {
+            terminationReplyHandler = reply
             pendingDirtyCloseTabID = firstDirty.id
             isPendingTerminationPrompt = true
             return false
         }
+        terminationReplyHandler = nil
         return true
     }
 
@@ -1023,13 +1383,21 @@ public final class SwiftEditWorkbenchModel {
         }
     }
 
+    private static let syncDiagnosticThresholdUTF8: Int = 4_096
+    private static let asyncFileLoadThresholdBytes: UInt64 = 2 * 1024 * 1024
     /// Debounce window for per-keystroke `SessionRecovery` writes; tab switch, close, and other lifecycle events flush immediately (`UI-012`, `DATA-005`).
     public var recoveryDebounceNanoseconds: UInt64 = 500_000_000
     @ObservationIgnored private var recoveryDebounceTask: Task<Void, Never>?
+    @ObservationIgnored private var diagnosticsTask: Task<Void, Never>?
+    @ObservationIgnored private var asyncOpenGeneration: UInt64 = 0
+    @ObservationIgnored private var bracketTopologyCache: (id: DocumentID, revision: BufferRevision, topology: BracketTopology)?
+    @ObservationIgnored private var backtickCache: (id: DocumentID, revision: BufferRevision, result: BacktickHighlightResult?)?
     @ObservationIgnored private var previewCache: (id: DocumentID, revision: BufferRevision, document: GFMPreviewDocument?)?
 
     /// Monotonic token bumped whenever the model requests a caret/selection the editor view must adopt (`currentSelection`).
     public var programmaticSelectionToken: Int = 0
+    /// Monotonic token bumped whenever dismissing bars, sheets, Navigator, or Distraction-Free requires returning focus to `SwiftEditNSTextView` (`BUG-009`).
+    public private(set) var editorFocusRequestToken: Int = 0
 
     // MARK: Document navigator & distraction-free (014)
 
@@ -1049,15 +1417,20 @@ public final class SwiftEditWorkbenchModel {
         navigatorState = DocumentNavigatorState(headings: MarkdownHeadingOutlineEngine.outline(for: session.text))
     }
 
-    public func closeDocumentNavigator() { navigatorState = nil }
+    public func closeDocumentNavigator() {
+        navigatorState = nil
+        requestEditorFocus()
+    }
 
-    /// Jumps the caret to the selected heading (clamped to the current text) and closes the navigator.
+    /// Jumps the caret to the selected heading (clamped to the current text) and closes the navigator, returning focus to the editor.
     public func confirmDocumentNavigator() {
         defer { navigatorState = nil }
         guard let state = navigatorState, let session = activeDocumentSession,
-              let offset = state.confirm(documentLength: session.text.utf16.count) else { return }
-        currentSelection = SwiftEditCore.TextRange(location: offset, length: 0)
-        programmaticSelectionToken += 1
+              let offset = state.confirm(documentLength: session.text.utf16.count) else {
+            requestEditorFocus()
+            return
+        }
+        applyProgrammaticSelection(SwiftEditCore.TextRange(location: offset, length: 0), focusEditor: true)
     }
 
     /// `Option+1`: enters or leaves distraction-free mode; full screen is toggled only when the state differs.
@@ -1065,6 +1438,7 @@ public final class SwiftEditWorkbenchModel {
         if isDistractionFree {
             isDistractionFree = false
             if !fullScreenWasActiveBeforeDistractionFree, windowFullScreenQuery() { windowFullScreenToggle() }
+            requestEditorFocus()
         } else {
             fullScreenWasActiveBeforeDistractionFree = windowFullScreenQuery()
             isDistractionFree = true
@@ -1074,11 +1448,21 @@ public final class SwiftEditWorkbenchModel {
     }
 
     /// Resyncs the flag when the user leaves full screen with the system control.
-    public func windowDidExitFullScreen() { isDistractionFree = false }
+    public func windowDidExitFullScreen() {
+        isDistractionFree = false
+        requestEditorFocus()
+    }
 
-    /// ESC layering: navigator first, then distraction-free. Returns `true` when consumed.
+    /// Dismisses the header submenu overlay and restores editor focus cleanly (`BUG-006`, `BUG-009`).
+    public func dismissHeaderSubmenu() {
+        headerSubmenu.escapePressed()
+        requestEditorFocus()
+    }
+
+    /// ESC layering: header submenu first, then navigator, then distraction-free. Returns `true` when consumed.
     @discardableResult
     public func handleEscape() -> Bool {
+        if headerSubmenu.isOpen { dismissHeaderSubmenu(); return true }
         if navigatorState != nil { closeDocumentNavigator(); return true }
         if isDistractionFree { toggleDistractionFree(); return true }
         return false
@@ -1099,12 +1483,86 @@ public final class SwiftEditWorkbenchModel {
         return document
     }
 
-    /// 1-based source line of the caret, used as the single scroll driver of the preview (`UI-007`).
+    /// 1-based source line of the caret counting `\r\n`, `\n`, and `\r`, cached per `(DocumentID, BufferRevision, caretLocation)` and used as the single scroll driver of the preview (`BUG-016`, `UI-007`).
     public var previewSourceLine: Int {
         guard let session = activeDocumentSession else { return 0 }
-        let units = session.text.utf16
-        let limit = min(max(0, currentSelection.location), units.count)
-        return units.prefix(limit).reduce(1) { $0 + ($1 == 0x0A ? 1 : 0) }
+        let caret = currentSelection.location
+        if let cached = cachedPreviewSourceLine,
+           cached.id == session.id,
+           cached.revision == session.revision,
+           cached.caret == caret {
+            return cached.value
+        }
+        let line: Int
+        if let fast = session.text.utf8.withContiguousStorageIfAvailable({ buf -> Int in
+            guard let base = buf.baseAddress, !buf.isEmpty, caret > 0 else { return 1 }
+            let count = buf.count
+            var currentLine = 1
+            var utf16Offset = 0
+            var i = 0
+            while i < count && utf16Offset < caret {
+                let b = base[i]
+                if b == 0x0A {
+                    currentLine += 1
+                    utf16Offset += 1
+                    i += 1
+                } else if b == 0x0D {
+                    currentLine += 1
+                    if i + 1 < count && base[i + 1] == 0x0A && utf16Offset + 1 < caret {
+                        utf16Offset += 2
+                        i += 2
+                    } else {
+                        utf16Offset += 1
+                        i += 1
+                    }
+                } else if b < 0x80 {
+                    utf16Offset += 1
+                    i += 1
+                } else if b < 0xE0 {
+                    utf16Offset += 1
+                    i += 2
+                } else if b < 0xF0 {
+                    utf16Offset += 1
+                    i += 3
+                } else {
+                    utf16Offset += 2
+                    i += 4
+                }
+            }
+            return currentLine
+        }) {
+            line = fast
+        } else {
+            let units = session.text.utf16
+            let limit = min(max(0, caret), units.count)
+            var currentLine = 1
+            var idx = units.startIndex
+            var offset = 0
+            while idx < units.endIndex, offset < limit {
+                let u = units[idx]
+                if u == 0x0A {
+                    currentLine += 1
+                    idx = units.index(after: idx)
+                    offset += 1
+                } else if u == 0x0D {
+                    currentLine += 1
+                    let next = units.index(after: idx)
+                    if next < units.endIndex, units[next] == 0x0A, offset + 1 < limit {
+                        idx = units.index(after: next)
+                        offset += 2
+                    } else {
+                        idx = next
+                        offset += 1
+                    }
+                } else {
+                    idx = units.index(after: idx)
+                    offset += 1
+                }
+            }
+            line = currentLine
+        }
+        cachedPreviewSourceLine = (session.id, session.revision, caret, line)
+        return line
     }
 
     /// Image and link gate bound to the active file's directory and the granted workspace scope; `nil` (all images blocked) for unsaved tabs or without a granted folder (`SEC-002`, `SEC-003`).
@@ -1126,16 +1584,29 @@ public final class SwiftEditWorkbenchModel {
         )
     }
 
-    /// Diagnostics for inline underlines and gutter badges after active-line suppression of transient warnings (security errors always remain).
-    public var visibleLintDiagnostics: [MarkdownLintDiagnostic] {
-        ActiveLineLintSuppressionPolicy.visibleDiagnostics(lintDiagnostics, caretLine: previewSourceLine)
+    private func resolvedVisibleLintCache() -> (visible: [MarkdownLintDiagnostic], severityByLine: [Int: MarkdownLintSeverity]) {
+        let caretLine = previewSourceLine
+        let current = lintDiagnostics
+        if let cached = cachedVisibleLint, cached.caretLine == caretLine, cached.diagnostics == current {
+            return (cached.visible, cached.severityByLine)
+        }
+        let visible = ActiveLineLintSuppressionPolicy.visibleDiagnostics(current, caretLine: caretLine)
+        var severityByLine: [Int: MarkdownLintSeverity] = Dictionary(minimumCapacity: visible.count)
+        for d in visible where severityByLine[d.line] != .error {
+            severityByLine[d.line] = d.severity
+        }
+        cachedVisibleLint = (current, caretLine, visible, severityByLine)
+        return (visible, severityByLine)
     }
 
-    /// Worst severity per 1-based line (errors win) for gutter badges, built in one pass over at most `1000` diagnostics.
+    /// Diagnostics for inline underlines and gutter badges after active-line suppression of transient warnings (security errors always remain).
+    public var visibleLintDiagnostics: [MarkdownLintDiagnostic] {
+        resolvedVisibleLintCache().visible
+    }
+
+    /// Worst severity per 1-based line (errors win) for gutter badges, built once per `(lintDiagnostics, caretLine)`.
     public var gutterSeverityByLine: [Int: MarkdownLintSeverity] {
-        var result: [Int: MarkdownLintSeverity] = [:]
-        for d in visibleLintDiagnostics where result[d.line] != .error { result[d.line] = d.severity }
-        return result
+        resolvedVisibleLintCache().severityByLine
     }
 
     /// Toggles the diagnostics popover (`⇧⌘M`); ignored while lint is Off or Paused.
@@ -1219,9 +1690,13 @@ public final class SwiftEditWorkbenchModel {
         }
     }
 
-    /// Toggles the in-memory Zero-WebKit Markdown preview (`Cmd+P`, default off); never invokes the print spooler (`SEC-004`).
+    /// Toggles the offline native Markdown preview (`Cmd+P`, default off) and evicts preview + thumbnail caches immediately on hide (`MEM-001`, `SEC-004`).
     public func toggleMarkdownPreview() {
         showMarkdownPreview.toggle()
+        if !showMarkdownPreview {
+            previewCache = nil
+            PreviewThumbnailCache.shared.clear()
+        }
     }
 
     /// Formats only the Markdown lines intersecting `currentSelection` in one atomic `BufferRevision` step (`Option+Shift+Cmd+F`); rejected fail-closed on binary read-only buffers (`BC-004`, `DATA-003`, `UI-009`).
@@ -1287,6 +1762,9 @@ public final class SwiftEditWorkbenchModel {
 
     public func toggleDiffPane() {
         showDiffPane.toggle()
+        if !showDiffPane {
+            diffCoordinator.clear()
+        }
         refreshDiagnosticsForActiveDocument()
     }
 
@@ -1295,8 +1773,12 @@ public final class SwiftEditWorkbenchModel {
         isLeftSidebarCollapsed.toggle()
     }
 
-    /// Requests closing the currently active document tab (`Cmd+W`).
+    /// Requests closing the active binary inspection overlay or currently active document tab (`Cmd+W`).
     public func requestCloseActiveTab() {
+        if activeBinaryInspection != nil {
+            dismissBinaryInspection()
+            return
+        }
         guard let activeID = tabSession.activeTabID else { return }
         requestCloseTab(id: activeID)
     }
@@ -1529,7 +2011,12 @@ public final class SwiftEditWorkbenchModel {
         try? recoveryStore.saveManifest(manifest)
         for tab in tabSession.tabs {
             if let session = sessionsByID[tab.id], (session.isDirty || session.fileURL == nil), !session.isBinaryReadOnly {
-                try? recoveryStore.saveRecoverySnapshot(session.snapshot)
+                // Only rewrite `<UUID>.recovery` when the tab's BufferRevision actually changed since last persist.
+                if lastPersistedRecoveryRevisions[tab.id] != session.revision {
+                    if (try? recoveryStore.saveRecoverySnapshot(session.snapshot)) != nil {
+                        lastPersistedRecoveryRevisions[tab.id] = session.revision
+                    }
+                }
             }
         }
     }
@@ -1570,6 +2057,8 @@ public struct SwiftEditRootView: View {
     @State private var model = SwiftEditWorkbenchModel()
     @State private var draggingTabID: DocumentID?
     @State private var dragStartSidebarRatio: Double?
+    @State private var presentedDirtyAlertTabID: DocumentID?
+    @State private var gutterViewportMetrics: GutterViewportMetrics?
 
     public init() {}
 
@@ -1599,6 +2088,7 @@ public struct SwiftEditRootView: View {
                             onFind: { model.executeFind() },
                             onFindNext: { model.findNextMatch() },
                             onFindPrevious: { model.findPreviousMatch() },
+                            onReplace: { model.executeReplaceSingle() },
                             onReplaceAll: { model.executeReplaceAll() },
                             onGoToLine: { model.executeGoToLine() },
                             onClose: { model.presentFindBar(mode: .hidden) }
@@ -1620,12 +2110,8 @@ public struct SwiftEditRootView: View {
             if model.handleEscape() { return }
             model.headerSubmenu.escapePressed()
         }
-        .task(id: "\(model.headerSubmenu.pointerRegion)-\(model.headerSubmenu.isOpen)") {
-            for _ in 0..<40 {
-                try? await Task.sleep(for: .milliseconds(20))
-                if Task.isCancelled { return }
-                model.headerSubmenu.advance(by: .milliseconds(20))
-            }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            model.headerSubmenu.windowResignedKey()
         }
         .onChange(of: draggingTabID) { _, newValue in
             model.headerSubmenu.setDragging(newValue != nil || dragStartSidebarRatio != nil)
@@ -1641,6 +2127,7 @@ public struct SwiftEditRootView: View {
         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
         .preferredColorScheme(model.preferredSwiftUIColorScheme)
         .onAppear {
+            SwiftEditAppLifecycleBridge.shared.attach(workbench: model)
             model.windowFullScreenQuery = { NSApp.keyWindow?.styleMask.contains(.fullScreen) ?? false }
             model.windowFullScreenToggle = { NSApp.keyWindow?.toggleFullScreen(nil) }
             model.refreshUnmaskedSystemAppearance()
@@ -1674,6 +2161,7 @@ public struct SwiftEditRootView: View {
         .sheet(isPresented: $model.isCheatSheetPresented) {
             KeyboardShortcutsCheatSheetView(palette: model.palette) {
                 model.isCheatSheetPresented = false
+                model.requestEditorFocus()
             }
         }
         .sheet(isPresented: $model.isAboutSheetPresented) {
@@ -1682,20 +2170,36 @@ public struct SwiftEditRootView: View {
                 palette: model.palette
             ) {
                 model.isAboutSheetPresented = false
+                model.requestEditorFocus()
             }
         }
         .alert(
             "Unsaved Changes",
             isPresented: Binding(
-                get: { model.pendingDirtyCloseTabID != nil },
-                set: { if !$0 { model.resolvePendingDirtyClose(.cancel) } }
+                get: { presentedDirtyAlertTabID != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        presentedDirtyAlertTabID = nil
+                        if let nextID = model.pendingDirtyCloseTabID {
+                            Task { @MainActor in
+                                if model.pendingDirtyCloseTabID == nextID {
+                                    presentedDirtyAlertTabID = nextID
+                                }
+                            }
+                        }
+                    }
+                }
             )
         ) {
             Button("Save") { model.resolvePendingDirtyClose(.save) }
             Button("Don't Save", role: .destructive) { model.resolvePendingDirtyClose(.dontSave) }
             Button("Cancel", role: .cancel) { model.resolvePendingDirtyClose(.cancel) }
         } message: {
-            Text("Do you want to save your changes before closing?")
+            let title = model.tabSession.tabs.first(where: { $0.id == presentedDirtyAlertTabID })?.title ?? model.activeTabTitle
+            Text("Do you want to save your changes to \"\(title)\" before closing?")
+        }
+        .onChange(of: model.pendingDirtyCloseTabID) { _, newValue in
+            presentedDirtyAlertTabID = newValue
         }
         .alert(
             "Open All Files in Folder?",
@@ -1723,23 +2227,27 @@ public struct SwiftEditRootView: View {
         }
     }
 
-    /// Root-level overlay: `.zIndex(99)` click-outside shield beneath the `.zIndex(100)` translucent submenu, offset below the fixed header so the editor never shifts (`UI-012`).
+    /// Root-level overlay: `.zIndex(99)` outside-click shield positioned strictly below `topBarHeight` so the header logo trigger stays clickable to toggle, beneath the `.zIndex(100)` sticky submenu (`BUG-006`, `UI-012`).
     @ViewBuilder
     private var headerSubmenuOverlay: some View {
         if model.headerSubmenu.isOpen {
+            let items = model.headerCommandItems
             ZStack(alignment: .topLeading) {
                 Color.clear
                     .contentShape(Rectangle())
-                    .onTapGesture { model.headerSubmenu.clickToggle() }
+                    .padding(.top, CGFloat(HeaderSubmenuStateMachine.topBarHeight))
+                    .onTapGesture { model.dismissHeaderSubmenu() }
                     .zIndex(99)
                 HeaderBrandSubmenuView(
-                    items: model.headerCommandItems,
+                    items: items,
                     palette: model.palette,
-                    onSelect: { model.performHeaderCommand($0) }
+                    selectedID: model.headerSubmenu.selectedCommandID(in: items),
+                    onSelect: { model.performHeaderCommand($0) },
+                    onMoveSelection: { delta in model.headerSubmenu.moveSelection(delta: delta, items: items) },
+                    onSelectFirst: { model.headerSubmenu.selectFirst(items: items) },
+                    onSelectLast: { model.headerSubmenu.selectLast(items: items) },
+                    onDismiss: { model.dismissHeaderSubmenu() }
                 )
-                .onHover { hovering in
-                    model.headerSubmenu.pointerEntered(hovering ? .panel : .outside)
-                }
                 .padding(.leading, 12)
                 .offset(y: CGFloat(HeaderSubmenuStateMachine.topBarHeight))
                 .zIndex(100)
@@ -1755,18 +2263,22 @@ public struct SwiftEditRootView: View {
                     Text("PH.SwiftEdit")
                         .font(.headline.weight(.semibold))
                         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
-                    Image(systemName: "chevron.down")
+                    Image(systemName: model.headerSubmenu.isOpen ? "chevron.up" : "chevron.down")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
                 }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(model.headerSubmenu.isOpen ? model.palette.selectionBackground.swiftUIColor : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .fixedSize()
+            .help("PH.SwiftEdit commands menu")
             .accessibilityLabel("PH.SwiftEdit commands menu")
-            .onHover { hovering in
-                model.headerSubmenu.pointerEntered(hovering ? .trigger : .outside)
-            }
+            .accessibilityValue(model.headerSubmenu.isOpen ? "Expanded" : "Collapsed")
+            .accessibilityHint("Toggles the PH.SwiftEdit command menu")
 
             Spacer(minLength: 8)
 
@@ -1777,18 +2289,11 @@ public struct SwiftEditRootView: View {
                 Button("+") { model.zoomController.zoomIn() }
             }
             .fixedSize()
-            .onHover { hovering in
-                model.headerSubmenu.pointerEntered(hovering ? .trailingControls : .outside)
-            }
 
             appearanceSelectorControl
-                .onHover { hovering in
-                    model.headerSubmenu.pointerEntered(hovering ? .trailingControls : .outside)
-                }
         }
-        .frame(height: CGFloat(HeaderSubmenuStateMachine.topBarHeight))
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .frame(height: CGFloat(HeaderSubmenuStateMachine.topBarHeight))
         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
         .tint(model.palette.chromeAccent.swiftUIColor)
         .background(model.palette.topBarSurface.swiftUIColor)
@@ -1975,13 +2480,20 @@ public struct SwiftEditRootView: View {
     @ViewBuilder
     private var safetyAndErrorBanners: some View {
         if model.safetyBanner.isBinaryReadOnlyBannerVisible {
-            Text("READ-ONLY BINARY INSPECTION: Save, Format, Pin Tab, and SessionRecovery are disabled.")
-                .purpleSecurityWarningBanner(
-                    foreground: model.palette.binaryQuarantineForeground,
-                    background: model.palette.binaryQuarantineBackground,
-                    border: model.palette.binaryQuarantineBorder,
-                    verticalPadding: 6
-                )
+            HStack(spacing: 10) {
+                Text("READ-ONLY BINARY INSPECTION: Save, Format, Pin Tab, and SessionRecovery are disabled.")
+                Spacer()
+                if model.activeBinaryInspection != nil {
+                    Button("Dismiss Inspection") { model.dismissBinaryInspection() }
+                        .buttonStyle(.bordered)
+                }
+            }
+            .purpleSecurityWarningBanner(
+                foreground: model.palette.binaryQuarantineForeground,
+                background: model.palette.binaryQuarantineBackground,
+                border: model.palette.binaryQuarantineBorder,
+                verticalPadding: 6
+            )
         }
         if !model.safetyBanner.bidiWarnings.isEmpty {
             Text("BiDi Warning: \(model.safetyBanner.bidiWarnings.count) Unicode bidirectional control character(s) detected.")
@@ -2205,10 +2717,13 @@ public struct SwiftEditRootView: View {
                         LineNumberGutterView(
                             projection: model.activeLineNumberGutter,
                             palette: model.palette,
-                            severityByLine: model.gutterSeverityByLine
+                            severityByLine: model.gutterSeverityByLine,
+                            viewportMetrics: gutterViewportMetrics
                         )
                     }
                     TextKit2EditorView(
+                        documentID: session.id,
+                        bufferRevision: session.revision,
                         text: session.text,
                         isEditable: !session.isBinaryReadOnly,
                         palette: model.palette,
@@ -2223,6 +2738,9 @@ public struct SwiftEditRootView: View {
                         programmaticSelection: model.currentSelection,
                         programmaticSelectionToken: model.programmaticSelectionToken,
                         lintDiagnostics: model.visibleLintDiagnostics,
+                        undoRegistry: model.undoRegistry,
+                        editorFocusRequestToken: model.editorFocusRequestToken,
+                        onViewportMetricsChange: { gutterViewportMetrics = $0 },
                         onEscape: { model.handleEscape() }
                     )
                 }
@@ -2245,24 +2763,26 @@ public struct SwiftEditRootView: View {
 
     private var diffPanel: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 4) {
+            LazyVStack(alignment: .leading, spacing: 4) {
                 Text("Side-by-Side Myers Diff (vs Saved Baseline)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
-                ForEach(Array(model.diffCoordinator.rows.enumerated()), id: \.offset) { _, row in
+                let rows = model.diffCoordinator.rows
+                ForEach(rows.indices, id: \.self) { index in
+                    let row = rows[index]
                     HStack(spacing: 8) {
                         Text(row.lhsText ?? "")
                             .font(.caption.monospaced())
-                            .foregroundStyle((row.kind == .removed ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
+                            .foregroundStyle((row.lhsKind == .removed ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 4)
-                            .background(row.kind == .removed ? model.palette.diffRemovedBackground.swiftUIColor : Color.clear)
+                            .background(row.lhsKind == .removed ? model.palette.diffRemovedBackground.swiftUIColor : Color.clear)
                         Text(row.rhsText ?? "")
                             .font(.caption.monospaced())
-                            .foregroundStyle((row.kind == .inserted ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
+                            .foregroundStyle((row.rhsKind == .inserted ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 4)
-                            .background(row.kind == .inserted ? model.palette.diffInsertedBackground.swiftUIColor : Color.clear)
+                            .background(row.rhsKind == .inserted ? model.palette.diffInsertedBackground.swiftUIColor : Color.clear)
                     }
                 }
             }

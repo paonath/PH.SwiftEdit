@@ -40,33 +40,38 @@ public struct BacktickHighlightResult: Equatable, Sendable {
 /// - Reuses `SearchDiffAndBracketEngine.firstOverlongLine` to abort any buffer containing a line exceeding `4096` UTF-16 code units with `.degradedOrTimedOut(.lineLengthExceeded)`.
 /// - Runs strictly in linear $O(n)$ time without backtracking regular expressions.
 public enum BacktickHighlightScanner {
-    private static let backtickUnit: UInt16 = 0x60 // '`'
-    private static let spaceUnit: UInt16 = 0x20
-    private static let tabUnit: UInt16 = 0x09
-    private static let lfUnit: UInt16 = 0x0A
-    private static let crUnit: UInt16 = 0x0D
+    private static let backtickByte: UInt8 = 0x60 // '`'
+    private static let spaceByte: UInt8 = 0x20
+    private static let tabByte: UInt8 = 0x09
+    private static let lfByte: UInt8 = 0x0A
+    private static let crByte: UInt8 = 0x0D
 
-    /// Scans `snapshot` for multiline fenced backtick blocks and inline backtick code spans.
+    /// Scans `snapshot` for multiline fenced backtick blocks and inline backtick code spans in a single zero-copy UTF-8 pass.
     /// - Parameter snapshot: Immutable document snapshot to analyze.
     /// - Returns: `.completed(BacktickHighlightResult)` or `.degradedOrTimedOut` when binary or line-length limits trigger.
     public static func scan(in snapshot: DocumentSnapshot) -> EngineEvaluationOutcome<BacktickHighlightResult> {
         if snapshot.isBinaryReadOnly {
             return .degradedOrTimedOut(.binarySnapshot)
         }
-        if let overlong = SearchDiffAndBracketEngine.firstOverlongLine(
-            in: snapshot.text,
-            limit: SearchDiffAndBracketEngine.maxBracketScanLineUTF16Length
-        ) {
-            return .degradedOrTimedOut(.lineLengthExceeded(line: overlong.line, utf16Length: overlong.utf16Length))
-        }
 
-        let units = Array(snapshot.text.utf16)
-        let spans = scanUnits(units)
-        return .completed(BacktickHighlightResult(
-            documentID: snapshot.id,
-            revision: snapshot.revision,
-            spans: spans
-        ))
+        let limit = SearchDiffAndBracketEngine.maxBracketScanLineUTF16Length
+        var contiguous = snapshot.text
+        contiguous.makeContiguousUTF8()
+
+        let outcome: EngineEvaluationOutcome<[BacktickHighlightSpan]> = contiguous.utf8.withContiguousStorageIfAvailable { buf in
+            scanUTF8(buf, limit: limit)
+        }!
+
+        switch outcome {
+        case .completed(let spans):
+            return .completed(BacktickHighlightResult(
+                documentID: snapshot.id,
+                revision: snapshot.revision,
+                spans: spans
+            ))
+        case .degradedOrTimedOut(let reason):
+            return .degradedOrTimedOut(reason)
+        }
     }
 
     private struct BacktickRun {
@@ -74,27 +79,88 @@ public enum BacktickHighlightScanner {
         let length: Int
     }
 
-    private static func scanUnits(_ units: [UInt16]) -> [BacktickHighlightSpan] {
+    /// Single-pass UTF-8 scanner enforcing the UTF-16 line length ceiling while detecting fences and inline runs directly on contiguous bytes.
+    private static func scanUTF8(
+        _ buf: UnsafeBufferPointer<UInt8>,
+        limit: Int
+    ) -> EngineEvaluationOutcome<[BacktickHighlightSpan]> {
+        let count = buf.count
+        guard let base = buf.baseAddress, count > 0 else {
+            return .completed([])
+        }
+
         var spans: [BacktickHighlightSpan] = []
         var inlineRuns: [BacktickRun] = []
 
         var activeFenceStart: Int?
         var activeFenceLength = 0
 
-        var lineStart = 0
-        while lineStart < units.count {
-            let (lineEnd, nextLineStart) = lineBounds(in: units, from: lineStart)
+        var lineNumber = 1
+        var bytePos = 0
+        var utf16Pos = 0
+
+        while bytePos < count {
+            let lineByteStart = bytePos
+            let lineUTF16Start = utf16Pos
+            var hasBacktickOnLine = false
+
+            // Advance to end of line while tracking exact UTF-16 length and whether any backtick exists on this line.
+            while bytePos < count {
+                let b = base[bytePos]
+                if b == lfByte || b == crByte {
+                    break
+                }
+                if b == backtickByte {
+                    hasBacktickOnLine = true
+                    utf16Pos += 1
+                    bytePos += 1
+                } else if b < 0x80 {
+                    utf16Pos += 1
+                    bytePos += 1
+                } else if b < 0xE0 {
+                    utf16Pos += 1
+                    bytePos += 2
+                } else if b < 0xF0 {
+                    utf16Pos += 1
+                    bytePos += 3
+                } else {
+                    utf16Pos += 2
+                    bytePos += 4
+                }
+            }
+
+            let lineByteEnd = bytePos
+            let lineUTF16End = utf16Pos
+            let lineUTF16Length = lineUTF16End - lineUTF16Start
+            if lineUTF16Length > limit {
+                return .degradedOrTimedOut(.lineLengthExceeded(line: lineNumber, utf16Length: lineUTF16Length))
+            }
+
+            // Consume line terminator.
+            if bytePos < count {
+                if base[bytePos] == crByte && bytePos + 1 < count && base[bytePos + 1] == lfByte {
+                    bytePos += 2
+                    utf16Pos += 2
+                } else {
+                    bytePos += 1
+                    utf16Pos += 1
+                }
+            }
+            lineNumber += 1
+
+            // Fast-skip lines containing no backtick at all (the vast majority of lines).
+            guard hasBacktickOnLine else { continue }
 
             if let fenceStart = activeFenceStart {
-                if isClosingFence(in: units, lineStart: lineStart, lineEnd: lineEnd, minBackticks: activeFenceLength) {
+                if isClosingFence(base: base, lineStart: lineByteStart, lineEnd: lineByteEnd, minBackticks: activeFenceLength) {
                     spans.append(BacktickHighlightSpan(
-                        range: TextRange(location: fenceStart, length: lineEnd - fenceStart),
+                        range: TextRange(location: fenceStart, length: lineUTF16End - fenceStart),
                         kind: .fencedMultiline
                     ))
                     activeFenceStart = nil
                     activeFenceLength = 0
                 }
-            } else if let opener = openingFence(in: units, lineStart: lineStart, lineEnd: lineEnd) {
+            } else if let opener = openingFence(base: base, lineStart: lineByteStart, lineEnd: lineByteEnd, lineUTF16Start: lineUTF16Start) {
                 if !inlineRuns.isEmpty {
                     spans.append(contentsOf: pairInlineRuns(inlineRuns))
                     inlineRuns.removeAll(keepingCapacity: true)
@@ -102,15 +168,19 @@ public enum BacktickHighlightScanner {
                 activeFenceStart = opener.tickOffset
                 activeFenceLength = opener.tickCount
             } else {
-                collectInlineRuns(in: units, from: lineStart, to: lineEnd, into: &inlineRuns)
+                collectInlineRuns(
+                    base: base,
+                    lineStart: lineByteStart,
+                    lineEnd: lineByteEnd,
+                    lineUTF16Start: lineUTF16Start,
+                    into: &inlineRuns
+                )
             }
-
-            lineStart = nextLineStart
         }
 
         if let fenceStart = activeFenceStart {
             spans.append(BacktickHighlightSpan(
-                range: TextRange(location: fenceStart, length: units.count - fenceStart),
+                range: TextRange(location: fenceStart, length: utf16Pos - fenceStart),
                 kind: .fencedMultiline
             ))
         }
@@ -118,62 +188,58 @@ public enum BacktickHighlightScanner {
             spans.append(contentsOf: pairInlineRuns(inlineRuns))
         }
 
-        return spans.sorted { $0.range.location < $1.range.location }
+        return .completed(spans)
     }
 
-    private static func lineBounds(in units: [UInt16], from start: Int) -> (lineEnd: Int, nextLineStart: Int) {
-        var idx = start
-        while idx < units.count && units[idx] != lfUnit && units[idx] != crUnit {
-            idx += 1
-        }
-        let lineEnd = idx
-        if idx < units.count {
-            if units[idx] == crUnit, idx + 1 < units.count, units[idx + 1] == lfUnit {
-                idx += 2
-            } else {
-                idx += 1
-            }
-        }
-        return (lineEnd, idx)
-    }
-
-    private static func openingFence(in units: [UInt16], lineStart: Int, lineEnd: Int) -> (tickOffset: Int, tickCount: Int)? {
+    private static func openingFence(
+        base: UnsafePointer<UInt8>,
+        lineStart: Int,
+        lineEnd: Int,
+        lineUTF16Start: Int
+    ) -> (tickOffset: Int, tickCount: Int)? {
         var idx = lineStart
         var leadingSpaces = 0
-        while idx < lineEnd && units[idx] == spaceUnit && leadingSpaces < 3 {
+        while idx < lineEnd && base[idx] == spaceByte && leadingSpaces < 3 {
             idx += 1
             leadingSpaces += 1
         }
         let tickStart = idx
-        while idx < lineEnd && units[idx] == backtickUnit {
+        while idx < lineEnd && base[idx] == backtickByte {
             idx += 1
         }
         let tickCount = idx - tickStart
         guard tickCount >= 3 else { return nil }
         // CommonMark info strings on backtick fences may not contain backticks.
         while idx < lineEnd {
-            if units[idx] == backtickUnit {
+            if base[idx] == backtickByte {
                 return nil
             }
             idx += 1
         }
-        return (tickStart, tickCount)
+        // Only leading ASCII spaces precede tickStart, so UTF-16 offset == lineUTF16Start + leadingSpaces.
+        return (lineUTF16Start + leadingSpaces, tickCount)
     }
 
-    private static func isClosingFence(in units: [UInt16], lineStart: Int, lineEnd: Int, minBackticks: Int) -> Bool {
+    private static func isClosingFence(
+        base: UnsafePointer<UInt8>,
+        lineStart: Int,
+        lineEnd: Int,
+        minBackticks: Int
+    ) -> Bool {
         var idx = lineStart
         var leadingSpaces = 0
-        while idx < lineEnd && units[idx] == spaceUnit && leadingSpaces < 3 {
+        while idx < lineEnd && base[idx] == spaceByte && leadingSpaces < 3 {
             idx += 1
             leadingSpaces += 1
         }
         let tickStart = idx
-        while idx < lineEnd && units[idx] == backtickUnit {
+        while idx < lineEnd && base[idx] == backtickByte {
             idx += 1
         }
         guard idx - tickStart >= minBackticks else { return false }
         while idx < lineEnd {
-            if units[idx] != spaceUnit && units[idx] != tabUnit {
+            let b = base[idx]
+            if b != spaceByte && b != tabByte {
                 return false
             }
             idx += 1
@@ -181,23 +247,45 @@ public enum BacktickHighlightScanner {
         return true
     }
 
-    private static func collectInlineRuns(in units: [UInt16], from start: Int, to end: Int, into runs: inout [BacktickRun]) {
-        var idx = start
-        while idx < end {
-            if units[idx] == backtickUnit {
-                let runStart = idx
-                while idx < end && units[idx] == backtickUnit {
+    private static func collectInlineRuns(
+        base: UnsafePointer<UInt8>,
+        lineStart: Int,
+        lineEnd: Int,
+        lineUTF16Start: Int,
+        into runs: inout [BacktickRun]
+    ) {
+        var idx = lineStart
+        var utf16Offset = lineUTF16Start
+        while idx < lineEnd {
+            let b = base[idx]
+            if b == backtickByte {
+                let runUTF16Start = utf16Offset
+                var runLen = 0
+                while idx < lineEnd && base[idx] == backtickByte {
                     idx += 1
+                    utf16Offset += 1
+                    runLen += 1
                 }
-                runs.append(BacktickRun(offset: runStart, length: idx - runStart))
-            } else {
+                runs.append(BacktickRun(offset: runUTF16Start, length: runLen))
+            } else if b < 0x80 {
+                utf16Offset += 1
                 idx += 1
+            } else if b < 0xE0 {
+                utf16Offset += 1
+                idx += 2
+            } else if b < 0xF0 {
+                utf16Offset += 1
+                idx += 3
+            } else {
+                utf16Offset += 2
+                idx += 4
             }
         }
     }
 
     /// Pairs inline backtick runs in strictly linear $O(k)$ time using per-length position queues.
     private static func pairInlineRuns(_ runs: [BacktickRun]) -> [BacktickHighlightSpan] {
+        guard runs.count >= 2 else { return [] }
         var positionsByLength: [Int: [Int]] = [:]
         for (idx, run) in runs.enumerated() {
             positionsByLength[run.length, default: []].append(idx)

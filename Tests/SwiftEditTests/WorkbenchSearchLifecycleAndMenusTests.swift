@@ -29,16 +29,9 @@ struct WorkbenchSearchLifecycleAndMenusTests {
         let notesURL = tempRoot.appendingPathComponent("notes.md")
         try Data("one\ntwo\none".utf8).write(to: notesURL)
 
-        let suiteName = "it.ph.SwiftEdit.lifecycle.\(UUID().uuidString)"
-        let recentSuite = suiteName + ".recent"
-        defer {
-            UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
-            UserDefaults(suiteName: recentSuite)?.removePersistentDomain(forName: recentSuite)
-        }
-
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suiteName,
-            recentFilesSuiteName: recentSuite,
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recoveryDir,
             bookmarkCoder: DeterministicBookmarkCoderFake()
         )
@@ -94,16 +87,9 @@ struct WorkbenchSearchLifecycleAndMenusTests {
             try Data("item \(idx)".utf8).write(to: fileURL)
         }
 
-        let suiteName = "it.ph.SwiftEdit.batch.\(UUID().uuidString)"
-        let recentSuite = suiteName + ".recent"
-        defer {
-            UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
-            UserDefaults(suiteName: recentSuite)?.removePersistentDomain(forName: recentSuite)
-        }
-
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suiteName,
-            recentFilesSuiteName: recentSuite,
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: tempRoot.appendingPathComponent("Recovery", isDirectory: true),
             bookmarkCoder: DeterministicBookmarkCoderFake()
         )
@@ -149,7 +135,7 @@ struct WorkbenchSearchLifecycleAndMenusTests {
         let about = try AboutSheetDescriptor.resolve(versionManifestData: versionData)
         let repoPrompt = try #require(AboutSheetDescriptor.prepareRepositoryLinkConfirmation(rawURI: AboutSheetDescriptor.officialRepositoryURL))
 
-        // THEN all 5 categories, required keyboard shortcuts, sidebar '...' parent folder entry, version "0.0.1-alpha1", and confirmed GitHub HTTPS prompt are present
+        // THEN all 5 categories, required keyboard shortcuts (including Opt+Cmd+F & Shift+Cmd+Z), sidebar '...' entry, and confirmed GitHub HTTPS prompt are present
         #expect(sections.map(\.category) == ["File", "Edit", "Navigation", "View", "Sidebar"])
         #expect(allItems.contains(where: { $0.shortcut == "Cmd+N" }))
         #expect(allItems.contains(where: { $0.shortcut == "Cmd+O" }))
@@ -160,11 +146,15 @@ struct WorkbenchSearchLifecycleAndMenusTests {
         #expect(allItems.contains(where: { $0.shortcut == "Cmd+W" }))
         #expect(allItems.contains(where: { $0.shortcut == "Cmd+Q" }))
         #expect(allItems.contains(where: { $0.shortcut == "Cmd+Z" }))
-        #expect(allItems.contains(where: { $0.shortcut == "Cmd+Y" }))
+        #expect(allItems.contains(where: { $0.shortcut == "Shift+Cmd+Z" }))
+        #expect(!allItems.contains(where: { $0.shortcut == "Cmd+Y" }))
         #expect(allItems.contains(where: { $0.shortcut == "Cmd+D" }))
         #expect(allItems.contains(where: { $0.shortcut == "Cmd+F" }))
-        #expect(allItems.contains(where: { $0.shortcut == "Cmd+H" }))
+        #expect(allItems.contains(where: { $0.shortcut == "Opt+Cmd+F" }))
+        #expect(!allItems.contains(where: { $0.shortcut == "Cmd+H" }))
         #expect(allItems.contains(where: { $0.shortcut == "Cmd+G" }))
+        #expect(allItems.contains(where: { $0.title.contains("Diff") }))
+        #expect(allItems.contains(where: { $0.title == "Bold" }))
         #expect(allItems.contains(where: { $0.shortcut == "..." }))
         let expectedStamp = try InfoPlistVersionStamper.parseVersionDescriptor(from: versionData)
         #expect(about.fullVersion == expectedStamp.fullBuildVersionString)

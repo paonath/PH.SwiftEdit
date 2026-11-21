@@ -14,83 +14,93 @@ public enum HeaderSubmenuRegion: Equatable, Sendable {
     case outside
 }
 
-/// Deterministic value-type lifecycle of the translucent header submenu (WCAG 2.2 SC 1.4.13: dismissible, hoverable, persistent).
+/// Click-and-keyboard-only lifecycle of the translucent header submenu (`BUG-006`, `PERF-004`, WCAG 2.2 SC 1.4.13).
 ///
-/// - Hover on `.trigger` opens after a continuous `120 ms` dwell; `clickToggle()` opens or closes in `0 ms`.
-/// - Leaving both `.trigger` and `.panel` while open closes after a `180 ms` grace period, so pointer travel between them never flickers.
-/// - An active tab or sidebar drag blocks hover opening.
-/// - `escapePressed()` closes immediately and latches `isSuppressedUntilPointerExit` until the pointer leaves the trigger or the user clicks.
-///
-/// Time is injected through `advance(by:)` so unit tests need no wall-clock waits (`TEST-004`).
+/// - Hovering the brand trigger or leaving the trigger/panel NEVER auto-opens or auto-closes the submenu.
+/// - `clickToggle()` opens or closes instantaneously in `0 ms` and remains sticky until an explicit outside click, logo re-click, item click, `Escape`, or `windowResignedKey()`.
+/// - Exposes deterministic keyboard navigation (`moveSelection`, `selectFirst`, `selectLast`) skipping disabled items on quarantined binary tabs (`TEST-004`).
 public struct HeaderSubmenuStateMachine: Equatable, Sendable {
-    /// Fixed header height guaranteeing `0.0 pt` editor displacement when the overlay opens (`UI-012`).
+    /// Fixed header height guaranteeing `0.0 pt` editor displacement and exact overlay alignment (`UI-012`).
     public static let topBarHeight: Double = 36.0
-    public static let dwellDuration: Duration = .milliseconds(120)
-    public static let exitGraceDuration: Duration = .milliseconds(180)
 
     public private(set) var isOpen: Bool = false
-    public private(set) var isSuppressedUntilPointerExit: Bool = false
     public private(set) var pointerRegion: HeaderSubmenuRegion = .outside
+    public private(set) var selectedIndex: Int?
     private var isDragging: Bool = false
-    private var dwellElapsed: Duration = .zero
-    private var graceElapsed: Duration = .zero
 
     public init() {}
 
-    /// Records that the pointer moved into `region`, resetting the relevant timers.
+    /// Records the latest pointer region for diagnostics without triggering hover open or auto-close (`BUG-006`).
     public mutating func pointerEntered(_ region: HeaderSubmenuRegion) {
         pointerRegion = region
-        dwellElapsed = .zero
-        graceElapsed = .zero
-        if region != .trigger {
-            isSuppressedUntilPointerExit = false
-        }
     }
 
-    /// Advances the dwell or grace timer by `duration` and applies any resulting open/close transition.
+    /// Deliberate no-op: hover dwell and grace auto-dismiss timers are disabled so human users can reach and click every item without time pressure (`BUG-006`, `PERF-004`).
     public mutating func advance(by duration: Duration) {
-        if isOpen {
-            guard pointerRegion != .trigger, pointerRegion != .panel else { return }
-            graceElapsed += duration
-            if graceElapsed >= Self.exitGraceDuration {
-                isOpen = false
-                graceElapsed = .zero
-            }
-            return
-        }
-        guard pointerRegion == .trigger, !isDragging, !isSuppressedUntilPointerExit else { return }
-        dwellElapsed += duration
-        if dwellElapsed >= Self.dwellDuration {
-            isOpen = true
-            dwellElapsed = .zero
-        }
+        _ = duration
     }
 
-    /// Instant toggle for click, tap, or keyboard activation; clears any `Escape` latch.
+    /// Instantaneous `0 ms` toggle for pointer click, tap, or VoiceOver/keyboard activation (`BUG-006`).
     public mutating func clickToggle() {
-        isSuppressedUntilPointerExit = false
         isOpen.toggle()
-        dwellElapsed = .zero
-        graceElapsed = .zero
+        selectedIndex = isOpen ? 0 : nil
     }
 
-    /// Closes immediately and suppresses hover reopening until the pointer exits the trigger.
+    /// Closes immediately on `Escape` press (`WCAG 2.2`).
     public mutating func escapePressed() {
         isOpen = false
-        isSuppressedUntilPointerExit = true
-        dwellElapsed = .zero
-        graceElapsed = .zero
+        selectedIndex = nil
     }
 
-    /// Blocks hover opening while a tab or sidebar drag is in progress.
+    /// Tracks tab or sidebar drag state.
     public mutating func setDragging(_ dragging: Bool) {
         isDragging = dragging
-        if dragging { dwellElapsed = .zero }
     }
 
-    /// Closes after a command is chosen or the window resigns key, latching until pointer exit.
+    /// Closes immediately after executing a submenu command.
     public mutating func dismissAfterCommand() {
         escapePressed()
+    }
+
+    /// Closes immediately when the host window resigns key focus.
+    public mutating func windowResignedKey() {
+        escapePressed()
+    }
+
+    /// Moves keyboard focus highlight across enabled command rows by `delta` steps, wrapping cleanly.
+    public mutating func moveSelection(delta: Int, items: [HeaderCommandItem]) {
+        guard isOpen else { return }
+        let enabledIndices = items.indices.filter { items[$0].isEnabled }
+        guard !enabledIndices.isEmpty else {
+            selectedIndex = nil
+            return
+        }
+        guard let current = selectedIndex, let pos = enabledIndices.firstIndex(of: current) else {
+            selectedIndex = enabledIndices.first
+            return
+        }
+        let nextPos = (pos + delta % enabledIndices.count + enabledIndices.count) % enabledIndices.count
+        selectedIndex = enabledIndices[nextPos]
+    }
+
+    /// Moves keyboard selection to the first enabled command (`Home`).
+    public mutating func selectFirst(items: [HeaderCommandItem]) {
+        guard isOpen else { return }
+        selectedIndex = items.firstIndex(where: \.isEnabled)
+    }
+
+    /// Moves keyboard selection to the last enabled command (`End`).
+    public mutating func selectLast(items: [HeaderCommandItem]) {
+        guard isOpen else { return }
+        selectedIndex = items.lastIndex(where: \.isEnabled)
+    }
+
+    /// Returns the currently highlighted enabled `HeaderCommandID`, if any.
+    public func selectedCommandID(in items: [HeaderCommandItem]) -> HeaderCommandID? {
+        guard isOpen, let selectedIndex, items.indices.contains(selectedIndex), items[selectedIndex].isEnabled else {
+            return nil
+        }
+        return items[selectedIndex].id
     }
 }
 
@@ -140,17 +150,39 @@ public enum HeaderCommandCatalog {
 public struct HeaderBrandSubmenuView: View {
     public let items: [HeaderCommandItem]
     public let palette: PurpleThemePalette
-    public let onSelect: (HeaderCommandID) -> Void
+    public var selectedID: HeaderCommandID?
+    public var onSelect: (HeaderCommandID) -> Void
+    public var onMoveSelection: ((Int) -> Void)?
+    public var onSelectFirst: (() -> Void)?
+    public var onSelectLast: (() -> Void)?
+    public var onDismiss: (() -> Void)?
+    @State private var hoveredID: HeaderCommandID?
+    @FocusState private var isSubmenuFocused: Bool
 
-    public init(items: [HeaderCommandItem], palette: PurpleThemePalette, onSelect: @escaping (HeaderCommandID) -> Void) {
+    public init(
+        items: [HeaderCommandItem],
+        palette: PurpleThemePalette,
+        selectedID: HeaderCommandID? = nil,
+        onSelect: @escaping (HeaderCommandID) -> Void,
+        onMoveSelection: ((Int) -> Void)? = nil,
+        onSelectFirst: (() -> Void)? = nil,
+        onSelectLast: (() -> Void)? = nil,
+        onDismiss: (() -> Void)? = nil
+    ) {
         self.items = items
         self.palette = palette
+        self.selectedID = selectedID
         self.onSelect = onSelect
+        self.onMoveSelection = onMoveSelection
+        self.onSelectFirst = onSelectFirst
+        self.onSelectLast = onSelectLast
+        self.onDismiss = onDismiss
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(items, id: \.id) { item in
+                let isHighlighted = item.isEnabled && (hoveredID == item.id || selectedID == item.id)
                 Button(action: { onSelect(item.id) }) {
                     HStack(spacing: 10) {
                         Image(systemName: item.symbolName)
@@ -171,10 +203,19 @@ public struct HeaderBrandSubmenuView: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
+                    .background(isHighlighted ? palette.selectionBackground.swiftUIColor : Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(selectedID == item.id && item.isEnabled ? palette.chromeAccent.swiftUIColor : Color.clear, lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!item.isEnabled)
+                .onHover { hovering in
+                    hoveredID = hovering ? item.id : (hoveredID == item.id ? nil : hoveredID)
+                }
                 .accessibilityLabel(item.title)
             }
         }
@@ -187,6 +228,39 @@ public struct HeaderBrandSubmenuView: View {
                 .stroke(palette.hairlineBorder.swiftUIColor, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .focusable()
+        .focused($isSubmenuFocused)
+        .focusEffectDisabled()
+        .onAppear {
+            isSubmenuFocused = true
+        }
+        .onKeyPress(.downArrow) {
+            onMoveSelection?(1)
+            return .handled
+        }
+        .onKeyPress(.upArrow) {
+            onMoveSelection?(-1)
+            return .handled
+        }
+        .onKeyPress(.home) {
+            onSelectFirst?()
+            return .handled
+        }
+        .onKeyPress(.end) {
+            onSelectLast?()
+            return .handled
+        }
+        .onKeyPress(.return) {
+            if let selectedID { onSelect(selectedID) }
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            onDismiss?()
+            return .handled
+        }
+        .onExitCommand {
+            onDismiss?()
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("PH.SwiftEdit command menu")
     }

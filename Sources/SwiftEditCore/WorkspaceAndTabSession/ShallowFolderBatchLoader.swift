@@ -53,8 +53,15 @@ public struct ShallowFolderBatchLoader: Sendable {
     /// - Enforces a `64 MiB` per-file skip and a cumulative `maxBatchBytes` (`256 MiB` default) memory ceiling (`DomainError.batchLimitExceeded`).
     public func plan(folder: URL, withinScope scopeURL: URL? = nil) throws -> BatchOpenPlan {
         let effectiveScope = scopeURL ?? folder
-        let entries = try navigator.listEntries(in: folder, withinScope: scopeURL)
+        let (listing, regularFileFlags) = try navigator.listEntriesInternal(
+            in: folder,
+            withinScope: scopeURL,
+            symlinkPolicy: .failClosed,
+            probeBinary: false
+        )
+        let entries = listing.entries
         var eligibleFiles: [URL] = []
+        eligibleFiles.reserveCapacity(entries.count)
         var skippedBinaryCount = 0
         var skippedFolderCount = 0
         var totalBytes: UInt64 = 0
@@ -64,21 +71,23 @@ public struct ShallowFolderBatchLoader: Sendable {
                 skippedFolderCount += 1
                 continue
             }
-            guard Self.isRegularFile(at: entry.url) else {
+            guard regularFileFlags[entry.url] ?? Self.isRegularFile(at: entry.url) else {
                 continue
             }
             let attrs = try fileSystem.fileAttributes(at: entry.url, withinScope: effectiveScope)
             if attrs.byteSize > DocumentLoader.maxAllowedFileBytes {
                 continue
             }
-            let prefix = try fileSystem.readData(
-                at: entry.url,
-                maxBytes: DocumentCodec.binaryProbeBytes,
-                withinScope: effectiveScope
-            )
-            if DocumentCodec.isBinaryPrefix(prefix) {
-                skippedBinaryCount += 1
-                continue
+            if attrs.byteSize > 0 {
+                let prefix = try fileSystem.readData(
+                    at: entry.url,
+                    maxBytes: DocumentCodec.binaryProbeBytes,
+                    withinScope: effectiveScope
+                )
+                if DocumentCodec.isBinaryPrefix(prefix) {
+                    skippedBinaryCount += 1
+                    continue
+                }
             }
             let (updatedTotal, overflow) = totalBytes.addingReportingOverflow(attrs.byteSize)
             if overflow || updatedTotal > maxBatchBytes {

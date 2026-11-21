@@ -33,13 +33,18 @@ public enum TextEncoding: String, CaseIterable, Codable, Sendable {
     case utf16LEWithBOM
     case utf16BEWithBOM
 
+    private static let emptyBOM: [UInt8] = []
+    private static let utf8BOM: [UInt8] = [0xEF, 0xBB, 0xBF]
+    private static let utf16LEBOM: [UInt8] = [0xFF, 0xFE]
+    private static let utf16BEBOM: [UInt8] = [0xFE, 0xFF]
+
     /// Leading byte-order mark bytes emitted on serialization (`[]` for BOM-less UTF-8).
     public var bomBytes: [UInt8] {
         switch self {
-        case .utf8: return []
-        case .utf8WithBOM: return [0xEF, 0xBB, 0xBF]
-        case .utf16LEWithBOM: return [0xFF, 0xFE]
-        case .utf16BEWithBOM: return [0xFE, 0xFF]
+        case .utf8: return Self.emptyBOM
+        case .utf8WithBOM: return Self.utf8BOM
+        case .utf16LEWithBOM: return Self.utf16LEBOM
+        case .utf16BEWithBOM: return Self.utf16BEBOM
         }
     }
 }
@@ -51,18 +56,38 @@ public enum LineEnding: String, CaseIterable, Codable, Sendable {
     /// Classic Mac `\r` (`U+000D`) line break evaluated strictly after `\r\n` so Windows `CRLF` files are never misclassified (`DATA-004`).
     case cr = "\r"
 
-    /// Detects the wire line ending by scanning Unicode scalars with deterministic precedence `crlf > cr > lf`.
+    /// Detects the wire line ending by scanning UTF-8 bytes with deterministic precedence `crlf > cr > lf`.
     /// - Parameter rawText: Decoded string prior to canonical `\n` normalization.
     /// - Returns: `.crlf` if any `U+000D U+000A` pair exists, `.cr` if any bare `U+000D` exists, otherwise `.lf`.
     public static func detect(in rawText: String) -> LineEnding {
-        let scalars = rawText.unicodeScalars
-        var index = scalars.startIndex
+        if let result = rawText.utf8.withContiguousStorageIfAvailable({ buf -> LineEnding in
+            guard let base = buf.baseAddress, !buf.isEmpty else { return .lf }
+            let count = buf.count
+            var pos = 0
+            var sawBareCR = false
+            while pos < count {
+                guard let hit = memchr(base + pos, 0x0D, count - pos) else {
+                    break
+                }
+                let crIdx = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
+                if crIdx + 1 < count && base[crIdx + 1] == 0x0A {
+                    return .crlf
+                }
+                sawBareCR = true
+                pos = crIdx + 1
+            }
+            return sawBareCR ? .cr : .lf
+        }) {
+            return result
+        }
+        let bytes = rawText.utf8
+        var index = bytes.startIndex
         var sawBareCR = false
-        while index < scalars.endIndex {
-            let scalar = scalars[index]
-            let nextIndex = scalars.index(after: index)
-            if scalar.value == 0x0D {
-                if nextIndex < scalars.endIndex && scalars[nextIndex].value == 0x0A {
+        while index < bytes.endIndex {
+            let b = bytes[index]
+            let nextIndex = bytes.index(after: index)
+            if b == 0x0D {
+                if nextIndex < bytes.endIndex && bytes[nextIndex] == 0x0A {
                     return .crlf
                 }
                 sawBareCR = true
@@ -72,27 +97,63 @@ public enum LineEnding: String, CaseIterable, Codable, Sendable {
         return sawBareCR ? .cr : .lf
     }
 
-    /// Normalizes `\r\n` pairs and bare `\r` scalars into single `\n` (`U+000A`) breaks in one scalar pass.
+    /// Normalizes `\r\n` pairs and bare `\r` scalars into single `\n` (`U+000A`) breaks in one UTF-8 pass (zero-copy fast path when no `\r` is present).
     public static func normalizeToLF(_ rawText: String) -> String {
-        let scalars = rawText.unicodeScalars
-        var output = String.UnicodeScalarView()
-        output.reserveCapacity(scalars.count)
-        var index = scalars.startIndex
-        while index < scalars.endIndex {
-            let scalar = scalars[index]
-            let nextIndex = scalars.index(after: index)
-            if scalar.value == 0x0D {
-                output.append("\n")
-                if nextIndex < scalars.endIndex && scalars[nextIndex].value == 0x0A {
-                    index = scalars.index(after: nextIndex)
+        if let fastResult = rawText.utf8.withContiguousStorageIfAvailable({ buf -> String? in
+            guard let base = buf.baseAddress, !buf.isEmpty else { return rawText }
+            let count = buf.count
+            guard let firstHit = memchr(base, 0x0D, count) else {
+                return rawText
+            }
+            let firstCR = UnsafePointer(firstHit.assumingMemoryBound(to: UInt8.self)) - base
+            return String(unsafeUninitializedCapacity: count) { dst in
+                var outLen = 0
+                if firstCR > 0 {
+                    dst.baseAddress!.update(from: base, count: firstCR)
+                    outLen = firstCR
+                }
+                var i = firstCR
+                while i < count {
+                    let b = base[i]
+                    if b == 0x0D {
+                        dst[outLen] = 0x0A
+                        outLen += 1
+                        if i + 1 < count && base[i + 1] == 0x0A {
+                            i += 2
+                        } else {
+                            i += 1
+                        }
+                    } else {
+                        dst[outLen] = b
+                        outLen += 1
+                        i += 1
+                    }
+                }
+                return outLen
+            }
+        }), let normalized = fastResult {
+            return normalized
+        }
+        guard rawText.utf8.contains(0x0D) else { return rawText }
+        var outBytes: [UInt8] = []
+        outBytes.reserveCapacity(rawText.utf8.count)
+        let bytes = rawText.utf8
+        var index = bytes.startIndex
+        while index < bytes.endIndex {
+            let b = bytes[index]
+            let nextIndex = bytes.index(after: index)
+            if b == 0x0D {
+                outBytes.append(0x0A)
+                if nextIndex < bytes.endIndex && bytes[nextIndex] == 0x0A {
+                    index = bytes.index(after: nextIndex)
                     continue
                 }
             } else {
-                output.append(scalar)
+                outBytes.append(b)
             }
             index = nextIndex
         }
-        return String(output)
+        return String(decoding: outBytes, as: UTF8.self)
     }
 
     /// Re-applies the document's wire line-break convention (`\n`, `\r\n`, or `\r`) prior to byte serialization.
@@ -101,8 +162,66 @@ public enum LineEnding: String, CaseIterable, Codable, Sendable {
         case .lf:
             return canonicalLF
         case .crlf:
+            if let fast = canonicalLF.utf8.withContiguousStorageIfAvailable({ buf -> String in
+                guard let base = buf.baseAddress, !buf.isEmpty else { return canonicalLF }
+                let count = buf.count
+                guard let firstHit = memchr(base, 0x0A, count) else { return canonicalLF }
+                var lfCount = 0
+                var scanPos = UnsafePointer(firstHit.assumingMemoryBound(to: UInt8.self)) - base
+                while scanPos < count {
+                    lfCount += 1
+                    let nextStart = scanPos + 1
+                    guard nextStart < count, let hit = memchr(base + nextStart, 0x0A, count - nextStart) else {
+                        break
+                    }
+                    scanPos = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
+                }
+                return String(unsafeUninitializedCapacity: count + lfCount) { dst in
+                    let dstBase = dst.baseAddress!
+                    var srcPos = 0
+                    var dstPos = 0
+                    var nextLF = UnsafePointer(firstHit.assumingMemoryBound(to: UInt8.self)) - base
+                    while true {
+                        let segLen = nextLF - srcPos
+                        if segLen > 0 {
+                            (dstBase + dstPos).update(from: base + srcPos, count: segLen)
+                            dstPos += segLen
+                        }
+                        dstBase[dstPos] = 0x0D
+                        dstBase[dstPos + 1] = 0x0A
+                        dstPos += 2
+                        srcPos = nextLF + 1
+                        guard srcPos < count, let hit = memchr(base + srcPos, 0x0A, count - srcPos) else {
+                            break
+                        }
+                        nextLF = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
+                    }
+                    let tail = count - srcPos
+                    if tail > 0 {
+                        (dstBase + dstPos).update(from: base + srcPos, count: tail)
+                        dstPos += tail
+                    }
+                    return dstPos
+                }
+            }) {
+                return fast
+            }
             return canonicalLF.replacingOccurrences(of: "\n", with: "\r\n")
         case .cr:
+            if let fast = canonicalLF.utf8.withContiguousStorageIfAvailable({ buf -> String in
+                guard let base = buf.baseAddress, !buf.isEmpty else { return canonicalLF }
+                let count = buf.count
+                guard memchr(base, 0x0A, count) != nil else { return canonicalLF }
+                return String(unsafeUninitializedCapacity: count) { dst in
+                    for i in 0..<count {
+                        let b = base[i]
+                        dst[i] = (b == 0x0A) ? 0x0D : b
+                    }
+                    return count
+                }
+            }) {
+                return fast
+            }
             return canonicalLF.replacingOccurrences(of: "\n", with: "\r")
         }
     }

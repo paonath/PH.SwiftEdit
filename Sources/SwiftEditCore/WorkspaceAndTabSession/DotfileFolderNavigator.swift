@@ -54,21 +54,70 @@ public struct ParentDirectoryResolution: Equatable, Sendable {
     }
 }
 
+/// Policy governing symbolic links inside a workspace directory that resolve outside the granted sandbox scope (`BUG-017`, `SEC-003`).
+public enum EscapingSymlinkPolicy: Equatable, Sendable {
+    /// Throws `DomainError.securityScopeViolation` on the first child symlink pointing outside scope (default strict mode).
+    case failClosed
+    /// Skips escaping child symlinks prior to any file-attribute or `8 KiB` probe and reports how many were skipped (`BUG-017`).
+    case skipAndReport
+}
+
+/// Result returned by `DotfileFolderNavigator.listEntriesWithDiagnostics(in:withinScope:symlinkPolicy:)` (`BUG-017`).
+public struct FolderListingResult: Equatable, Sendable {
+    public let entries: [FolderEntryDescriptor]
+    public let skippedExternalSymlinkCount: Int
+
+    public init(entries: [FolderEntryDescriptor], skippedExternalSymlinkCount: Int) {
+        self.entries = entries
+        self.skippedExternalSymlinkCount = skippedExternalSymlinkCount
+    }
+}
+
 /// Shallow workspace directory navigator surfacing regular files and hidden dotfiles (`.env`, `.gitignore`) sorted directories-first (`BC-007`, `DATA-007`, `SEC-002`, `SEC-003`, `SEC-012`).
 ///
 /// Security invariants:
 /// - Brackets every enumeration with `startAccessing(url:)` and a deterministic `defer { stopAccessing(url:) }` release on all normal and throwing paths (`SEC-002`).
-/// - Verifies both `directoryURL` and every enumerated child entry via `resolvingSymlinksInPath()` against the canonical granted workspace root, aborting with `DomainError.securityScopeViolation` upon any symlink escape (`SEC-003`, `CWE-22`).
+/// - Verifies `directoryURL` first (always fail-closed) and every enumerated child entry via `resolvingSymlinksInPath()` strictly BEFORE any resource or `8 KiB` binary probe (`SEC-003`, `CWE-22`).
 public struct DotfileFolderNavigator: Sendable {
     private let securityScope: any SecurityScopedResourceAccessing
+    private let fileSystem: (any FileSystemProviding)?
 
-    public init(securityScope: any SecurityScopedResourceAccessing = SystemSecurityScopedResourceAccessor()) {
+    public init(
+        securityScope: any SecurityScopedResourceAccessing = SystemSecurityScopedResourceAccessor(),
+        fileSystem: (any FileSystemProviding)? = nil
+    ) {
         self.securityScope = securityScope
+        self.fileSystem = fileSystem
     }
 
-    /// Enumerates direct children of `directoryURL` (including hidden dotfiles) within `scopeURL` while bracketing access with `startAccessing` / `defer { stopAccessing }`.
+    /// Enumerates direct children of `directoryURL` (including hidden dotfiles) within `scopeURL` under `.failClosed` symlink confinement while bracketing access with `startAccessing` / `defer { stopAccessing }`.
     /// - Throws: `DomainError.securityScopeViolation` when `directoryURL` or any child symlink resolves outside `scopeURL` (or `directoryURL` when `scopeURL` is `nil`).
     public func listEntries(in directoryURL: URL, withinScope scopeURL: URL? = nil) throws -> [FolderEntryDescriptor] {
+        try listEntriesWithDiagnostics(in: directoryURL, withinScope: scopeURL, symlinkPolicy: .failClosed).entries
+    }
+
+    /// Enumerates direct children of `directoryURL` within `scopeURL` applying `symlinkPolicy` and reporting any skipped out-of-scope child symlinks (`BUG-017`, `SEC-003`).
+    ///
+    /// - Invariant: `directoryURL` itself is ALWAYS verified fail-closed before enumeration even under `.skipAndReport`, and each child's `verifyConfinement` executes strictly BEFORE `resourceValues` or `8 KiB` binary prefix reads (`CWE-22`).
+    public func listEntriesWithDiagnostics(
+        in directoryURL: URL,
+        withinScope scopeURL: URL? = nil,
+        symlinkPolicy: EscapingSymlinkPolicy = .failClosed
+    ) throws -> FolderListingResult {
+        try listEntriesInternal(
+            in: directoryURL,
+            withinScope: scopeURL,
+            symlinkPolicy: symlinkPolicy,
+            probeBinary: true
+        ).listing
+    }
+
+    func listEntriesInternal(
+        in directoryURL: URL,
+        withinScope scopeURL: URL? = nil,
+        symlinkPolicy: EscapingSymlinkPolicy = .failClosed,
+        probeBinary: Bool
+    ) throws -> (listing: FolderListingResult, regularFileFlags: [URL: Bool]) {
         let didAccess = securityScope.startAccessing(url: directoryURL)
         defer {
             if didAccess {
@@ -76,44 +125,116 @@ public struct DotfileFolderNavigator: Sendable {
             }
         }
 
-        let canonicalScopePath = (scopeURL ?? directoryURL).resolvingSymlinksInPath().standardizedFileURL.path
+        let effectiveScope = scopeURL ?? directoryURL
+        let canonicalScopePath = effectiveScope.resolvingSymlinksInPath().standardizedFileURL.path
         try Self.verifyConfinement(of: directoryURL, canonicalScopePath: canonicalScopePath)
 
         let childURLs: [URL]
         do {
             childURLs = try FileManager.default.contentsOfDirectory(
                 at: directoryURL,
-                includingPropertiesForKeys: [.isDirectoryKey],
+                includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey],
                 options: []
             )
         } catch {
             throw DomainError.ioFailure(error.localizedDescription)
         }
 
-        var descriptors: [FolderEntryDescriptor] = []
-        descriptors.reserveCapacity(childURLs.count)
+        var sortable: [(entry: FolderEntryDescriptor, lowerName: String)] = []
+        sortable.reserveCapacity(childURLs.count)
+        var regularFileFlags: [URL: Bool] = [:]
+        if !probeBinary {
+            regularFileFlags.reserveCapacity(childURLs.count)
+        }
+        var skippedCount = 0
 
         for rawChildURL in childURLs {
             let name = rawChildURL.lastPathComponent
             guard name != "." && name != ".." else { continue }
             let reportedChildURL = directoryURL.appendingPathComponent(name)
-            try Self.verifyConfinement(of: reportedChildURL, canonicalScopePath: canonicalScopePath)
 
-            let resolvedChild = reportedChildURL.resolvingSymlinksInPath()
-            let resourceValues = try? resolvedChild.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
-            let isDir = resourceValues?.isDirectory ?? false
-            let isRegularFile = resourceValues?.isRegularFile ?? false
-            let isBinary = (!isDir && isRegularFile) ? Self.probeIsBinaryRegularFile(at: resolvedChild) : false
-            descriptors.append(FolderEntryDescriptor(
+            let prefetched = try? rawChildURL.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            let isDir: Bool
+            let isRegularFile: Bool
+            let fileSize: Int?
+            let resolvedURLForProbe: URL
+
+            if prefetched?.isSymbolicLink == false {
+                // Non-symlink direct child of an already confinement-verified directory cannot escape `canonicalScopePath`.
+                isDir = prefetched?.isDirectory ?? false
+                isRegularFile = prefetched?.isRegularFile ?? false
+                fileSize = prefetched?.fileSize
+                resolvedURLForProbe = reportedChildURL
+            } else {
+                let resolvedChild: URL
+                do {
+                    resolvedChild = try Self.verifyConfinementAndResolve(of: reportedChildURL, canonicalScopePath: canonicalScopePath)
+                } catch DomainError.securityScopeViolation where symlinkPolicy == .skipAndReport {
+                    skippedCount += 1
+                    continue
+                }
+                let resolvedValues = try? resolvedChild.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey])
+                isDir = resolvedValues?.isDirectory ?? false
+                isRegularFile = resolvedValues?.isRegularFile ?? false
+                fileSize = resolvedValues?.fileSize
+                resolvedURLForProbe = resolvedChild
+            }
+
+            let isBinary: Bool
+            if probeBinary && !isDir && isRegularFile {
+                if fileSize == 0 {
+                    isBinary = false
+                } else {
+                    isBinary = probeBinaryRegularFile(at: resolvedURLForProbe, withinScope: effectiveScope)
+                }
+            } else {
+                isBinary = false
+            }
+
+            if !probeBinary {
+                regularFileFlags[reportedChildURL] = isRegularFile
+            }
+
+            let descriptor = FolderEntryDescriptor(
                 name: name,
                 url: reportedChildURL,
                 isDirectory: isDir,
                 isHiddenDotfile: name.hasPrefix("."),
                 isBinary: isBinary
-            ))
+            )
+            sortable.append((descriptor, name.lowercased()))
         }
 
-        return descriptors.sorted(by: Self.compareEntries)
+        // Schwartzian transform: O(N) lowercased() allocations instead of O(2 * N log N).
+        sortable.sort { lhs, rhs in
+            if lhs.entry.isDirectory != rhs.entry.isDirectory {
+                return lhs.entry.isDirectory && !rhs.entry.isDirectory
+            }
+            if lhs.lowerName != rhs.lowerName {
+                return lhs.lowerName < rhs.lowerName
+            }
+            return lhs.entry.name < rhs.entry.name
+        }
+
+        let listing = FolderListingResult(
+            entries: sortable.map(\.entry),
+            skippedExternalSymlinkCount: skippedCount
+        )
+        return (listing, regularFileFlags)
+    }
+
+    private func probeBinaryRegularFile(at resolvedURL: URL, withinScope scopeURL: URL) -> Bool {
+        if let fileSystem {
+            guard let prefix = try? fileSystem.readData(
+                at: resolvedURL,
+                maxBytes: DocumentCodec.binaryProbeBytes,
+                withinScope: scopeURL
+            ) else {
+                return false
+            }
+            return DocumentCodec.isBinaryPrefix(prefix)
+        }
+        return Self.probeIsBinaryRegularFile(at: resolvedURL)
     }
 
     /// Reads at most `DocumentCodec.binaryProbeBytes` (`8 KiB`) from a confinement-verified regular file to classify NUL-bearing binaries without loading full payloads (`CWE-400`, `DATA-003`, `SEC-003`).
@@ -134,12 +255,17 @@ public struct DotfileFolderNavigator: Sendable {
     /// - Rejects any candidate parent that is itself a symbolic link or where `currentDirectoryURL` / `candidateParent` resolves outside the ancestor/descendant lineage of `scopeURL`.
     /// - Brackets external parent permission probing with `startAccessing(url:)` and a deterministic `defer { stopAccessing(url:) }` release.
     /// - Throws: `DomainError.securityScopeViolation` when a symbolic link attempts to redirect parent traversal outside the permitted hierarchy.
+    /// Checks directory readability in `O(1)` via POSIX `opendir`/`closedir` without enumerating child entries.
+    public static func isDirectoryReadable(_ url: URL) -> Bool {
+        guard let dir = opendir(url.path) else { return false }
+        closedir(dir)
+        return true
+    }
+
     public func resolveParentDirectory(
         from currentDirectoryURL: URL,
         withinScope scopeURL: URL?,
-        isParentReadable: (URL) -> Bool = { url in
-            (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil
-        }
+        isParentReadable: (URL) -> Bool = DotfileFolderNavigator.isDirectoryReadable
     ) throws -> ParentDirectoryResolution? {
         let standardizedCurrent = currentDirectoryURL.standardizedFileURL
         guard standardizedCurrent.path != "/" else {
@@ -152,7 +278,8 @@ public struct DotfileFolderNavigator: Sendable {
         }
 
         let currentScope = (scopeURL ?? standardizedCurrent).standardizedFileURL
-        let canonicalScopePath = currentScope.resolvingSymlinksInPath().standardizedFileURL.path
+        let canonicalScopeURL = currentScope.resolvingSymlinksInPath().standardizedFileURL
+        let canonicalScopePath = canonicalScopeURL.path
         let candidateParentResolved = candidateParent.resolvingSymlinksInPath().standardizedFileURL
         let candidateParentResolvedPath = candidateParentResolved.path
 
@@ -166,7 +293,7 @@ public struct DotfileFolderNavigator: Sendable {
         if isInsideCurrentScope {
             return ParentDirectoryResolution(
                 parentURL: candidateParentResolved,
-                updatedScopeRootURL: currentScope.resolvingSymlinksInPath().standardizedFileURL
+                updatedScopeRootURL: canonicalScopeURL
             )
         }
 
@@ -199,21 +326,14 @@ public struct DotfileFolderNavigator: Sendable {
     }
 
     private static func verifyConfinement(of candidateURL: URL, canonicalScopePath: String) throws {
-        let resolvedPath = candidateURL.resolvingSymlinksInPath().standardizedFileURL.path
-        if !isDescendantOrEqual(path: resolvedPath, ancestorPath: canonicalScopePath) {
-            throw DomainError.securityScopeViolation(path: candidateURL.path)
-        }
+        _ = try verifyConfinementAndResolve(of: candidateURL, canonicalScopePath: canonicalScopePath)
     }
 
-    private static func compareEntries(_ lhs: FolderEntryDescriptor, _ rhs: FolderEntryDescriptor) -> Bool {
-        if lhs.isDirectory != rhs.isDirectory {
-            return lhs.isDirectory && !rhs.isDirectory
+    private static func verifyConfinementAndResolve(of candidateURL: URL, canonicalScopePath: String) throws -> URL {
+        let resolvedURL = candidateURL.resolvingSymlinksInPath().standardizedFileURL
+        if !isDescendantOrEqual(path: resolvedURL.path, ancestorPath: canonicalScopePath) {
+            throw DomainError.securityScopeViolation(path: candidateURL.path)
         }
-        let lhsLower = lhs.name.lowercased()
-        let rhsLower = rhs.name.lowercased()
-        if lhsLower != rhsLower {
-            return lhsLower < rhsLower
-        }
-        return lhs.name < rhs.name
+        return resolvedURL
     }
 }

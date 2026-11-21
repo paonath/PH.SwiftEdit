@@ -5,36 +5,103 @@ import SwiftUI
 import AppKit
 #endif
 
-/// Immutable sRGB color token with WCAG 2.2 relative luminance and contrast ratio calculation (`UI-001`, `UI-002`, `UI-009`).
+#if os(macOS)
+/// Immutable `NSColor` container safe to share across threads (`NSColor` sRGB instances are immutable once created).
+private final class CachedNSColorBox: @unchecked Sendable {
+    let color: NSColor
+    init(red: Double, green: Double, blue: Double, alpha: Double) {
+        self.color = NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+    }
+}
+#endif
+
+/// Immutable sRGB color token with pre-materialized `swiftUIColor`/`nsColor` and WCAG 2.2 relative luminance calculation (`UI-001`, `UI-002`, `UI-009`).
 public struct RGBAColorToken: Equatable, Sendable {
     public let hex: String
     public let red: Double
     public let green: Double
     public let blue: Double
     public let alpha: Double
+    /// Pre-materialized SwiftUI `Color` in the `.sRGB` color space preserving `alpha` (`UI-001`).
+    public let swiftUIColor: Color
+    #if os(macOS)
+    private let cachedNSColor: CachedNSColorBox
+    /// Pre-materialized AppKit `NSColor` in the `.sRGB` color space preserving `alpha` (zero allocation per read, `AR-003`, `UI-001`).
+    public var nsColor: NSColor { cachedNSColor.color }
+    #endif
 
     public init(hex: String, alpha: Double = 1.0) {
-        let sanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        let digits = sanitized.hasPrefix("#") ? String(sanitized.dropFirst()) : sanitized
-        let rawValue = UInt32(digits, radix: 16) ?? 0
-        self.hex = "#\(digits)"
-        self.red = Double((rawValue >> 16) & 0xFF) / 255.0
-        self.green = Double((rawValue >> 8) & 0xFF) / 255.0
-        self.blue = Double(rawValue & 0xFF) / 255.0
+        let (canonicalHex, rawValue) = Self.parseHex(hex)
+        let r = Double((rawValue >> 16) & 0xFF) / 255.0
+        let g = Double((rawValue >> 8) & 0xFF) / 255.0
+        let b = Double(rawValue & 0xFF) / 255.0
+        self.hex = canonicalHex
+        self.red = r
+        self.green = g
+        self.blue = b
         self.alpha = alpha
+        self.swiftUIColor = Color(.sRGB, red: r, green: g, blue: b, opacity: alpha)
+        #if os(macOS)
+        self.cachedNSColor = CachedNSColorBox(red: r, green: g, blue: b, alpha: alpha)
+        #endif
     }
 
-    /// SwiftUI `Color` materialized in the `.sRGB` color space preserving `alpha` (`UI-001`).
-    public var swiftUIColor: Color {
-        Color(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
+    public static func == (lhs: RGBAColorToken, rhs: RGBAColorToken) -> Bool {
+        lhs.hex == rhs.hex
+            && lhs.red == rhs.red
+            && lhs.green == rhs.green
+            && lhs.blue == rhs.blue
+            && lhs.alpha == rhs.alpha
     }
 
-    #if os(macOS)
-    /// AppKit `NSColor` materialized in the `.sRGB` color space preserving `alpha` (`AR-003`, `UI-001`).
-    public var nsColor: NSColor {
-        NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+    private static func parseHex(_ hex: String) -> (canonical: String, rawValue: UInt32) {
+        let utf8 = hex.utf8
+        var start = utf8.startIndex
+        var end = utf8.endIndex
+        while start < end && (utf8[start] == 0x20 || utf8[start] == 0x09 || utf8[start] == 0x0A || utf8[start] == 0x0D) {
+            start = utf8.index(after: start)
+        }
+        while end > start {
+            let prev = utf8.index(before: end)
+            let b = utf8[prev]
+            if b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D {
+                end = prev
+            } else {
+                break
+            }
+        }
+        if start < end && utf8[start] == 0x23 { // '#'
+            start = utf8.index(after: start)
+        }
+        var value: UInt32 = 0
+        var valid = (start < end)
+        var upperBytes: [UInt8] = [0x23]
+        upperBytes.reserveCapacity(7)
+        var idx = start
+        while idx < end {
+            var b = utf8[idx]
+            if b >= 0x61 && b <= 0x7A { b &= ~0x20 }
+            upperBytes.append(b)
+            let digit: UInt32?
+            if b >= 0x30 && b <= 0x39 {
+                digit = UInt32(b - 0x30)
+            } else if b >= 0x41 && b <= 0x46 {
+                digit = UInt32(b - 0x41 + 10)
+            } else {
+                digit = nil
+            }
+            if let d = digit, valid {
+                let (shifted, ov1) = value.multipliedReportingOverflow(by: 16)
+                let (sum, ov2) = shifted.addingReportingOverflow(d)
+                if ov1 || ov2 { valid = false; value = 0 } else { value = sum }
+            } else {
+                valid = false
+                value = 0
+            }
+            idx = utf8.index(after: idx)
+        }
+        return (String(decoding: upperBytes, as: UTF8.self), valid ? value : 0)
     }
-    #endif
 
     /// WCAG 2.2 relative luminance (`0.0` pure black to `1.0` pure white).
     public var relativeLuminance: Double {
@@ -237,24 +304,37 @@ public struct PurpleThemePalette: Equatable, Sendable {
     ///   - reduceTransparency: Clamps `submenuTranslucentSurface` and `findBarSurface` to `1.0` alpha and steps up `hairlineBorder` contrast when `true`.
     ///   - increasedContrast: Clamps translucent chrome surfaces to `1.0` alpha and steps up `hairlineBorder` to `>= 3.0:1` when `true`.
     /// - Returns: Contrast-verified `PurpleThemePalette` value snapshot.
+    private static let lightStandard: PurpleThemePalette = buildPalette(mode: .light, clampOpaque: false)
+    private static let lightHighContrast: PurpleThemePalette = buildPalette(mode: .light, clampOpaque: true)
+    private static let blackStandard: PurpleThemePalette = buildPalette(mode: .black, clampOpaque: false)
+    private static let blackHighContrast: PurpleThemePalette = buildPalette(mode: .black, clampOpaque: true)
+
     public static func resolve(
         appearance: AppearanceMode,
         systemPrefersDark: Bool = true,
         reduceTransparency: Bool = false,
         increasedContrast: Bool = false
     ) -> PurpleThemePalette {
-        let resolvedMode: ResolvedThemeMode
+        let isBlack: Bool
         switch appearance {
-        case .light: resolvedMode = .light
-        case .black: resolvedMode = .black
-        case .auto: resolvedMode = systemPrefersDark ? .black : .light
+        case .light: isBlack = false
+        case .black: isBlack = true
+        case .auto: isBlack = systemPrefersDark
         }
+        let clampOpaque = reduceTransparency || increasedContrast
+        switch (isBlack, clampOpaque) {
+        case (false, false): return lightStandard
+        case (false, true): return lightHighContrast
+        case (true, false): return blackStandard
+        case (true, true): return blackHighContrast
+        }
+    }
 
+    private static func buildPalette(mode resolvedMode: ResolvedThemeMode, clampOpaque: Bool) -> PurpleThemePalette {
         let darkGround = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.groundHex)
         let primaryAccent = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherBottomHex)
         let strokeLavender = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.triangleStrokeHex)
         let featherHighlight = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherTopHex)
-        let clampOpaque = reduceTransparency || increasedContrast
 
         switch resolvedMode {
         case .light:
@@ -525,6 +605,14 @@ public struct InspectionSafetyBannerState: Equatable, Sendable {
     }
 
     private static func scanBiDiControlScalars(in text: String) -> [BiDiControlCharacterWarning] {
+        // Fast SIMD UTF-8 pre-check: all 10 Trojan Source BiDi scalars encode with UTF-8 lead byte 0xD8 (U+061C) or 0xE2 (U+202A..202E, U+2066..2069).
+        let mayContainBiDi: Bool = text.utf8.withContiguousStorageIfAvailable { buf -> Bool in
+            guard let base = buf.baseAddress, !buf.isEmpty else { return false }
+            let count = buf.count
+            return memchr(base, 0xE2, count) != nil || memchr(base, 0xD8, count) != nil
+        } ?? true
+        guard mayContainBiDi else { return [] }
+
         var warnings: [BiDiControlCharacterWarning] = []
         let scalars = text.unicodeScalars
         var index = scalars.startIndex

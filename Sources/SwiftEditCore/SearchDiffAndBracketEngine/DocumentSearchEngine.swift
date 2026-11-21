@@ -32,9 +32,21 @@ public enum DocumentSearchEngine {
             return .completed([])
         }
 
+        // Zero-bridging raw UTF-8 fast path for ASCII queries.
+        if query.utf8.allSatisfy({ $0 < 0x80 }) {
+            if let fastResult = findASCIIUTF8(
+                query: query,
+                in: snapshot.text,
+                isCaseSensitive: options.isCaseSensitive,
+                maxMatches: maxMatches
+            ) {
+                return fastResult
+            }
+        }
+
         let nsText = snapshot.text as NSString
         let totalLength = nsText.length
-        let compareOptions: NSString.CompareOptions = options.isCaseSensitive ? [.literal] : [.caseInsensitive]
+        let compareOptions: NSString.CompareOptions = options.isCaseSensitive ? [.literal] : [.caseInsensitive, .literal]
         var searchRange = NSRange(location: 0, length: totalLength)
         var matches: [TextRange] = []
 
@@ -55,6 +67,117 @@ public enum DocumentSearchEngine {
         }
 
         return .completed(matches)
+    }
+
+    /// Scans contiguous UTF-8 bytes directly for an ASCII query without `NSString` bridging.
+    /// Returns `nil` in case-insensitive mode if the text contains non-ASCII bytes so Unicode case folding falls back to `NSString`.
+    private static func findASCIIUTF8(
+        query: String,
+        in text: String,
+        isCaseSensitive: Bool,
+        maxMatches: Int
+    ) -> EngineEvaluationOutcome<[TextRange]>? {
+        text.utf8.withContiguousStorageIfAvailable { textBuf -> EngineEvaluationOutcome<[TextRange]>? in
+            let n = textBuf.count
+            guard let textBase = textBuf.baseAddress else { return .completed([]) }
+            let qBytes = Array(query.utf8)
+            let m = qBytes.count
+            guard m > 0 && m <= n else { return .completed([]) }
+
+            if !isCaseSensitive {
+                // Verify buffer is pure ASCII so ASCII case folding matches Unicode case-insensitive literal semantics 100%.
+                var hasNonASCII = false
+                for idx in 0..<n where textBase[idx] >= 0x80 {
+                    hasNonASCII = true
+                    break
+                }
+                if hasNonASCII { return nil }
+
+                var qLower = qBytes
+                for idx in 0..<m {
+                    let b = qLower[idx]
+                    if b >= 0x41 && b <= 0x5A { qLower[idx] = b | 0x20 }
+                }
+                let firstLower = qLower[0]
+                let firstUpper: UInt8 = (firstLower >= 0x61 && firstLower <= 0x7A) ? (firstLower & ~0x20) : firstLower
+
+                var matches: [TextRange] = []
+                let limit = n - m
+                var i = 0
+                while i <= limit {
+                    let b = textBase[i]
+                    if b == firstLower || b == firstUpper {
+                        var matched = true
+                        var j = 1
+                        while j < m {
+                            var tb = textBase[i + j]
+                            if tb >= 0x41 && tb <= 0x5A { tb |= 0x20 }
+                            if tb != qLower[j] {
+                                matched = false
+                                break
+                            }
+                            j += 1
+                        }
+                        if matched {
+                            if matches.count >= maxMatches {
+                                return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
+                            }
+                            matches.append(TextRange(location: i, length: m))
+                            i += m
+                            continue
+                        }
+                    }
+                    i += 1
+                }
+                return .completed(matches)
+            } else {
+                // Case-sensitive ASCII query: works on ANY UTF-8 buffer (ASCII or Unicode) because ASCII bytes never occur inside multi-byte sequences.
+                let firstByte = qBytes[0]
+                var matches: [TextRange] = []
+                let limit = n - m
+                var i = 0
+                var utf16Offset = 0
+
+                while i <= limit {
+                    let b = textBase[i]
+                    if b == firstByte {
+                        var matched = true
+                        var j = 1
+                        while j < m {
+                            if textBase[i + j] != qBytes[j] {
+                                matched = false
+                                break
+                            }
+                            j += 1
+                        }
+                        if matched {
+                            if matches.count >= maxMatches {
+                                return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
+                            }
+                            matches.append(TextRange(location: utf16Offset, length: m))
+                            i += m
+                            utf16Offset += m
+                            continue
+                        }
+                        utf16Offset += 1
+                        i += 1
+                    } else if b < 0x80 {
+                        utf16Offset += 1
+                        i += 1
+                    } else if b < 0xE0 {
+                        utf16Offset += 1
+                        i += 2
+                    } else if b < 0xF0 {
+                        utf16Offset += 1
+                        i += 3
+                    } else {
+                        utf16Offset += 2
+                        i += 4
+                    }
+                }
+                return .completed(matches)
+            }
+        } ?? nil
     }
 
     private static func precheck(query: String, snapshot: DocumentSnapshot) -> DegradedEvaluationReason? {
@@ -87,15 +210,11 @@ public enum DocumentSearchEngine {
         }
     }
 
-    /// Resolves a 1-based `lineNumber` (`1...lineCount`) to its UTF-16 line-content `TextRange` (excluding trailing line terminators), or `nil` when out of bounds or binary.
+    /// Resolves a 1-based `lineNumber` (`1...lineCount`) to its UTF-16 line-content `TextRange` (excluding trailing line terminators) in `O(1)` space without scanning past the target line.
     public static func goToLine(_ lineNumber: Int, in snapshot: DocumentSnapshot) -> TextRange? {
         guard !snapshot.isBinaryReadOnly, lineNumber >= 1 else {
             return nil
         }
-        let lineRanges = UTF16LineBreakScanner.lineContentRanges(in: snapshot.text)
-        guard lineNumber <= lineRanges.count else {
-            return nil
-        }
-        return lineRanges[lineNumber - 1]
+        return UTF16LineBreakScanner.lineContentRange(forLine: lineNumber, in: snapshot.text)
     }
 }

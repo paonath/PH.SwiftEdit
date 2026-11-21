@@ -259,20 +259,19 @@ struct FullAppSemanticThemingAndWindowSyncTests {
     @Test("P2 & P8: Cold-start Auto seeds Frame 0 from systemDarkDetector without Black FOUC and live Auto->Black->Light preserves dirty BufferRevision")
     @MainActor
     func p2AndP8ColdStartAutoDetectorWindowSyncAndDirtyBufferPreservation() throws {
-        // GIVEN an ephemeral preferences suite in .auto mode, systemDarkDetector reporting Light OS (false), and a dirty Markdown buffer at revision 3
-        let suiteName = "it.ph.SwiftEdit.test.p2.\(UUID().uuidString)"
+        // GIVEN an ephemeral in-memory preferences store in .auto mode, systemDarkDetector reporting Light OS (false), and a dirty Markdown buffer at revision 3
         let recoveryDir = Self.repoRootURL.appendingPathComponent(".tmp/test-results/rec-\(UUID().uuidString)", isDirectory: true)
         defer {
-            UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
             try? FileManager.default.removeItem(at: recoveryDir)
         }
 
-        let prefsStore = EditorPreferencesStore(suiteName: suiteName)
+        let prefsKV = InMemoryKeyValueStore()
+        let prefsStore = EditorPreferencesStore(store: prefsKV)
         prefsStore.save(EditorPreferences(appearanceMode: .auto, zoomPercent: 100))
 
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suiteName,
-            recentFilesSuiteName: "\(suiteName).recent",
+            preferencesStore: prefsKV,
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recoveryDir,
             systemDarkDetector: { false }
         )
@@ -320,13 +319,9 @@ struct FullAppSemanticThemingAndWindowSyncTests {
     @MainActor
     func n3AndN11TaintedColorSchemeIgnoredAndBinaryQuarantinePersists() throws {
         // GIVEN a Dark OS detector (true) switched to .light and a Light OS detector (false) with an open binary read-only buffer switched to .black
-        let suiteA = "it.ph.SwiftEdit.test.n11.\(UUID().uuidString)"
-        let suiteB = "it.ph.SwiftEdit.test.n3.\(UUID().uuidString)"
         let tempDir = Self.repoRootURL.appendingPathComponent(".tmp/test-results/bin-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer {
-            UserDefaults(suiteName: suiteA)?.removePersistentDomain(forName: suiteA)
-            UserDefaults(suiteName: suiteB)?.removePersistentDomain(forName: suiteB)
             try? FileManager.default.removeItem(at: tempDir)
         }
 
@@ -335,8 +330,8 @@ struct FullAppSemanticThemingAndWindowSyncTests {
         try binaryPayload.write(to: binaryFileURL)
 
         let darkHostModel = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suiteA,
-            recentFilesSuiteName: "\(suiteA).recent",
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: tempDir.appendingPathComponent("recA"),
             systemDarkDetector: { true }
         )
@@ -346,8 +341,8 @@ struct FullAppSemanticThemingAndWindowSyncTests {
         darkHostModel.appearanceMode = .auto
 
         let lightHostModel = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suiteB,
-            recentFilesSuiteName: "\(suiteB).recent",
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: tempDir.appendingPathComponent("recB"),
             systemDarkDetector: { false }
         )

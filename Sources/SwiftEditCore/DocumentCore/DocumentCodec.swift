@@ -24,26 +24,41 @@ public enum DocumentCodec {
 
     /// Returns `true` when the first `8 KiB` of a non-UTF-16-BOM byte buffer contains at least one `0x00` NUL byte.
     public static func isBinaryPrefix(_ data: Data) -> Bool {
-        if data.starts(with: TextEncoding.utf16LEWithBOM.bomBytes) || data.starts(with: TextEncoding.utf16BEWithBOM.bomBytes) {
-            return false
+        let probeLen = min(data.count, binaryProbeBytes)
+        guard probeLen > 0 else { return false }
+        return data.withUnsafeBytes { rawBuf -> Bool in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
+            if probeLen >= 2 {
+                let b0 = base[0]
+                let b1 = base[1]
+                if (b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF) {
+                    return false
+                }
+            }
+            return memchr(base, 0x00, probeLen) != nil
         }
-        let window = data.prefix(binaryProbeBytes)
-        return window.contains(0x00)
     }
 
     /// Produces a read-only ASCII inspection payload capped at `1 MiB`, replacing non-printable/NUL bytes with `.` (`DATA-003`, `SEC-011`).
     public static func decodeBinaryInspectionPreview(_ data: Data) -> DecodedDocumentPayload {
-        let capped = data.prefix(maxBinaryInspectionBytes)
-        var asciiChars = [UInt8]()
-        asciiChars.reserveCapacity(capped.count)
-        for byte in capped {
-            if (0x20...0x7E).contains(byte) || byte == 0x09 || byte == 0x0A {
-                asciiChars.append(byte)
-            } else if byte != 0x0D {
-                asciiChars.append(0x2E) // '.' placeholder for non-printable/NUL bytes
+        let capLen = min(data.count, maxBinaryInspectionBytes)
+        let preview = String(unsafeUninitializedCapacity: capLen) { dst in
+            data.withUnsafeBytes { rawBuf -> Int in
+                guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return 0 }
+                var outLen = 0
+                for i in 0..<capLen {
+                    let byte = base[i]
+                    if (byte >= 0x20 && byte <= 0x7E) || byte == 0x09 || byte == 0x0A {
+                        dst[outLen] = byte
+                        outLen += 1
+                    } else if byte != 0x0D {
+                        dst[outLen] = 0x2E // '.' placeholder for non-printable/NUL bytes
+                        outLen += 1
+                    }
+                }
+                return outLen
             }
         }
-        let preview = String(decoding: asciiChars, as: UTF8.self)
         return DecodedDocumentPayload(
             text: preview,
             encoding: .utf8,
@@ -90,7 +105,7 @@ public enum DocumentCodec {
         }
 
         let detectedLineEnding = LineEnding.detect(in: rawString)
-        let normalized = LineEnding.normalizeToLF(rawString)
+        let normalized = detectedLineEnding == .lf ? rawString : LineEnding.normalizeToLF(rawString)
 
         return DecodedDocumentPayload(
             text: normalized,
@@ -104,47 +119,85 @@ public enum DocumentCodec {
     public static func encode(_ text: String, encoding: TextEncoding, lineEnding: LineEnding) throws -> Data {
         let canonicalLF = LineEnding.normalizeToLF(text)
         let wireText = lineEnding.apply(toCanonicalLF: canonicalLF)
-        var output = Data(encoding.bomBytes)
+        let bom = encoding.bomBytes
 
         switch encoding {
         case .utf8, .utf8WithBOM:
+            var output = Data()
+            output.reserveCapacity(bom.count + wireText.utf8.count)
+            output.append(contentsOf: bom)
             output.append(contentsOf: wireText.utf8)
-        case .utf16LEWithBOM:
-            for unit in wireText.utf16 {
-                var le = unit.littleEndian
-                withUnsafeBytes(of: &le) { output.append(contentsOf: $0) }
+            return output
+        case .utf16LEWithBOM, .utf16BEWithBOM:
+            let littleEndian = (encoding == .utf16LEWithBOM)
+            let unitCount = wireText.utf16.count
+            var output = Data(count: bom.count + unitCount * 2)
+            output.withUnsafeMutableBytes { rawOut in
+                guard let dst = rawOut.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+                for (i, b) in bom.enumerated() {
+                    dst[i] = b
+                }
+                var writeIdx = bom.count
+                for unit in wireText.utf16 {
+                    if littleEndian {
+                        dst[writeIdx] = UInt8(truncatingIfNeeded: unit)
+                        dst[writeIdx + 1] = UInt8(truncatingIfNeeded: unit >> 8)
+                    } else {
+                        dst[writeIdx] = UInt8(truncatingIfNeeded: unit >> 8)
+                        dst[writeIdx + 1] = UInt8(truncatingIfNeeded: unit)
+                    }
+                    writeIdx += 2
+                }
             }
-        case .utf16BEWithBOM:
-            for unit in wireText.utf16 {
-                var be = unit.bigEndian
-                withUnsafeBytes(of: &be) { output.append(contentsOf: $0) }
-            }
+            return output
         }
-        return output
     }
 
     private static func decodeStrictUTF16(_ body: Data, littleEndian: Bool) -> String? {
-        var units: [UInt16] = []
-        units.reserveCapacity(body.count / 2)
-        var iter = body.makeIterator()
-        while let b0 = iter.next(), let b1 = iter.next() {
-            let unit = littleEndian
-                ? (UInt16(b0) | (UInt16(b1) << 8))
-                : ((UInt16(b0) << 8) | UInt16(b1))
-            units.append(unit)
-        }
-        var scalars = String.UnicodeScalarView()
-        var parser = UTF16()
-        var unitIter = units.makeIterator()
-        while true {
-            switch parser.decode(&unitIter) {
-            case .scalarValue(let scalar):
-                scalars.append(scalar)
-            case .emptyInput:
-                return String(scalars)
-            case .error:
-                return nil
+        guard !body.isEmpty else { return "" }
+        return body.withUnsafeBytes { rawBuf -> String? in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return "" }
+            let pairCount = body.count / 2
+            var utf8Bytes: [UInt8] = []
+            utf8Bytes.reserveCapacity(pairCount)
+            var i = 0
+            while i < pairCount {
+                let b0 = base[i * 2]
+                let b1 = base[i * 2 + 1]
+                let u1: UInt16 = littleEndian ? (UInt16(b0) | (UInt16(b1) << 8)) : ((UInt16(b0) << 8) | UInt16(b1))
+                i += 1
+                let scalarValue: UInt32
+                if u1 < 0xD800 || u1 > 0xDFFF {
+                    scalarValue = UInt32(u1)
+                } else if u1 <= 0xDBFF {
+                    guard i < pairCount else { return nil }
+                    let lb0 = base[i * 2]
+                    let lb1 = base[i * 2 + 1]
+                    let u2: UInt16 = littleEndian ? (UInt16(lb0) | (UInt16(lb1) << 8)) : ((UInt16(lb0) << 8) | UInt16(lb1))
+                    guard u2 >= 0xDC00 && u2 <= 0xDFFF else { return nil }
+                    i += 1
+                    scalarValue = 0x10000 + ((UInt32(u1 - 0xD800) << 10) | UInt32(u2 - 0xDC00))
+                } else {
+                    return nil
+                }
+
+                if scalarValue < 0x80 {
+                    utf8Bytes.append(UInt8(scalarValue))
+                } else if scalarValue < 0x800 {
+                    utf8Bytes.append(UInt8(0xC0 | (scalarValue >> 6)))
+                    utf8Bytes.append(UInt8(0x80 | (scalarValue & 0x3F)))
+                } else if scalarValue < 0x10000 {
+                    utf8Bytes.append(UInt8(0xE0 | (scalarValue >> 12)))
+                    utf8Bytes.append(UInt8(0x80 | ((scalarValue >> 6) & 0x3F)))
+                    utf8Bytes.append(UInt8(0x80 | (scalarValue & 0x3F)))
+                } else {
+                    utf8Bytes.append(UInt8(0xF0 | (scalarValue >> 18)))
+                    utf8Bytes.append(UInt8(0x80 | ((scalarValue >> 12) & 0x3F)))
+                    utf8Bytes.append(UInt8(0x80 | ((scalarValue >> 6) & 0x3F)))
+                    utf8Bytes.append(UInt8(0x80 | (scalarValue & 0x3F)))
+                }
             }
+            return String(decoding: utf8Bytes, as: UTF8.self)
         }
     }
 }

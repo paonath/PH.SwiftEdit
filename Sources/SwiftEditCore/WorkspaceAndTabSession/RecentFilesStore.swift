@@ -71,19 +71,36 @@ public struct SystemSecurityScopedBookmarkCoder: SecurityScopedBookmarkCoding, S
     }
 }
 
-/// Deduplicated 10-entry MRU recent-files store backed by isolated `UserDefaults` (`DATA-004`, `DATA-007`, `DATA-008`, `SEC-002`, `SEC-011`, `SEC-012`).
+/// Deduplicated 10-entry MRU recent-files store backed by `PreferencesProviding` (`DATA-004`, `DATA-007`, `DATA-008`, `PERF-003`, `SEC-002`, `SEC-011`, `SEC-012`).
 public struct RecentFilesStore: Sendable {
     public static let maxEntries: Int = 10
     public static let recentFilesKey: String = "swiftedit.recentFiles"
     public static let maxPersistedPayloadBytes: Int = 1_048_576
 
     public let suiteName: String?
+    private let store: any PreferencesProviding
     private let fileSystem: any FileSystemProviding
     private let bookmarkCoder: any SecurityScopedBookmarkCoding
     private let securityScope: any SecurityScopedResourceAccessing
     private let now: @Sendable () -> Date
 
-    /// Creates a `RecentFilesStore` bound to an optional isolated `UserDefaults` suite and injected I/O and clock seams.
+    /// Creates a `RecentFilesStore` backed by an explicit `PreferencesProviding` seam (`InMemoryKeyValueStore` in tests) and injected I/O and clock seams.
+    public init(
+        store: any PreferencesProviding,
+        fileSystem: any FileSystemProviding = LocalFileSystemAdapter(),
+        bookmarkCoder: any SecurityScopedBookmarkCoding = SystemSecurityScopedBookmarkCoder(),
+        securityScope: any SecurityScopedResourceAccessing = SystemSecurityScopedResourceAccessor(),
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.suiteName = nil
+        self.store = store
+        self.fileSystem = fileSystem
+        self.bookmarkCoder = bookmarkCoder
+        self.securityScope = securityScope
+        self.now = now
+    }
+
+    /// Creates a `RecentFilesStore` bound to an optional `UserDefaults` suite (or `.standard` when `nil`) and injected I/O and clock seams.
     public init(
         suiteName: String? = nil,
         fileSystem: any FileSystemProviding = LocalFileSystemAdapter(),
@@ -92,6 +109,7 @@ public struct RecentFilesStore: Sendable {
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.suiteName = suiteName
+        self.store = UserDefaultsPreferencesStore(suiteName: suiteName)
         self.fileSystem = fileSystem
         self.bookmarkCoder = bookmarkCoder
         self.securityScope = securityScope
@@ -161,20 +179,19 @@ public struct RecentFilesStore: Sendable {
         return resolvedStandardized
     }
 
-    /// Immediately erases all persisted bookmark blobs from the configured `UserDefaults` suite (`SEC-011`).
+    /// Immediately erases all persisted bookmark blobs from the configured preferences store (`SEC-011`).
     public func clear() {
-        resolveDefaults().removeObject(forKey: Self.recentFilesKey)
+        store.removeObject(forKey: Self.recentFilesKey)
     }
 
     private func loadPersistedEntries() -> [RecentFileEntry] {
-        let defaults = resolveDefaults()
-        guard defaults.object(forKey: Self.recentFilesKey) != nil else {
+        guard store.object(forKey: Self.recentFilesKey) != nil else {
             return []
         }
-        guard let rawData = defaults.data(forKey: Self.recentFilesKey),
+        guard let rawData = store.data(forKey: Self.recentFilesKey),
               rawData.count <= Self.maxPersistedPayloadBytes,
               let decoded = try? JSONDecoder().decode([RecentFileEntry].self, from: rawData) else {
-            defaults.removeObject(forKey: Self.recentFilesKey)
+            store.removeObject(forKey: Self.recentFilesKey)
             return []
         }
         return decoded
@@ -211,13 +228,6 @@ public struct RecentFilesStore: Sendable {
 
     private func persist(_ list: [RecentFileEntry]) {
         guard let encoded = try? JSONEncoder().encode(list) else { return }
-        resolveDefaults().set(encoded, forKey: Self.recentFilesKey)
-    }
-
-    private func resolveDefaults() -> UserDefaults {
-        if let suiteName, let suiteDefaults = UserDefaults(suiteName: suiteName) {
-            return suiteDefaults
-        }
-        return .standard
+        store.set(encoded, forKey: Self.recentFilesKey)
     }
 }

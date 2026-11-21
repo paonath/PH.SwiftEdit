@@ -70,16 +70,9 @@ struct SidebarActionsAndWorkspaceHandoffTests {
         let fs = LocalFileSystemAdapter(trasher: trashFake)
         let desktopFake = RecordingDesktopWorkspaceFake()
 
-        let suiteName = "it.ph.SwiftEdit.s11.\(UUID().uuidString)"
-        let recentSuite = suiteName + ".recent"
-        defer {
-            UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
-            UserDefaults(suiteName: recentSuite)?.removePersistentDomain(forName: recentSuite)
-        }
-
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suiteName,
-            recentFilesSuiteName: recentSuite,
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: tempRoot.appendingPathComponent("Recovery", isDirectory: true),
             fileSystem: fs,
             desktopWorkspace: desktopFake
@@ -144,12 +137,9 @@ struct SidebarActionsAndWorkspaceHandoffTests {
 
         let trashFake = RecordingTrasherFake()
         let fs = LocalFileSystemAdapter(trasher: trashFake)
-        let suiteName = "it.ph.SwiftEdit.snoop.\(UUID().uuidString)"
-        defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
-
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suiteName,
-            recentFilesSuiteName: suiteName + ".recent",
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: tempRoot.appendingPathComponent("Recovery", isDirectory: true),
             fileSystem: fs,
             desktopWorkspace: RecordingDesktopWorkspaceFake()

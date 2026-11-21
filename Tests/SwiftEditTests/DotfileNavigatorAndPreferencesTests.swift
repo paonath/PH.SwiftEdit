@@ -52,9 +52,7 @@ struct DotfileNavigatorAndPreferencesTests {
         let scopeFake = RecordingSecurityScopeFake()
         let navigator = DotfileFolderNavigator(securityScope: scopeFake)
 
-        let suiteName = "test.swiftedit.prefs.\(UUID().uuidString)"
-        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
-        let prefsStore = EditorPreferencesStore(suiteName: suiteName)
+        let prefsStore = EditorPreferencesStore(store: InMemoryKeyValueStore())
 
         // WHEN enumerating shallow entries and saving/loading EditorPreferences
         let entries = try navigator.listEntries(in: workspace, withinScope: workspace)
@@ -72,25 +70,19 @@ struct DotfileNavigatorAndPreferencesTests {
 
     @Test("N5: EditorPreferences and EditorPreferencesStore clamp out-of-range zoom values to 50...300 and fallback unknown appearance strings to .auto")
     func n5OutOfBoundsZoomAndInvalidAppearanceStringsAreClamped() throws {
-        // GIVEN isolated UserDefaults suites seeded with out-of-bounds zoom values and an invalid appearance raw value
-        let lowSuite = "test.swiftedit.prefs.low.\(UUID().uuidString)"
-        let highSuite = "test.swiftedit.prefs.high.\(UUID().uuidString)"
-        defer {
-            UserDefaults.standard.removePersistentDomain(forName: lowSuite)
-            UserDefaults.standard.removePersistentDomain(forName: highSuite)
-        }
-        let lowDefaults = try #require(UserDefaults(suiteName: lowSuite))
-        lowDefaults.set("invalid-theme", forKey: EditorPreferencesStore.appearanceModeKey)
-        lowDefaults.set(10, forKey: EditorPreferencesStore.zoomPercentKey)
+        // GIVEN isolated InMemoryKeyValueStores seeded with out-of-bounds zoom values and an invalid appearance raw value
+        let lowKV = InMemoryKeyValueStore()
+        lowKV.set("invalid-theme", forKey: EditorPreferencesStore.appearanceModeKey)
+        lowKV.set(10, forKey: EditorPreferencesStore.zoomPercentKey)
 
-        let highDefaults = try #require(UserDefaults(suiteName: highSuite))
-        highDefaults.set("light", forKey: EditorPreferencesStore.appearanceModeKey)
-        highDefaults.set(900, forKey: EditorPreferencesStore.zoomPercentKey)
+        let highKV = InMemoryKeyValueStore()
+        highKV.set("light", forKey: EditorPreferencesStore.appearanceModeKey)
+        highKV.set(900, forKey: EditorPreferencesStore.zoomPercentKey)
 
         // WHEN loading from both stores and constructing out-of-bounds EditorPreferences directly
-        let lowLoaded = EditorPreferencesStore(suiteName: lowSuite).load()
-        let highLoaded = EditorPreferencesStore(suiteName: highSuite).load()
-        let unseededLoaded = EditorPreferencesStore(suiteName: "test.swiftedit.prefs.empty.\(UUID().uuidString)").load()
+        let lowLoaded = EditorPreferencesStore(store: lowKV).load()
+        let highLoaded = EditorPreferencesStore(store: highKV).load()
+        let unseededLoaded = EditorPreferencesStore(store: InMemoryKeyValueStore()).load()
         let decodedFromJSON = try JSONDecoder().decode(EditorPreferences.self, from: Data(#"{"appearanceMode":"unknown","zoomPercent":999}"#.utf8))
         let directLow = EditorPreferences(appearanceMode: .black, zoomPercent: -25)
         let directHigh = EditorPreferences(appearanceMode: .light, zoomPercent: 450)

@@ -77,13 +77,6 @@ public struct SwiftEditCommands: Commands {
                 .disabled(model == nil)
         }
 
-        CommandGroup(after: .undoRedo) {
-            Button("Redo") {
-                NSApp.sendAction(Selector(("redo:")), to: nil, from: nil)
-            }
-            .keyboardShortcut("y", modifiers: .command)
-        }
-
         CommandGroup(after: .pasteboard) {
             Divider()
             Button("Duplicate Line or Selection") { model?.performCommandD() }
@@ -100,7 +93,7 @@ public struct SwiftEditCommands: Commands {
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(model == nil)
             Button("Find and Replace…") { model?.presentFindBar(mode: .findAndReplace) }
-                .keyboardShortcut("h", modifiers: .command)
+                .keyboardShortcut("f", modifiers: [.command, .option])
                 .disabled(model == nil)
             Button("Go to Line…") { model?.presentFindBar(mode: .goToLine) }
                 .keyboardShortcut("g", modifiers: .command)

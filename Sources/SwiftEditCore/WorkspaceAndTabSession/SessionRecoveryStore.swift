@@ -183,7 +183,7 @@ public struct SessionRecoveryStore: Sendable {
         }
         let entries: [URL]
         do {
-            entries = try fm.contentsOfDirectory(at: recoveryDirectoryURL, includingPropertiesForKeys: nil)
+            entries = try fm.contentsOfDirectory(at: recoveryDirectoryURL, includingPropertiesForKeys: [.fileSizeKey])
         } catch {
             throw DomainError.ioFailure(error.localizedDescription)
         }
@@ -191,8 +191,10 @@ public struct SessionRecoveryStore: Sendable {
         let excludedName = replacedURL.lastPathComponent
         var total: UInt64 = 0
         for itemURL in entries where itemURL.lastPathComponent != excludedName {
-            if let attrs = try? fm.attributesOfItem(atPath: itemURL.path),
-               let size = attrs[.size] as? UInt64 {
+            if let size = (try? itemURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size >= 0 {
+                total += UInt64(size)
+            } else if let attrs = try? fm.attributesOfItem(atPath: itemURL.path),
+                      let size = attrs[.size] as? UInt64 {
                 total += size
             }
         }
@@ -200,8 +202,17 @@ public struct SessionRecoveryStore: Sendable {
     }
 
     private func ensureProtectedRecoveryDirectory() throws {
-        try verifyNotSymbolicLink(at: recoveryDirectoryURL)
         let fm = FileManager.default
+        if let attrs = try? fm.attributesOfItem(atPath: recoveryDirectoryURL.path) {
+            if (attrs[.type] as? FileAttributeType) == .typeSymbolicLink {
+                throw DomainError.securityScopeViolation(path: recoveryDirectoryURL.path)
+            }
+            let perms = (attrs[.posixPermissions] as? NSNumber)?.intValue
+            let excluded = (try? recoveryDirectoryURL.resourceValues(forKeys: [.isExcludedFromBackupKey]))?.isExcludedFromBackup ?? false
+            if perms == 0o700 && excluded {
+                return
+            }
+        }
         do {
             try fm.createDirectory(
                 at: recoveryDirectoryURL,
@@ -234,7 +245,6 @@ public struct SessionRecoveryStore: Sendable {
         }
 
         do {
-            try fm.setAttributes(attributes, ofItemAtPath: tempURL.path)
             if fm.fileExists(atPath: destinationURL.path) {
                 _ = try fm.replaceItemAt(destinationURL, withItemAt: tempURL)
             } else {

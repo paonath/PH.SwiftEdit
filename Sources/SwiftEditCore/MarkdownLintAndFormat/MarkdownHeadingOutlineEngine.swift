@@ -41,21 +41,35 @@ public enum MarkdownHeadingOutlineEngine {
 
     private static func parse(_ slice: ArraySlice<UInt16>, offset: Int) -> MarkdownHeading? {
         guard slice.count <= MarkdownLineIndex.maxLineUTF16 else { return nil }
-        var units = Array(slice)
-        while let last = units.last, last == 0x0D || last == 0x20 || last == 0x09 { units.removeLast() }
-        var i = 0
-        while i < units.count, i < 4, units[i] == 0x20 { i += 1 }
-        guard i <= 3 else { return nil }
+        let start = slice.startIndex
+        var end = slice.endIndex
+        var i = start
+        var spaces = 0
+        while i < end, spaces < 4, slice[i] == 0x20 { i += 1; spaces += 1 }
+        guard spaces <= 3, i < end, slice[i] == 0x23 else { return nil }
+
+        // Trim trailing CR/space/tab only on lines that actually begin with `#`.
+        while end > i {
+            let u = slice[end - 1]
+            if u == 0x0D || u == 0x20 || u == 0x09 { end -= 1 } else { break }
+        }
+
         var level = 0
-        while i < units.count, units[i] == 0x23 { level += 1; i += 1 }
+        while i < end, slice[i] == 0x23 { level += 1; i += 1 }
         guard (1...6).contains(level) else { return nil }
-        guard i == units.count || units[i] == 0x20 || units[i] == 0x09 else { return nil }
-        var body = Array(units[i...])
-        // Closing sequence: trailing `#` run preceded by a space (or the whole body).
-        var end = body.count
-        while end > 0, body[end - 1] == 0x23 { end -= 1 }
-        if end < body.count, end == 0 || body[end - 1] == 0x20 || body[end - 1] == 0x09 { body = Array(body[..<end]) }
-        let title = String(decoding: body, as: UTF16.self).trimmingCharacters(in: .whitespaces)
+        guard i == end || slice[i] == 0x20 || slice[i] == 0x09 else { return nil }
+
+        // Trim optional closing `#` run preceded by space/tab (or covering the whole body).
+        var bodyEnd = end
+        while bodyEnd > i, slice[bodyEnd - 1] == 0x23 { bodyEnd -= 1 }
+        if bodyEnd < end, bodyEnd == i || slice[bodyEnd - 1] == 0x20 || slice[bodyEnd - 1] == 0x09 {
+            end = bodyEnd
+        }
+
+        // Trim leading/trailing ASCII space/tab before decoding to String.
+        while i < end, slice[i] == 0x20 || slice[i] == 0x09 { i += 1 }
+        while end > i, slice[end - 1] == 0x20 || slice[end - 1] == 0x09 { end -= 1 }
+        let title = String(decoding: slice[i..<end], as: UTF16.self).trimmingCharacters(in: .whitespaces)
         return MarkdownHeading(level: level, title: title, utf16Offset: offset)
     }
 }
@@ -74,9 +88,17 @@ public struct DocumentNavigatorState: Equatable, Sendable {
 
     /// Case-insensitive substring filter; an empty query shows ALL headings.
     public mutating func setQuery(_ newQuery: String) {
+        let previousNeedle = query.trimmingCharacters(in: .whitespaces)
         query = newQuery
         let needle = newQuery.trimmingCharacters(in: .whitespaces)
-        filtered = needle.isEmpty ? headings : headings.filter { $0.title.localizedCaseInsensitiveContains(needle) }
+        if needle.isEmpty {
+            filtered = headings
+        } else {
+            let source = (!previousNeedle.isEmpty && needle.localizedCaseInsensitiveContains(previousNeedle))
+                ? filtered
+                : headings
+            filtered = source.filter { $0.title.localizedCaseInsensitiveContains(needle) }
+        }
         selectedIndex = 0
     }
 

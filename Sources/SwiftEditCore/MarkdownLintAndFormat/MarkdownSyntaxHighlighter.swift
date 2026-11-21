@@ -29,21 +29,35 @@ public struct MarkdownLineIndex: Sendable {
 
     public init(text: String) {
         let units = Array(text.utf16)
-        var starts = [0]
-        for (i, u) in units.enumerated() where u == 0x0A { starts.append(i + 1) }
-        self.units = units
-        self.lineStarts = starts
+        let unitCount = units.count
+        var starts: [Int] = []
+        starts.reserveCapacity(max(16, unitCount / 40))
         var found: [(Int, Int)] = []
         var open: (line: Int, char: UInt16, count: Int)?
-        for line in 0..<starts.count {
-            let slice = Self.slice(units, starts, line)
-            if let o = open {
-                if Self.isFenceLine(slice, char: o.char, minCount: o.count, closing: true) { found.append((o.line, line)); open = nil }
-            } else if let f = Self.fenceOpening(slice) {
-                open = (line, f.char, f.count)
+
+        var lineStart = 0
+        var lineIndex = 0
+        var i = 0
+        while i <= unitCount {
+            if i == unitCount || units[i] == 0x0A {
+                starts.append(lineStart)
+                let slice = units[lineStart..<i]
+                if let o = open {
+                    if Self.isFenceLine(slice, char: o.char, minCount: o.count, closing: true) {
+                        found.append((o.line, lineIndex))
+                        open = nil
+                    }
+                } else if let f = Self.fenceOpening(slice) {
+                    open = (lineIndex, f.char, f.count)
+                }
+                lineIndex += 1
+                lineStart = i + 1
             }
+            i += 1
         }
         if let o = open { found.append((o.line, starts.count - 1)) }
+        self.units = units
+        self.lineStarts = starts
         self.fences = found
     }
 
@@ -127,10 +141,27 @@ public enum MarkdownSyntaxHighlighter {
         let first = index.line(containing: visibleRange.location)
         let last = index.line(containing: max(visibleRange.location, visibleRange.upperBound - 1))
         var out: [MarkdownSyntaxSpan] = []
+        out.reserveCapacity(max(16, (last - first + 1) * 2))
+
+        // Locate initial fence cursor via binary search, then advance monotonically in O(1) amortized.
+        let fences = index.fences
+        var fenceCursor = 0
+        if !fences.isEmpty {
+            var lo = 0, hi = fences.count
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2
+                if fences[mid].close < first { lo = mid + 1 } else { hi = mid }
+            }
+            fenceCursor = lo
+        }
+
         for line in first...last {
+            while fenceCursor < fences.count && fences[fenceCursor].close < line {
+                fenceCursor += 1
+            }
             let range = index.lineRange(line)
             guard range.length > 0, range.length <= MarkdownLineIndex.maxLineUTF16 else { continue }
-            if index.isFenced(line: line) {
+            if fenceCursor < fences.count && fences[fenceCursor].open <= line {
                 out.append(MarkdownSyntaxSpan(kind: .codeBlock, range: range))
                 continue
             }
@@ -160,10 +191,11 @@ public enum MarkdownSyntaxHighlighter {
             add(.blockquote, start, line.endIndex)
         } else if first == 0x7C, line[(idx + 1)...].contains(0x7C) {
             add(.tableRow, start, line.endIndex)
-        }
-        if let item = MarkdownListGrammar.parseListLine(line), case .bullet(_, let state?) = item.kind {
-            let box = start + item.indent + 2
-            add(.task(checked: state != 0x20), box, box + 3)
+        } else if first == 0x2D || first == 0x2A || first == 0x2B {
+            if let item = MarkdownListGrammar.parseListLine(line), case .bullet(_, let state?) = item.kind {
+                let box = start + item.indent + 2
+                add(.task(checked: state != 0x20), box, box + 3)
+            }
         }
         scanInline(line, add: add)
     }
@@ -180,9 +212,19 @@ public enum MarkdownSyntaxHighlighter {
         return count >= 3
     }
 
+    /// Strictly linear `O(L)` inline scanner: memoizes failed closer lookups per delimiter so unmatched delimiters never re-scan to EOL.
     private static func scanInline(_ line: ArraySlice<UInt16>, add: (MarkdownSyntaxKind, Int, Int) -> Void) {
         var i = line.startIndex
         let end = line.endIndex
+        var noBacktick = false
+        var noDoubleStar = false
+        var noDoubleTilde = false
+        var noStar = false
+        var noUnderscore = false
+        var noCloseAngle = false
+        var noLinkCloseBracket = false
+        var noLinkCloseParen = false
+
         func find(_ unit: UInt16, from: Int) -> Int? {
             var k = from
             while k < end { if line[k] == unit { return k }; k += 1 }
@@ -193,26 +235,74 @@ public enum MarkdownSyntaxHighlighter {
             while k + 1 < end { if line[k] == unit, line[k + 1] == unit { return k }; k += 1 }
             return nil
         }
+        func linkEndLinear(openBracket: Int) -> Int? {
+            guard !noLinkCloseBracket && !noLinkCloseParen else { return nil }
+            var k = openBracket + 1
+            while k < end, line[k] != 0x5D { k += 1 }
+            guard k < end else {
+                noLinkCloseBracket = true
+                return nil
+            }
+            guard k + 1 < end, line[k + 1] == 0x28 else { return nil }
+            var m = k + 2
+            while m < end, line[m] != 0x29 { m += 1 }
+            if m < end { return m }
+            noLinkCloseParen = true
+            return nil
+        }
+
         while i < end {
             let c = line[i]
             switch c {
             case 0x60:
-                if let close = find(0x60, from: i + 1), close > i + 1 { add(.inlineCode, i, close + 1); i = close + 1; continue }
+                if !noBacktick {
+                    if let close = find(0x60, from: i + 1) {
+                        if close > i + 1 { add(.inlineCode, i, close + 1); i = close + 1; continue }
+                    } else {
+                        noBacktick = true
+                    }
+                }
             case 0x21 where i + 1 < end && line[i + 1] == 0x5B:
-                if let r = linkEnd(line, openBracket: i + 1) { add(.image, i, r + 1); i = r + 1; continue }
+                if let r = linkEndLinear(openBracket: i + 1) { add(.image, i, r + 1); i = r + 1; continue }
             case 0x5B:
-                if let r = linkEnd(line, openBracket: i) { add(.link, i, r + 1); i = r + 1; continue }
+                if let r = linkEndLinear(openBracket: i) { add(.link, i, r + 1); i = r + 1; continue }
             case 0x2A where i + 1 < end && line[i + 1] == 0x2A:
-                if let close = findPair(0x2A, from: i + 2), close > i + 2 { add(.bold, i, close + 2); i = close + 2; continue }
+                if !noDoubleStar {
+                    if let close = findPair(0x2A, from: i + 2) {
+                        if close > i + 2 { add(.bold, i, close + 2); i = close + 2; continue }
+                    } else {
+                        noDoubleStar = true
+                    }
+                }
             case 0x7E where i + 1 < end && line[i + 1] == 0x7E:
-                if let close = findPair(0x7E, from: i + 2), close > i + 2 { add(.strikethrough, i, close + 2); i = close + 2; continue }
-            case 0x2A, 0x5F:
-                if i + 1 < end, line[i + 1] != 0x20, let close = find(c, from: i + 1), close > i + 1, line[close - 1] != 0x20 {
-                    add(.italic, i, close + 1); i = close + 1; continue
+                if !noDoubleTilde {
+                    if let close = findPair(0x7E, from: i + 2) {
+                        if close > i + 2 { add(.strikethrough, i, close + 2); i = close + 2; continue }
+                    } else {
+                        noDoubleTilde = true
+                    }
+                }
+            case 0x2A:
+                if !noStar, i + 1 < end, line[i + 1] != 0x20 {
+                    if let close = find(0x2A, from: i + 1) {
+                        if close > i + 1, line[close - 1] != 0x20 { add(.italic, i, close + 1); i = close + 1; continue }
+                    } else {
+                        noStar = true
+                    }
+                }
+            case 0x5F:
+                if !noUnderscore, i + 1 < end, line[i + 1] != 0x20 {
+                    if let close = find(0x5F, from: i + 1) {
+                        if close > i + 1, line[close - 1] != 0x20 { add(.italic, i, close + 1); i = close + 1; continue }
+                    } else {
+                        noUnderscore = true
+                    }
                 }
             case 0x3C:
-                if i + 1 < end, (line[i + 1] >= 0x41 && line[i + 1] <= 0x5A) || (line[i + 1] >= 0x61 && line[i + 1] <= 0x7A) || line[i + 1] == 0x2F,
-                   let close = find(0x3E, from: i + 1) { add(.inlineHTML, i, close + 1); i = close + 1; continue }
+                if !noCloseAngle, i + 1 < end, (line[i + 1] >= 0x41 && line[i + 1] <= 0x5A) || (line[i + 1] >= 0x61 && line[i + 1] <= 0x7A) || line[i + 1] == 0x2F {
+                    if let close = find(0x3E, from: i + 1) { add(.inlineHTML, i, close + 1); i = close + 1; continue }
+                    noCloseAngle = true
+                }
             default: break
             }
             i += 1

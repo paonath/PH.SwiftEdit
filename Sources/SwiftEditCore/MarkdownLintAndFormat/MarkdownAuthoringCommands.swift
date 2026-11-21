@@ -148,9 +148,13 @@ public enum GFMTableEditEngine {
 
     public static func evaluateTab(in snapshot: DocumentSnapshot, selection: TextRange, backward: Bool, isMarkdownDocument: Bool) -> TableEditOutcome {
         guard isMarkdownDocument, !snapshot.isBinaryReadOnly, !snapshot.isDegradedPlainText else { return .notApplicable }
-        let text = snapshot.text as NSString
-        guard selection.location >= 0, selection.upperBound <= text.length else { return .notApplicable }
+        guard selection.location >= 0, selection.length >= 0 else { return .notApplicable }
+        // O(lineLength) zero-allocation pre-check: if the caret line doesn't start with '|', skip building MarkdownLineIndex.
+        guard caretLineStartsWithPipe(in: snapshot.text, caretUTF16: selection.location, upperBoundUTF16: selection.upperBound) else {
+            return .notApplicable
+        }
         let index = MarkdownLineIndex(text: snapshot.text)
+        guard selection.upperBound <= index.units.count else { return .notApplicable }
         let caretLine = index.line(containing: selection.location)
         guard !index.isFenced(line: caretLine), isTableLine(index, caretLine) else { return .notApplicable }
 
@@ -158,9 +162,10 @@ public enum GFMTableEditEngine {
         while top > 0, isTableLine(index, top - 1), !index.isFenced(line: top - 1) { top -= 1 }
         var bottom = caretLine
         while bottom + 1 < index.lineCount, isTableLine(index, bottom + 1), !index.isFenced(line: bottom + 1) { bottom += 1 }
-        guard bottom - top + 1 >= 2, bottom - top + 1 <= maxRows, isDelimiterRow(cells(index.lineSlice(top + 1))) else { return .notApplicable }
+        guard bottom - top + 1 >= 2, bottom - top + 1 <= maxRows, isDelimiterRowSlice(index.lineSlice(top + 1)) else { return .notApplicable }
 
         var rows: [[String]] = []
+        rows.reserveCapacity(bottom - top + 2)
         for line in top...bottom {
             let slice = index.lineSlice(line)
             if slice.count > MarkdownLineIndex.maxLineUTF16 { return .notApplicable }
@@ -198,31 +203,85 @@ public enum GFMTableEditEngine {
         guard rows.count <= maxRows else { return .notApplicable }
 
         var widths = Array(repeating: 3, count: columnCount)
-        for (r, cellsInRow) in rows.enumerated() where r != 1 {
-            for (c, cell) in cellsInRow.enumerated() { widths[c] = max(widths[c], (cell as NSString).length) }
+        var cellLengths: [[Int]] = []
+        cellLengths.reserveCapacity(rows.count)
+        for (r, cellsInRow) in rows.enumerated() {
+            var rowLens = Array(repeating: 0, count: columnCount)
+            if r != 1 {
+                for c in 0..<columnCount {
+                    let len = cellsInRow[c].utf16.count
+                    rowLens[c] = len
+                    if len > widths[c] { widths[c] = len }
+                }
+            }
+            cellLengths.append(rowLens)
         }
+        let estimatedRowBytes = widths.reduce(2) { $0 + $1 + 3 }
         var out = ""
+        out.reserveCapacity(estimatedRowBytes * rows.count)
+        var outUTF16Count = 0
         var target = TextRange(location: 0, length: 0)
         let blockStart = index.lineRange(top).location
         let blockEnd = index.lineRange(bottom).upperBound
-        for (r, cellsInRow) in rows.enumerated() {
-            if r > 0 { out += "\n" }
-            out += "|"
+        let dashesByCol = widths.map { String(repeating: "-", count: $0) }
+
+        for r in 0..<rows.count {
+            if r > 0 {
+                out.append("\n")
+                outUTF16Count += 1
+            }
+            out.append("|")
+            outUTF16Count += 1
+            let cellsInRow = rows[r]
+            let lensInRow = cellLengths[r]
             for c in 0..<columnCount {
-                let content: String
-                if r == 1 { content = String(repeating: "-", count: widths[c]) } else {
-                    let raw = cellsInRow[c]
-                    content = raw + String(repeating: " ", count: widths[c] - (raw as NSString).length)
-                }
-                out += " "
+                out.append(" ")
+                outUTF16Count += 1
                 if r == row, c == col {
-                    target = TextRange(location: blockStart + (out as NSString).length, length: (cellsInRow[c] as NSString).length)
+                    target = TextRange(location: blockStart + outUTF16Count, length: lensInRow[c])
                 }
-                out += content + " |"
+                if r == 1 {
+                    out.append(dashesByCol[c])
+                    outUTF16Count += widths[c]
+                } else {
+                    let raw = cellsInRow[c]
+                    let rawLen = lensInRow[c]
+                    out.append(raw)
+                    let pad = widths[c] - rawLen
+                    if pad > 0 {
+                        out.append(String(repeating: " ", count: pad))
+                    }
+                    outUTF16Count += widths[c]
+                }
+                out.append(" |")
+                outUTF16Count += 2
             }
         }
         let edit = TextEdit(range: TextRange(location: blockStart, length: blockEnd - blockStart), replacement: out)
         return .edit(MarkdownAuthoringEdit(edits: [edit], newSelection: target))
+    }
+
+    private static func caretLineStartsWithPipe(in text: String, caretUTF16: Int, upperBoundUTF16: Int) -> Bool {
+        let utf16 = text.utf16
+        guard let caretIdx = utf16.index(utf16.startIndex, offsetBy: caretUTF16, limitedBy: utf16.endIndex) else {
+            return false
+        }
+        if upperBoundUTF16 > caretUTF16 {
+            guard utf16.index(caretIdx, offsetBy: upperBoundUTF16 - caretUTF16, limitedBy: utf16.endIndex) != nil else {
+                return false
+            }
+        }
+        let utf8 = text.utf8
+        var cursor = caretIdx
+        while cursor > utf8.startIndex {
+            let prev = utf8.index(before: cursor)
+            if utf8[prev] == 0x0A { break }
+            cursor = prev
+        }
+        while cursor < utf8.endIndex && utf8[cursor] == 0x20 {
+            cursor = utf8.index(after: cursor)
+        }
+        return cursor < utf8.endIndex && utf8[cursor] == 0x7C
     }
 
     private static func isTableLine(_ index: MarkdownLineIndex, _ line: Int) -> Bool {
@@ -232,24 +291,120 @@ public enum GFMTableEditEngine {
         return i < slice.endIndex && slice[i] == 0x7C
     }
 
+    /// Zero-allocation cell count matching `cells(line).count`.
+    static func cellCount(_ line: ArraySlice<UInt16>) -> Int {
+        var count = 0
+        var started = false
+        var prevBackslash = false
+        var currentHasNonSpace = false
+        for u in line {
+            if !started {
+                if u == 0x7C { started = true }
+                continue
+            }
+            if u == 0x7C, !prevBackslash {
+                count += 1
+                currentHasNonSpace = false
+            } else if u != 0x20 {
+                currentHasNonSpace = true
+            }
+            prevBackslash = (u == 0x5C)
+        }
+        if currentHasNonSpace { count += 1 }
+        return count
+    }
+
+    /// Zero-allocation delimiter-row check matching `isDelimiterRow(cells(line))`.
+    static func isDelimiterRowSlice(_ line: ArraySlice<UInt16>) -> Bool {
+        var cellCount = 0
+        var started = false
+        var prevBackslash = false
+        var segStart = line.startIndex
+
+        func isValidDelimiterCell(_ start: Int, _ end: Int) -> Bool {
+            var lo = start
+            var hi = end
+            while lo < hi, line[lo] == 0x20 || line[lo] == 0x09 { lo += 1 }
+            while hi > lo, line[hi - 1] == 0x20 || line[hi - 1] == 0x09 { hi -= 1 }
+            while lo < hi, line[lo] == 0x3A { lo += 1 } // ':'
+            while hi > lo, line[hi - 1] == 0x3A { hi -= 1 }
+            guard lo < hi else { return false }
+            var k = lo
+            while k < hi {
+                if line[k] != 0x2D { return false } // '-'
+                k += 1
+            }
+            return true
+        }
+
+        var idx = line.startIndex
+        while idx < line.endIndex {
+            let u = line[idx]
+            if !started {
+                if u == 0x7C {
+                    started = true
+                    segStart = idx + 1
+                }
+                idx += 1
+                continue
+            }
+            if u == 0x7C, !prevBackslash {
+                if !isValidDelimiterCell(segStart, idx) { return false }
+                cellCount += 1
+                segStart = idx + 1
+                prevBackslash = false
+            } else {
+                prevBackslash = (u == 0x5C)
+            }
+            idx += 1
+        }
+        if started {
+            var hasNonSpace = false
+            var k = segStart
+            while k < line.endIndex {
+                if line[k] != 0x20 { hasNonSpace = true; break }
+                k += 1
+            }
+            if hasNonSpace {
+                if !isValidDelimiterCell(segStart, line.endIndex) { return false }
+                cellCount += 1
+            }
+        }
+        return cellCount > 0
+    }
+
     /// Splits a pipe row into trimmed cells, honoring `\|` escapes and dropping the leading and trailing pipe.
     static func cells(_ line: ArraySlice<UInt16>) -> [String] {
-        var result: [[UInt16]] = []
+        var result: [String] = []
         var current: [UInt16] = []
         var started = false
         var prevBackslash = false
+        func finishCell() {
+            var lo = 0
+            var hi = current.count
+            while lo < hi && (current[lo] == 0x20 || current[lo] == 0x09) { lo += 1 }
+            while hi > lo && (current[hi - 1] == 0x20 || current[hi - 1] == 0x09) { hi -= 1 }
+            if lo < hi {
+                result.append(String(decoding: current[lo..<hi], as: UTF16.self))
+            } else {
+                result.append("")
+            }
+            current.removeAll(keepingCapacity: true)
+        }
         for u in line {
             if !started { if u == 0x7C { started = true }; continue }
-            if u == 0x7C, !prevBackslash { result.append(current); current = [] } else { current.append(u) }
+            if u == 0x7C, !prevBackslash { finishCell() } else { current.append(u) }
             prevBackslash = (u == 0x5C)
         }
-        if !current.allSatisfy({ $0 == 0x20 }) { result.append(current) }
-        return result.map { String(decoding: $0, as: UTF16.self).trimmingCharacters(in: .whitespaces) }
+        if !current.allSatisfy({ $0 == 0x20 }) { finishCell() }
+        return result
     }
+
+    private static let colonCharacterSet = CharacterSet(charactersIn: ":")
 
     static func isDelimiterRow(_ cells: [String]) -> Bool {
         !cells.isEmpty && cells.allSatisfy { cell in
-            let t = cell.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+            let t = cell.trimmingCharacters(in: Self.colonCharacterSet)
             return !t.isEmpty && t.allSatisfy { $0 == "-" }
         }
     }

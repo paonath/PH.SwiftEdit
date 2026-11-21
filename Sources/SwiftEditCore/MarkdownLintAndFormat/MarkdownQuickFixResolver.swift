@@ -51,23 +51,57 @@ public enum MarkdownQuickFixResolver {
         return kept
     }
 
+    /// Single-pass `O(N + K)` reconstruction replacing the previous `O(K * N)` `NSMutableString` shifting loop (`edits` are sorted & non-overlapping).
     private static func apply(_ edits: [TextEdit], to text: String) -> String {
-        let m = NSMutableString(string: text)
-        for e in edits.sorted(by: { $0.range.location > $1.range.location }) {
-            guard e.range.location >= 0, e.range.upperBound <= m.length else { continue }
-            m.replaceCharacters(in: NSRange(location: e.range.location, length: e.range.length), with: e.replacement)
+        guard !edits.isEmpty else { return text }
+        let srcUnits = Array(text.utf16)
+        let srcCount = srcUnits.count
+        var estimatedLen = srcCount
+        for e in edits where e.range.location >= 0 && e.range.upperBound <= srcCount {
+            estimatedLen += e.replacement.utf16.count - e.range.length
         }
-        return m as String
+        var outUnits: [UInt16] = []
+        outUnits.reserveCapacity(max(0, estimatedLen))
+        var cursor = 0
+        for e in edits {
+            guard e.range.location >= cursor, e.range.upperBound <= srcCount else { continue }
+            if e.range.location > cursor {
+                outUnits.append(contentsOf: srcUnits[cursor..<e.range.location])
+            }
+            if !e.replacement.isEmpty {
+                outUnits.append(contentsOf: e.replacement.utf16)
+            }
+            cursor = e.range.upperBound
+        }
+        if cursor < srcCount {
+            outUnits.append(contentsOf: srcUnits[cursor..<srcCount])
+        }
+        return String(decoding: outUnits, as: UTF16.self)
     }
 
     private static func minimalEdit(from old: String, to new: String) -> TextEdit {
-        let a = Array(old.utf16), b = Array(new.utf16)
+        let a = old.utf16
+        let b = new.utf16
+        var aStart = a.startIndex
+        var bStart = b.startIndex
         var prefix = 0
-        while prefix < a.count, prefix < b.count, a[prefix] == b[prefix] { prefix += 1 }
-        var suffix = 0
-        while suffix < a.count - prefix, suffix < b.count - prefix, a[a.count - 1 - suffix] == b[b.count - 1 - suffix] { suffix += 1 }
-        let replacement = String(decoding: b[prefix..<(b.count - suffix)], as: UTF16.self)
-        return TextEdit(range: TextRange(location: prefix, length: a.count - prefix - suffix), replacement: replacement)
+        while aStart < a.endIndex, bStart < b.endIndex, a[aStart] == b[bStart] {
+            aStart = a.index(after: aStart)
+            bStart = b.index(after: bStart)
+            prefix += 1
+        }
+        var aEnd = a.endIndex
+        var bEnd = b.endIndex
+        while aEnd > aStart, bEnd > bStart {
+            let aPrev = a.index(before: aEnd)
+            let bPrev = b.index(before: bEnd)
+            if a[aPrev] != b[bPrev] { break }
+            aEnd = aPrev
+            bEnd = bPrev
+        }
+        let removedLen = a.distance(from: aStart, to: aEnd)
+        let replacement = String(decoding: b[bStart..<bEnd], as: UTF16.self)
+        return TextEdit(range: TextRange(location: prefix, length: removedLen), replacement: replacement)
     }
 }
 

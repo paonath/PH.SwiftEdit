@@ -104,6 +104,39 @@ public enum DesktopWorkspaceValidator {
 
         return TerminalLaunchResolution(directoryURL: candidateDirectory, bundleIdentifier: bundleID)
     }
+
+    /// Overload honoring `PreferredTerminalApp`: `.auto` defaults to macOS `Terminal.app` (`BUG-017`), `.terminal` forces `Terminal.app`, `.iTerm2` selects iTerm2 when installed, and explicit allowlisted bundle IDs remain strictly validated (`SEC-003`).
+    public static func resolveTerminalLaunch(
+        targetURL: URL,
+        withinScope scopeURL: URL?,
+        explicitBundleIdentifier: String? = nil,
+        preferredTerminal: PreferredTerminalApp = .auto,
+        isITerm2Installed: Bool
+    ) throws -> TerminalLaunchResolution {
+        let resolvedExplicit: String?
+        if let explicitBundleIdentifier {
+            resolvedExplicit = explicitBundleIdentifier
+        } else if preferredTerminal == .terminal {
+            resolvedExplicit = TerminalLaunchResolution.appleTerminalBundleIdentifier
+        } else {
+            resolvedExplicit = nil
+        }
+        return try resolveTerminalLaunch(
+            targetURL: targetURL,
+            withinScope: scopeURL,
+            explicitBundleIdentifier: resolvedExplicit,
+            isITerm2Installed: isITerm2Installed,
+            isITerm2Preferred: preferredTerminal == .iTerm2 && isITerm2Installed
+        )
+    }
+}
+
+/// Explicit user preference for Terminal integration inside `MacOSWorkspaceAdapter` (`BUG-017`).
+public enum PreferredTerminalApp: String, Codable, Equatable, CaseIterable, Sendable {
+    /// Defaults to macOS `Terminal.app` (`com.apple.Terminal`) unless opted into `.iTerm2` (`BUG-017`).
+    case auto
+    case terminal
+    case iTerm2
 }
 
 /// `@MainActor` desktop integration seam isolating `NSWorkspace` Finder and Terminal launches from unit tests (`AR-003`, `AR-007`, `SEC-004`, `TEST-004`).
@@ -122,7 +155,11 @@ public protocol DesktopWorkspaceIntegrating {
 /// Production macOS `DesktopWorkspaceIntegrating` adapter invoking `NSWorkspace` strictly on confined paths and verified directories with zero subprocesses (`CWE-78`, `SEC-003`, `SEC-004`).
 @MainActor
 public struct MacOSWorkspaceAdapter: DesktopWorkspaceIntegrating {
-    public init() {}
+    public var preferredTerminal: PreferredTerminalApp
+
+    public init(preferredTerminal: PreferredTerminalApp = .auto) {
+        self.preferredTerminal = preferredTerminal
+    }
 
     /// Reveals `itemURL` in Finder after verifying workspace symlink confinement (`SEC-003`, `SEC-004`).
     public func revealInFinder(itemURL: URL, withinScope scopeURL: URL?) throws {
@@ -142,7 +179,7 @@ public struct MacOSWorkspaceAdapter: DesktopWorkspaceIntegrating {
         #endif
     }
 
-    /// Launches `com.googlecode.iterm2` (when installed) or `com.apple.Terminal` at the verified directory URL via `NSWorkspace` with zero subprocesses (`CWE-78`, `SEC-004`).
+    /// Launches `com.apple.Terminal` (`.auto`/`.terminal`) or `com.googlecode.iterm2` (when opted into `.iTerm2` & installed) at the verified directory URL via `NSWorkspace` with zero subprocesses (`CWE-78`, `SEC-004`, `BUG-017`).
     @discardableResult
     public func openInTerminal(
         targetURL: URL,
@@ -155,8 +192,8 @@ public struct MacOSWorkspaceAdapter: DesktopWorkspaceIntegrating {
             targetURL: targetURL,
             withinScope: scopeURL,
             explicitBundleIdentifier: explicitBundleIdentifier,
-            isITerm2Installed: iTermURL != nil,
-            isITerm2Preferred: iTermURL != nil
+            preferredTerminal: preferredTerminal,
+            isITerm2Installed: iTermURL != nil
         )
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: resolution.bundleIdentifier) else {
             throw DomainError.ioFailure("Terminal application unavailable: \(resolution.bundleIdentifier)")
@@ -168,8 +205,8 @@ public struct MacOSWorkspaceAdapter: DesktopWorkspaceIntegrating {
             targetURL: targetURL,
             withinScope: scopeURL,
             explicitBundleIdentifier: explicitBundleIdentifier,
-            isITerm2Installed: false,
-            isITerm2Preferred: false
+            preferredTerminal: preferredTerminal,
+            isITerm2Installed: false
         )
         #endif
     }

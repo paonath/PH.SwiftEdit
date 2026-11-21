@@ -3,6 +3,20 @@ import SwiftUI
 
 /// Pure SwiftUI vector rendering of the official Concept E2 Feather-in-Inverted-Triangle brand logo (`docs/design/assets/logo-e2-refined.svg`) (`UI-001`).
 public struct SwiftEditBrandLogoView: View {
+    private static let groundColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.groundHex).swiftUIColor
+    private static let strokeColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.triangleStrokeHex).swiftUIColor
+    private static let topColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherTopHex).swiftUIColor
+    private static let bottomColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherBottomHex).swiftUIColor
+    private static let allBarbs: [(CGFloat, CGFloat, CGFloat, CGFloat)] = [
+        (292, 186, 262, 174), (292, 204, 260, 192), (292, 222, 258, 210),
+        (292, 240, 258, 228), (292, 258, 258, 246), (292, 276, 258, 264),
+        (292, 294, 259, 282), (292, 312, 261, 300), (292, 330, 262, 318),
+        (292, 348, 264, 336), (292, 366, 268, 354),
+        (292, 204, 318, 194), (292, 222, 320, 212), (292, 240, 322, 230),
+        (292, 258, 322, 248), (292, 276, 320, 266), (292, 294, 316, 284),
+        (292, 312, 313, 302), (292, 330, 310, 320),
+    ]
+
     public let size: CGFloat
 
     public init(size: CGFloat = CGFloat(SwiftEditBrandLogoGeometry.topBarLogoSize)) {
@@ -12,15 +26,11 @@ public struct SwiftEditBrandLogoView: View {
     public var body: some View {
         Canvas { context, canvasSize in
             let scale = min(canvasSize.width, canvasSize.height) / CGFloat(SwiftEditBrandLogoGeometry.viewBoxSize)
-            let groundColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.groundHex).swiftUIColor
-            let strokeColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.triangleStrokeHex).swiftUIColor
-            let topColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherTopHex).swiftUIColor
-            let bottomColor = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherBottomHex).swiftUIColor
 
             // Rounded square ground (#0B0614, rx=96/512)
             let bgRect = CGRect(x: 0, y: 0, width: 512 * scale, height: 512 * scale)
             let bgPath = Path(roundedRect: bgRect, cornerRadius: CGFloat(SwiftEditBrandLogoGeometry.cornerRadius) * scale)
-            context.fill(bgPath, with: .color(groundColor))
+            context.fill(bgPath, with: .color(Self.groundColor))
 
             // Inverted triangle outline (#A78BFA, stroke-width=16)
             var triangle = Path()
@@ -30,7 +40,7 @@ public struct SwiftEditBrandLogoView: View {
             triangle.closeSubpath()
             context.stroke(
                 triangle,
-                with: .color(strokeColor),
+                with: .color(Self.strokeColor),
                 style: StrokeStyle(lineWidth: 16 * scale, lineJoin: .round)
             )
 
@@ -56,7 +66,7 @@ public struct SwiftEditBrandLogoView: View {
             context.fill(
                 feather,
                 with: .linearGradient(
-                    Gradient(colors: [topColor, bottomColor]),
+                    Gradient(colors: [Self.topColor, Self.bottomColor]),
                     startPoint: pt(290, 140),
                     endPoint: pt(290, 472)
                 )
@@ -68,30 +78,19 @@ public struct SwiftEditBrandLogoView: View {
             rachis.addCurve(to: pt(290, 432), control1: pt(294, 250), control2: pt(294, 350))
             context.stroke(
                 rachis,
-                with: .color(groundColor),
+                with: .color(Self.groundColor),
                 style: StrokeStyle(lineWidth: 7 * 0.74 * scale, lineCap: .round)
             )
 
             // Feather barbs (#0B0614)
-            let leftBarbs: [(CGFloat, CGFloat, CGFloat, CGFloat)] = [
-                (292, 186, 262, 174), (292, 204, 260, 192), (292, 222, 258, 210),
-                (292, 240, 258, 228), (292, 258, 258, 246), (292, 276, 258, 264),
-                (292, 294, 259, 282), (292, 312, 261, 300), (292, 330, 262, 318),
-                (292, 348, 264, 336), (292, 366, 268, 354),
-            ]
-            let rightBarbs: [(CGFloat, CGFloat, CGFloat, CGFloat)] = [
-                (292, 204, 318, 194), (292, 222, 320, 212), (292, 240, 322, 230),
-                (292, 258, 322, 248), (292, 276, 320, 266), (292, 294, 316, 284),
-                (292, 312, 313, 302), (292, 330, 310, 320),
-            ]
             var barbs = Path()
-            for (x1, y1, x2, y2) in leftBarbs + rightBarbs {
+            for (x1, y1, x2, y2) in Self.allBarbs {
                 barbs.move(to: pt(x1, y1))
                 barbs.addLine(to: pt(x2, y2))
             }
             context.stroke(
                 barbs,
-                with: .color(groundColor),
+                with: .color(Self.groundColor),
                 style: StrokeStyle(lineWidth: 9 * 0.74 * scale, lineCap: .round)
             )
         }

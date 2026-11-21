@@ -5,12 +5,50 @@ import SwiftUI
 #if os(macOS)
 import AppKit
 
+/// Isolates `NSUndoManager` instances per `DocumentID` so tab closures, FindBar edits, and multi-tab switches never share or dangle ObjC undo targets (`BUG-001`, `CWE-416`, `AR-010`).
+@MainActor
+public final class PerTabUndoManagerRegistry {
+    private var undoManagersByID: [DocumentID: UndoManager] = [:]
+
+    public init() {}
+
+    /// Returns the dedicated `UndoManager` for `documentID`, creating one lazily if needed.
+    public func undoManager(for documentID: DocumentID) -> UndoManager {
+        if let existing = undoManagersByID[documentID] {
+            return existing
+        }
+        let manager = UndoManager()
+        undoManagersByID[documentID] = manager
+        return manager
+    }
+
+    /// Clears all undo/redo registrations and removes the manager when a tab closes (`CWE-416`).
+    public func removeUndoManager(for documentID: DocumentID) {
+        if let manager = undoManagersByID.removeValue(forKey: documentID) {
+            manager.removeAllActions()
+        }
+    }
+
+    /// Drops every tracked undo manager and clears recorded actions on teardown.
+    public func removeAll() {
+        for manager in undoManagersByID.values {
+            manager.removeAllActions()
+        }
+        undoManagersByID.removeAll()
+    }
+
+    public func containsUndoManager(for documentID: DocumentID) -> Bool {
+        undoManagersByID[documentID] != nil
+    }
+}
+
 /// Custom TextKit 2 `NSTextView` painting a full-width subtle current-line background highlight (`UI-002`, `UI-012`).
 @MainActor
 final class SwiftEditNSTextView: NSTextView {
     var currentLineHighlightColor: NSColor = .clear
     /// ESC hook (navigator / distraction-free); returns `true` when consumed.
     var onEscape: (() -> Bool)?
+    private var lastHighlightedLineRect: NSRect?
 
     override func cancelOperation(_ sender: Any?) {
         if onEscape?() == true { return }
@@ -18,26 +56,48 @@ final class SwiftEditNSTextView: NSTextView {
     }
 
     override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+        let previousRange = selectedRange()
         super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
-        needsDisplay = true
+        if previousRange != charRange {
+            invalidateCurrentLineHighlightRect()
+        }
     }
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+        let previousRange = selectedRange()
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
-        needsDisplay = true
+        if previousRange != selectedRange() {
+            invalidateCurrentLineHighlightRect()
+        }
+    }
+
+    private func invalidateCurrentLineHighlightRect() {
+        if let oldRect = lastHighlightedLineRect {
+            setNeedsDisplay(oldRect)
+        }
+        if let newRect = currentLineFullWidthRect(onlyIfInViewport: true) {
+            lastHighlightedLineRect = newRect
+            setNeedsDisplay(newRect)
+        } else {
+            lastHighlightedLineRect = nil
+        }
     }
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         guard currentLineHighlightColor.alphaComponent > 0 else { return }
 
-        if let lineRect = currentLineFullWidthRect() {
-            currentLineHighlightColor.setFill()
-            lineRect.fill()
+        if let lineRect = currentLineFullWidthRect(onlyIfInViewport: true) {
+            lastHighlightedLineRect = lineRect
+            if lineRect.intersects(rect) {
+                currentLineHighlightColor.setFill()
+                lineRect.fill()
+            }
         }
     }
 
-    private func currentLineFullWidthRect() -> NSRect? {
+    /// Computes full-width highlight rect covering every wrapped `textLineFragment` of the active paragraph/line (`BUG-013`).
+    func currentLineFullWidthRect(onlyIfInViewport: Bool = false) -> NSRect? {
         let origin = textContainerOrigin
         let fallbackHeight = max(14.0, (font?.ascender ?? 12.0) - (font?.descender ?? -3.0) + (font?.leading ?? 2.0))
         guard let textLayoutManager,
@@ -45,23 +105,43 @@ final class SwiftEditNSTextView: NSTextView {
             return NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
         }
 
-        let caretOffset = min(selectedRange().location, (string as NSString).length)
+        let totalLength = textStorage?.length ?? 0
+        let caretOffset = min(selectedRange().location, totalLength)
         guard let caretLocation = contentManager.location(contentManager.documentRange.location, offsetBy: caretOffset) else {
             return NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
         }
 
+        // During scroll redraws, skip forcing `.ensuresLayout` on off-screen paragraphs far outside the active viewport.
+        if onlyIfInViewport, let viewportRange = textLayoutManager.textViewportLayoutController.viewportRange {
+            if caretLocation.compare(viewportRange.location) == .orderedAscending
+                || caretLocation.compare(viewportRange.endLocation) == .orderedDescending {
+                return nil
+            }
+        }
+
         var resolvedRect: NSRect?
-        textLayoutManager.enumerateTextLayoutFragments(from: caretLocation, options: [.ensuresLayout]) { fragment in
+        let options: NSTextLayoutFragment.EnumerationOptions = onlyIfInViewport ? [] : [.ensuresLayout]
+        textLayoutManager.enumerateTextLayoutFragments(from: caretLocation, options: options) { fragment in
             let fragmentOrigin = fragment.layoutFragmentFrame.origin
-            for lineFragment in fragment.textLineFragments {
-                let lineFrame = lineFragment.typographicBounds
-                let y = origin.y + fragmentOrigin.y + lineFrame.minY
-                resolvedRect = NSRect(x: 0, y: y, width: bounds.width, height: max(lineFrame.height, fallbackHeight))
+            if !fragment.textLineFragments.isEmpty {
+                var minLineY = CGFloat.greatestFiniteMagnitude
+                var maxLineY: CGFloat = 0
+                for lineFragment in fragment.textLineFragments {
+                    let frame = lineFragment.typographicBounds
+                    minLineY = min(minLineY, frame.minY)
+                    maxLineY = max(maxLineY, frame.maxY)
+                }
+                let y = origin.y + fragmentOrigin.y + minLineY
+                let height = max(maxLineY - minLineY, fallbackHeight)
+                resolvedRect = NSRect(x: 0, y: y, width: bounds.width, height: height)
                 return false
             }
             let fallbackY = origin.y + fragmentOrigin.y
             resolvedRect = NSRect(x: 0, y: fallbackY, width: bounds.width, height: max(fragment.layoutFragmentFrame.height, fallbackHeight))
             return false
+        }
+        if onlyIfInViewport && resolvedRect == nil {
+            return nil
         }
         return resolvedRect ?? NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
     }
@@ -70,6 +150,8 @@ final class SwiftEditNSTextView: NSTextView {
 /// `@MainActor` TextKit 2 `NSTextView` wrapper enforcing `#FFFFFF`/`#000000` inverted canvas colors, current-line highlight, non-mutating nested bracket and backtick highlights, Markdown smart Enter continuation, `50%..300%` monospaced zoom, and read-only binary protection (`UI-002..008`, `UI-012`).
 @MainActor
 struct TextKit2EditorView: NSViewRepresentable {
+    var documentID: DocumentID = DocumentID()
+    var bufferRevision: BufferRevision = BufferRevision(1)
     let text: String
     let isEditable: Bool
     let palette: PurpleThemePalette
@@ -87,6 +169,9 @@ struct TextKit2EditorView: NSViewRepresentable {
     let programmaticSelectionToken: Int
     /// Diagnostics (after active-line suppression) drawn as dotted underlines; capped at `1000` by the engine.
     var lintDiagnostics: [MarkdownLintDiagnostic] = []
+    var undoRegistry: PerTabUndoManagerRegistry?
+    var editorFocusRequestToken: Int = 0
+    var onViewportMetricsChange: ((GutterViewportMetrics) -> Void)? = nil
     var onEscape: () -> Bool = { false }
 
     func makeCoordinator() -> Coordinator {
@@ -106,6 +191,9 @@ struct TextKit2EditorView: NSViewRepresentable {
         scrollView.borderType = .noBorder
 
         let textView = SwiftEditNSTextView(usingTextLayoutManager: true)
+        context.coordinator.undoRegistry = undoRegistry
+        context.coordinator.activeDocumentID = documentID
+        context.coordinator.activeBufferRevision = bufferRevision
         textView.delegate = context.coordinator
         textView.onEscape = onEscape
         textView.isRichText = false
@@ -123,59 +211,101 @@ struct TextKit2EditorView: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.textContainer?.widthTracksTextView = true
 
-        applyStyling(to: textView, in: scrollView)
-        textView.string = text
-        applyNonMutatingHighlights(to: textView)
+        applyStylingIfNeeded(to: textView, in: scrollView, coordinator: context.coordinator, force: true)
+        context.coordinator.applyProgrammaticTextUpdate(text, to: textView, documentID: documentID, isInitialSetup: true)
+        context.coordinator.markSynced(documentID: documentID, revision: bufferRevision)
+        applyNonMutatingHighlightsIfNeeded(to: textView, coordinator: context.coordinator, force: true)
         scrollView.documentView = textView
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        context.coordinator.onViewportMetricsChange = onViewportMetricsChange
+        context.coordinator.observeScrollBounds(of: scrollView, textView: textView)
         installGFMValidator(on: textView, coordinator: context.coordinator)
         return scrollView
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? SwiftEditNSTextView else { return }
-        context.coordinator.onTextChange = onTextChange
-        context.coordinator.onSelectionChange = onSelectionChange
-        context.coordinator.onSmartNewline = onSmartNewline
-        context.coordinator.onListIndent = onListIndent
-        context.coordinator.onTableTab = onTableTab
-        context.coordinator.gfmEnabled = isMarkdownDocument
-        context.coordinator.gfmPalette = palette
-        context.coordinator.gfmFontSize = fontSizePoints
-
-        applyStyling(to: textView, in: scrollView)
-        if textView.string != text {
-            let previousSelection = textView.selectedRange()
-            let targetLocation = context.coordinator.pendingProgrammaticCaret ?? previousSelection.location
-            context.coordinator.pendingProgrammaticCaret = nil
-            context.coordinator.isApplyingProgrammaticUpdate = true
-            textView.string = text
-            let clampedLocation = min(max(0, targetLocation), (text as NSString).length)
-            textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
-            context.coordinator.isApplyingProgrammaticUpdate = false
-            context.coordinator.invalidateLineIndex()
+    /// Detaches delegates, escape handlers, and TextKit 2 rendering validators before teardown to prevent `CWE-416` use-after-free and nil content manager traps (`BUG-001`, `BUG-021`).
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.detachScrollObserver()
+        if let textView = scrollView.documentView as? SwiftEditNSTextView {
+            textView.delegate = nil
+            textView.onEscape = nil
+            textView.textLayoutManager?.renderingAttributesValidator = nil
         }
-        if context.coordinator.appliedSelectionToken != programmaticSelectionToken {
-            context.coordinator.appliedSelectionToken = programmaticSelectionToken
-            let length = (textView.string as NSString).length
-            if programmaticSelection.location >= 0, programmaticSelection.upperBound <= length {
-                context.coordinator.isApplyingProgrammaticUpdate = true
-                textView.setSelectedRange(NSRange(location: programmaticSelection.location, length: programmaticSelection.length))
-                context.coordinator.isApplyingProgrammaticUpdate = false
-                textView.scrollRangeToVisible(NSRange(location: programmaticSelection.location, length: programmaticSelection.length))
-                textView.window?.makeFirstResponder(textView)
-            }
-        }
-        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
-        applyNonMutatingHighlights(to: textView)
-        textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
-        textView.needsDisplay = true
+        coordinator.invalidateLineIndex()
     }
 
-    /// Installs the viewport-only GFM `renderingAttributesValidator` (hot path): only the laid-out fragment is scanned, prose keeps `#FFFFFF`/`#000000` (`21:1`), and only traits plus `>= 4.5:1` palette tokens are applied (`UI-002`, `UI-012`).
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? SwiftEditNSTextView else { return }
+        let coordinator = context.coordinator
+        coordinator.onTextChange = onTextChange
+        coordinator.onSelectionChange = onSelectionChange
+        coordinator.onSmartNewline = onSmartNewline
+        coordinator.onListIndent = onListIndent
+        coordinator.onTableTab = onTableTab
+        coordinator.onViewportMetricsChange = onViewportMetricsChange
+        coordinator.undoRegistry = undoRegistry
+        coordinator.activeBufferRevision = bufferRevision
+        coordinator.gfmEnabled = isMarkdownDocument
+        coordinator.gfmPalette = palette
+        coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints)
+
+        let stylingChanged = applyStylingIfNeeded(to: textView, in: scrollView, coordinator: coordinator, force: false)
+
+        var textMutated = false
+        let needsTextSyncCheck = coordinator.activeDocumentID != documentID
+            || coordinator.lastSyncedBufferRevision != bufferRevision
+            || coordinator.hasPendingLocalEdit
+        if needsTextSyncCheck {
+            if coordinator.hasPendingLocalEdit && coordinator.activeDocumentID == documentID {
+                // Local textDidChange already owns the live NSTextStorage contents; re-stamp revision without O(N) full-string compare.
+                coordinator.hasPendingLocalEdit = false
+                coordinator.markSynced(documentID: documentID, revision: bufferRevision)
+                coordinator.retagCachedLineIndexRevision(documentID: documentID, revision: bufferRevision, storageLength: textView.textStorage?.length ?? 0)
+            } else if coordinator.activeDocumentID != documentID || textView.string != text {
+                coordinator.applyProgrammaticTextUpdate(text, to: textView, documentID: documentID)
+                coordinator.markSynced(documentID: documentID, revision: bufferRevision)
+                textMutated = true
+            } else {
+                coordinator.markSynced(documentID: documentID, revision: bufferRevision)
+            }
+        }
+
+        var selectionChanged = false
+        if coordinator.appliedSelectionToken != programmaticSelectionToken {
+            coordinator.appliedSelectionToken = programmaticSelectionToken
+            let length = textView.textStorage?.length ?? 0
+            if programmaticSelection.location >= 0, programmaticSelection.upperBound <= length {
+                coordinator.isApplyingProgrammaticUpdate = true
+                textView.setSelectedRange(NSRange(location: programmaticSelection.location, length: programmaticSelection.length))
+                coordinator.isApplyingProgrammaticUpdate = false
+                textView.scrollRangeToVisible(NSRange(location: programmaticSelection.location, length: programmaticSelection.length))
+                selectionChanged = true
+            }
+        }
+        if coordinator.appliedFocusRequestToken != editorFocusRequestToken {
+            coordinator.appliedFocusRequestToken = editorFocusRequestToken
+            textView.window?.makeFirstResponder(textView)
+        }
+
+        let highlightsChanged = applyNonMutatingHighlightsIfNeeded(
+            to: textView,
+            coordinator: coordinator,
+            force: stylingChanged || textMutated
+        )
+        if stylingChanged || textMutated || highlightsChanged {
+            textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+            textView.needsDisplay = true
+        }
+        if stylingChanged || textMutated || selectionChanged {
+            coordinator.emitViewportMetrics(for: scrollView, textView: textView)
+        }
+    }
+
+    /// Installs the viewport-only GFM `renderingAttributesValidator` (hot path): only the laid-out fragment is scanned, prose keeps `#FFFFFF`/`#000000` (`21:1`), and cached fonts + `>= 4.5:1` palette tokens are applied (`UI-002`, `UI-012`).
     private func installGFMValidator(on textView: SwiftEditNSTextView, coordinator: Coordinator) {
         coordinator.gfmEnabled = isMarkdownDocument
         coordinator.gfmPalette = palette
-        coordinator.gfmFontSize = fontSizePoints
+        coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints)
         textView.textLayoutManager?.renderingAttributesValidator = { [weak coordinator, weak textView] layoutManager, fragment in
             guard let coordinator, let textView, coordinator.gfmEnabled,
                   let contentManager = layoutManager.textContentManager else { return }
@@ -183,21 +313,27 @@ struct TextKit2EditorView: NSViewRepresentable {
             let fragStart = contentManager.offset(from: docStart, to: fragment.rangeInElement.location)
             let fragEnd = contentManager.offset(from: docStart, to: fragment.rangeInElement.endLocation)
             guard fragEnd > fragStart else { return }
-            let index = coordinator.lineIndex(for: textView.string)
+            let storageLength = textView.textStorage?.length ?? 0
+            let index = coordinator.lineIndex(
+                textProvider: { textView.string },
+                expectedLength: storageLength,
+                documentID: coordinator.activeDocumentID,
+                revision: coordinator.activeBufferRevision
+            )
             let spans = MarkdownSyntaxHighlighter.spans(index: index, visibleRange: SwiftEditCore.TextRange(location: fragStart, length: fragEnd - fragStart))
+            guard !spans.isEmpty else { return }
             let palette = coordinator.gfmPalette
-            let size = coordinator.gfmFontSize
+            let boldFont = coordinator.cachedBoldFont
+            let italicFont = coordinator.cachedItalicFont
             for span in spans {
                 guard let start = contentManager.location(docStart, offsetBy: span.range.location),
                       let end = contentManager.location(start, offsetBy: span.range.length) else { continue }
                 guard let range = NSTextRange(location: start, end: end) else { continue }
                 switch span.kind {
                 case .heading, .bold:
-                    layoutManager.addRenderingAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: size, weight: .bold), for: range)
+                    layoutManager.addRenderingAttribute(.font, value: boldFont, for: range)
                 case .italic:
-                    let base = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
-                    let italic = NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
-                    layoutManager.addRenderingAttribute(.font, value: italic, for: range)
+                    layoutManager.addRenderingAttribute(.font, value: italicFont, for: range)
                 case .strikethrough:
                     layoutManager.addRenderingAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, for: range)
                 case .inlineCode, .codeBlock:
@@ -214,11 +350,26 @@ struct TextKit2EditorView: NSViewRepresentable {
         }
     }
 
-    /// Applies canvas, selection, insertion-point, and `NSScrollView` scroller appearance tokens in `O(viewport)` without invoking whole-document `ensureLayout` (`UI-002`, `UI-003`, `UI-007`, `UI-012`).
-    ///
-    /// Disables `usesAdaptiveColorMappingForDarkAppearance` so AppKit never auto-inverts explicit `#FFFFFF`/`#000000` canvas tokens, and restarts the insertion-point blink timer when `textView` is first responder so caret color updates immediately.
-    private func applyStyling(to textView: SwiftEditNSTextView, in scrollView: NSScrollView) {
-        let editorFont = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .regular)
+    /// Applies canvas, selection, insertion-point, and `NSScrollView` scroller appearance tokens ONLY when palette, font size, or editability actually changed (`UI-002`, `UI-003`, `UI-007`, `UI-012`).
+    @discardableResult
+    private func applyStylingIfNeeded(
+        to textView: SwiftEditNSTextView,
+        in scrollView: NSScrollView,
+        coordinator: Coordinator,
+        force: Bool
+    ) -> Bool {
+        if !force,
+           coordinator.lastStyledPalette == palette,
+           coordinator.lastStyledFontSize == fontSizePoints,
+           coordinator.lastStyledIsEditable == isEditable {
+            return false
+        }
+        coordinator.lastStyledPalette = palette
+        coordinator.lastStyledFontSize = fontSizePoints
+        coordinator.lastStyledIsEditable = isEditable
+        coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints)
+
+        let editorFont = coordinator.cachedRegularFont
         let canvasBg = palette.editorCanvasBackground.nsColor
         let canvasFg = palette.editorCanvasText.nsColor
 
@@ -245,22 +396,72 @@ struct TextKit2EditorView: NSViewRepresentable {
         if textView.window?.firstResponder === textView {
             textView.updateInsertionPointStateAndRestartTimer(true)
         }
+        return true
     }
 
-    /// Applies non-mutating TextKit 2 rendering attributes for backtick code spans, nested depth-colored brackets, active bracket pair, and unbalanced brackets without mutating `NSTextStorage` (`UI-005`, `UI-006`, `UI-012`).
-    private func applyNonMutatingHighlights(to textView: SwiftEditNSTextView) {
+    /// Applies non-mutating TextKit 2 rendering attributes strictly over the active viewport range, skipping redundant passes and using binary-searched viewport windows (`PERF-001`, `UI-005`, `UI-006`, `UI-012`).
+    @discardableResult
+    private func applyNonMutatingHighlightsIfNeeded(
+        to textView: SwiftEditNSTextView,
+        coordinator: Coordinator,
+        force: Bool
+    ) -> Bool {
         guard let layoutManager = textView.textLayoutManager,
               let contentManager = layoutManager.textContentManager else {
-            return
+            return false
         }
         let docRange = contentManager.documentRange
-        let totalUTF16 = (textView.string as NSString).length
-        guard totalUTF16 > 0 else { return }
+        let totalUTF16 = textView.textStorage?.length ?? 0
+        guard totalUTF16 > 0 else {
+            let cleared = coordinator.hadNonMutatingHighlights
+            coordinator.hadNonMutatingHighlights = false
+            coordinator.lastHighlightSnapshot = nil
+            return cleared
+        }
 
-        layoutManager.setRenderingAttributes([:], for: docRange)
+        let targetRange = layoutManager.textViewportLayoutController.viewportRange ?? docRange
+        let visStart = max(0, contentManager.offset(from: docRange.location, to: targetRange.location))
+        let visEnd = min(totalUTF16, max(visStart, contentManager.offset(from: docRange.location, to: targetRange.endLocation)))
+        let visibleStart = max(0, visStart - 256)
+        let visibleEnd = min(totalUTF16, visEnd + 256)
+
+        let signature = Coordinator.HighlightRenderSignature(
+            documentID: documentID,
+            revision: bufferRevision,
+            palette: palette,
+            fontSizePoints: fontSizePoints,
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            highlightProjection: highlightProjection,
+            lintDiagnostics: lintDiagnostics
+        )
+        if !force && coordinator.lastHighlightSnapshot == signature {
+            return false
+        }
+        coordinator.lastHighlightSnapshot = signature
+
+        let hasAnyHighlights = !highlightProjection.backtickSpans.isEmpty
+            || !highlightProjection.bracketPairs.isEmpty
+            || highlightProjection.activeBracketPair != nil
+            || !lintDiagnostics.isEmpty
+            || !highlightProjection.unbalancedBrackets.isEmpty
+
+        if !hasAnyHighlights && !coordinator.hadNonMutatingHighlights {
+            return false
+        }
+
+        layoutManager.setRenderingAttributes([:], for: targetRange)
+        coordinator.hadNonMutatingHighlights = hasAnyHighlights
+        guard hasAnyHighlights else { return true }
+
+        func intersectsVisible(_ loc: Int, _ len: Int) -> Bool {
+            let end = loc + len
+            return end >= visibleStart && loc <= visibleEnd
+        }
 
         func makeTextRange(location: Int, length: Int) -> NSTextRange? {
             guard location >= 0, length > 0, location + length <= totalUTF16,
+                  intersectsVisible(location, length),
                   let start = contentManager.location(docRange.location, offsetBy: location),
                   let end = contentManager.location(start, offsetBy: length) else {
                 return nil
@@ -268,20 +469,35 @@ struct TextKit2EditorView: NSViewRepresentable {
             return NSTextRange(location: start, end: end)
         }
 
-        // 1. Backtick inline and multiline fenced code highlights
-        for span in highlightProjection.backtickSpans {
-            guard let nsTextRange = makeTextRange(location: span.range.location, length: span.range.length) else { continue }
-            let bgColor = span.kind == .fencedMultiline
-                ? palette.backtickMultilineBackground.nsColor
-                : palette.backtickInlineBackground.nsColor
-            layoutManager.addRenderingAttribute(.backgroundColor, value: bgColor, for: nsTextRange)
-            layoutManager.addRenderingAttribute(.foregroundColor, value: palette.backtickForeground.nsColor, for: nsTextRange)
+        // 1. Backtick inline and multiline fenced code highlights (sorted by location; binary search to first candidate)
+        let backtickSpans = highlightProjection.backtickSpans
+        if !backtickSpans.isEmpty {
+            let backtickFg = palette.backtickForeground.nsColor
+            let inlineBg = palette.backtickInlineBackground.nsColor
+            let multilineBg = palette.backtickMultilineBackground.nsColor
+            var lo = 0, hi = backtickSpans.count
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2
+                if backtickSpans[mid].range.upperBound < visibleStart { lo = mid + 1 } else { hi = mid }
+            }
+            var idx = lo
+            while idx < backtickSpans.count {
+                let span = backtickSpans[idx]
+                if span.range.location > visibleEnd { break }
+                if let nsTextRange = makeTextRange(location: span.range.location, length: span.range.length) {
+                    layoutManager.addRenderingAttribute(.backgroundColor, value: span.kind == .fencedMultiline ? multilineBg : inlineBg, for: nsTextRange)
+                    layoutManager.addRenderingAttribute(.foregroundColor, value: backtickFg, for: nsTextRange)
+                }
+                idx += 1
+            }
         }
 
-        let boldFont = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .bold)
+        let boldFont = coordinator.cachedBoldFont
 
-        // 2. Nested depth-colored bracket pairs ({}, [], ())
+        // 2. Nested depth-colored bracket pairs ({}, [], ()) (sorted by openOffset; early-break past visibleEnd)
         for pair in highlightProjection.bracketPairs {
+            if pair.openOffset > visibleEnd { break }
+            guard pair.closeOffset >= visibleStart else { continue }
             let depthColor = palette.nestedBracketColor(forDepth: pair.nestingDepth).nsColor
             if let openRange = makeTextRange(location: pair.openOffset, length: 1) {
                 layoutManager.addRenderingAttribute(.foregroundColor, value: depthColor, for: openRange)
@@ -304,24 +520,48 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
         }
 
-        // 3b. Lint dotted underlines (`>= 3.0:1` tokens), errors drawn last so they win overlaps.
-        for diagnostic in lintDiagnostics.sorted(by: { $0.severity == .warning && $1.severity == .error }) {
-            guard let range = diagnostic.range, let nsRange = makeTextRange(location: range.location, length: min(range.length, 1_024)) else { continue }
-            let thick = diagnostic.severity == .error ? NSUnderlineStyle.thick.rawValue : NSUnderlineStyle.single.rawValue
-            layoutManager.addRenderingAttribute(.underlineStyle, value: NSUnderlineStyle.patternDot.rawValue | thick, for: nsRange)
-            layoutManager.addRenderingAttribute(.underlineColor, value: (diagnostic.severity == .error ? palette.unbalancedBracketHighlight : palette.bidiWarningForeground).nsColor, for: nsRange)
-        }
-
-        // 4. Unbalanced bracket error emphasis
-        let errorColor = palette.unbalancedBracketHighlight.nsColor
-        let errorBg = palette.unbalancedBracketBackground.nsColor
-        for stray in highlightProjection.unbalancedBrackets {
-            if let strayRange = makeTextRange(location: stray.offset, length: 1) {
-                layoutManager.addRenderingAttribute(.foregroundColor, value: errorColor, for: strayRange)
-                layoutManager.addRenderingAttribute(.backgroundColor, value: errorBg, for: strayRange)
-                layoutManager.addRenderingAttribute(.font, value: boldFont, for: strayRange)
+        // 3b. Lint dotted underlines (`>= 3.0:1` tokens): draw warnings then errors without allocating/sorting.
+        if !lintDiagnostics.isEmpty {
+            let warnStyle = NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.single.rawValue
+            let warnColor = palette.bidiWarningForeground.nsColor
+            let errStyle = NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.thick.rawValue
+            let errColor = palette.unbalancedBracketHighlight.nsColor
+            for diagnostic in lintDiagnostics where diagnostic.severity == .warning {
+                guard let range = diagnostic.range, let nsRange = makeTextRange(location: range.location, length: min(range.length, 1_024)) else { continue }
+                layoutManager.addRenderingAttribute(.underlineStyle, value: warnStyle, for: nsRange)
+                layoutManager.addRenderingAttribute(.underlineColor, value: warnColor, for: nsRange)
+            }
+            for diagnostic in lintDiagnostics where diagnostic.severity == .error {
+                guard let range = diagnostic.range, let nsRange = makeTextRange(location: range.location, length: min(range.length, 1_024)) else { continue }
+                layoutManager.addRenderingAttribute(.underlineStyle, value: errStyle, for: nsRange)
+                layoutManager.addRenderingAttribute(.underlineColor, value: errColor, for: nsRange)
             }
         }
+
+        // 4. Unbalanced bracket error emphasis (sorted by offset; binary search to visibleStart)
+        let unbalanced = highlightProjection.unbalancedBrackets
+        if !unbalanced.isEmpty {
+            let errorColor = palette.unbalancedBracketHighlight.nsColor
+            let errorBg = palette.unbalancedBracketBackground.nsColor
+            var lo = 0, hi = unbalanced.count
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2
+                if unbalanced[mid].offset < visibleStart { lo = mid + 1 } else { hi = mid }
+            }
+            var idx = lo
+            while idx < unbalanced.count {
+                let stray = unbalanced[idx]
+                if stray.offset > visibleEnd { break }
+                if let strayRange = makeTextRange(location: stray.offset, length: 1) {
+                    layoutManager.addRenderingAttribute(.foregroundColor, value: errorColor, for: strayRange)
+                    layoutManager.addRenderingAttribute(.backgroundColor, value: errorBg, for: strayRange)
+                    layoutManager.addRenderingAttribute(.font, value: boldFont, for: strayRange)
+                }
+                idx += 1
+            }
+        }
+
+        return true
     }
 
     @MainActor
@@ -349,6 +589,17 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
         }
 
+        struct HighlightRenderSignature: Equatable {
+            let documentID: DocumentID
+            let revision: BufferRevision
+            let palette: PurpleThemePalette
+            let fontSizePoints: Double
+            let visibleStart: Int
+            let visibleEnd: Int
+            let highlightProjection: EditorHighlightProjection
+            let lintDiagnostics: [MarkdownLintDiagnostic]
+        }
+
         var onTextChange: (String) -> Void
         var onSelectionChange: (SwiftEditCore.TextRange) -> Void
         var onSmartNewline: (Int) -> Int?
@@ -357,21 +608,301 @@ struct TextKit2EditorView: NSViewRepresentable {
         var gfmEnabled = false
         var gfmPalette: PurpleThemePalette = .resolve(appearance: .light, systemPrefersDark: false)
         var gfmFontSize: Double = 13
+        var cachedRegularFont: NSFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        var cachedBoldFont: NSFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+        var cachedItalicFont: NSFont = NSFontManager.shared.convert(NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), toHaveTrait: .italicFontMask)
+        var lastStyledPalette: PurpleThemePalette?
+        var lastStyledFontSize: Double?
+        var lastStyledIsEditable: Bool?
+        var lastSyncedBufferRevision: BufferRevision?
+        var hasPendingLocalEdit = false
+        var lastHighlightSnapshot: HighlightRenderSignature?
         var appliedSelectionToken = 0
+        var appliedFocusRequestToken = 0
+        var undoRegistry: PerTabUndoManagerRegistry?
+        var activeDocumentID: DocumentID?
+        var activeBufferRevision: BufferRevision?
+        var hadNonMutatingHighlights = false
+        var onViewportMetricsChange: ((GutterViewportMetrics) -> Void)?
+        private var lastEmittedViewportMetrics: GutterViewportMetrics?
+        private var scrollBoundsObserver: (any NSObjectProtocol)?
+        private var isSwappingTabBuffer = false
+        private lazy var tabSwapScratchUndoManager = UndoManager()
         private var cachedLineIndex: MarkdownLineIndex?
+        private var cachedIndexDocumentID: DocumentID?
+        private var cachedIndexRevision: BufferRevision?
         private var cachedIndexLength = -1
 
-        /// Line index cached per text revision so each laid-out fragment costs `O(fragment)` plus `O(log F)` fence lookups instead of a document rescan.
-        func lineIndex(for text: String) -> MarkdownLineIndex {
-            let length = text.utf16.count
-            if let cachedLineIndex, cachedIndexLength == length { return cachedLineIndex }
+        func updateGFMFontsIfNeeded(fontSizePoints: Double) {
+            guard gfmFontSize != fontSizePoints else { return }
+            gfmFontSize = fontSizePoints
+            let regular = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .regular)
+            cachedRegularFont = regular
+            cachedBoldFont = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .bold)
+            cachedItalicFont = NSFontManager.shared.convert(regular, toHaveTrait: .italicFontMask)
+        }
+
+        func markSynced(documentID: DocumentID, revision: BufferRevision) {
+            activeDocumentID = documentID
+            lastSyncedBufferRevision = revision
+        }
+
+        /// Re-tags an already-rebuilt local `MarkdownLineIndex` after `textDidChange` -> `updateNSView` bumps `BufferRevision` so a single keystroke never builds `MarkdownLineIndex` twice.
+        func retagCachedLineIndexRevision(documentID: DocumentID, revision: BufferRevision, storageLength: Int) {
+            if cachedLineIndex != nil,
+               cachedIndexDocumentID == documentID,
+               cachedIndexLength == storageLength {
+                cachedIndexRevision = revision
+            }
+        }
+
+        /// Subscribes to `NSScrollView.contentView` clip bounds changes to keep `LineNumberGutterView` scroll-synchronized (`BUG-012`).
+        func observeScrollBounds(of scrollView: NSScrollView, textView: NSTextView) {
+            detachScrollObserver()
+            let clipView = scrollView.contentView
+            scrollBoundsObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: clipView,
+                queue: .main
+            ) { [weak self, weak scrollView, weak textView] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let scrollView, let textView else { return }
+                    self.emitViewportMetrics(for: scrollView, textView: textView)
+                }
+            }
+        }
+
+        func detachScrollObserver() {
+            if let observer = scrollBoundsObserver {
+                NotificationCenter.default.removeObserver(observer)
+                scrollBoundsObserver = nil
+            }
+        }
+
+        func emitViewportMetrics(for scrollView: NSScrollView, textView: NSTextView) {
+            guard let onViewportMetricsChange else { return }
+            let storageLen = textView.textStorage?.length ?? 0
+            let indexForLookup = (cachedLineIndex != nil && cachedIndexLength == storageLen) ? cachedLineIndex : nil
+            let metrics = Self.captureGutterViewportMetrics(in: scrollView, textView: textView, cachedLineIndex: indexForLookup)
+            guard metrics != lastEmittedViewportMetrics else { return }
+            lastEmittedViewportMetrics = metrics
+            onViewportMetricsChange(metrics)
+        }
+
+        /// Samples visible TextKit 2 layout fragments (`O(log L + viewport)` when cached index is present) so `LineNumberGutterView` aligns with both scroll offset and soft-wrapped paragraphs (`BUG-012`).
+        static func captureGutterViewportMetrics(
+            in scrollView: NSScrollView,
+            textView: NSTextView,
+            cachedLineIndex: MarkdownLineIndex? = nil
+        ) -> GutterViewportMetrics {
+            let visibleRect = scrollView.documentVisibleRect
+            let scrollY = max(0, visibleRect.origin.y)
+            guard let textLayoutManager = textView.textLayoutManager,
+                  let contentManager = textLayoutManager.textContentManager else {
+                return GutterViewportMetrics(scrollOffsetY: scrollY, visibleLines: [])
+            }
+            let docStart = contentManager.documentRange.location
+            let startLocation = textLayoutManager.textViewportLayoutController.viewportRange?.location ?? docStart
+            let originY = textView.textContainerOrigin.y
+            let startOffset = max(0, contentManager.offset(from: docStart, to: startLocation))
+
+            let baseLine: Int
+            if startOffset == 0 {
+                baseLine = 1
+            } else if let cachedLineIndex {
+                baseLine = cachedLineIndex.line(containing: startOffset) + 1
+            } else {
+                // Fast UTF-8 byte scan fallback when no MarkdownLineIndex is cached (non-Markdown files or standalone tests).
+                let text = textView.string
+                if let countedLine = text.utf8.withContiguousStorageIfAvailable({ buf -> Int in
+                    guard let base = buf.baseAddress else { return 1 }
+                    let count = buf.count
+                    var line = 1
+                    var utf16Pos = 0
+                    var i = 0
+                    while i < count && utf16Pos < startOffset {
+                        let b = base[i]
+                        if b == 0x0A {
+                            line += 1
+                            utf16Pos += 1
+                            i += 1
+                        } else if b == 0x0D {
+                            line += 1
+                            if i + 1 < count && base[i + 1] == 0x0A && utf16Pos + 1 < startOffset {
+                                utf16Pos += 2
+                                i += 2
+                            } else {
+                                utf16Pos += 1
+                                i += 1
+                            }
+                        } else if b < 0x80 {
+                            utf16Pos += 1
+                            i += 1
+                        } else if b < 0xE0 {
+                            utf16Pos += 1
+                            i += 2
+                        } else if b < 0xF0 {
+                            utf16Pos += 1
+                            i += 3
+                        } else {
+                            utf16Pos += 2
+                            i += 4
+                        }
+                    }
+                    return line
+                }) {
+                    baseLine = countedLine
+                } else {
+                    let textUnits = text.utf16
+                    var line = 1
+                    var idx = textUnits.startIndex
+                    var counted = 0
+                    while idx < textUnits.endIndex, counted < startOffset {
+                        let u = textUnits[idx]
+                        if u == 0x0A {
+                            line += 1
+                            idx = textUnits.index(after: idx)
+                            counted += 1
+                        } else if u == 0x0D {
+                            line += 1
+                            let next = textUnits.index(after: idx)
+                            if next < textUnits.endIndex, textUnits[next] == 0x0A, counted + 1 < startOffset {
+                                idx = textUnits.index(after: next)
+                                counted += 2
+                            } else {
+                                idx = next
+                                counted += 1
+                            }
+                        } else {
+                            idx = textUnits.index(after: idx)
+                            counted += 1
+                        }
+                    }
+                    baseLine = line
+                }
+            }
+
+            var metrics: [GutterLineMetric] = []
+            var currentLine = baseLine
+            textLayoutManager.enumerateTextLayoutFragments(from: startLocation, options: []) { fragment in
+                let frame = fragment.layoutFragmentFrame
+                let minY = originY + frame.minY
+                if frame.maxY >= visibleRect.minY - 64 {
+                    metrics.append(GutterLineMetric(lineNumber: currentLine, minY: minY, height: frame.height))
+                }
+                currentLine += 1
+                if frame.minY > visibleRect.maxY + 64 {
+                    return false
+                }
+                return true
+            }
+            return GutterViewportMetrics(scrollOffsetY: scrollY, visibleLines: metrics)
+        }
+
+        /// Provides the dedicated per-tab `UndoManager` so tabs never share `NSWindow.undoManager` with closed editors or modal bars (`BUG-001`, `CWE-416`).
+        func undoManager(for view: NSTextView) -> UndoManager? {
+            if isSwappingTabBuffer {
+                return tabSwapScratchUndoManager
+            }
+            guard let activeDocumentID, let undoRegistry else { return nil }
+            return undoRegistry.undoManager(for: activeDocumentID)
+        }
+
+        /// Replaces editor text cleanly: same-tab updates register atomic undoable steps via `shouldChangeText` while preserving selection length; cross-tab switches swap buffers without mutating existing per-tab undo stacks (`BUG-001`, `BUG-005`).
+        func applyProgrammaticTextUpdate(
+            _ newText: String,
+            to textView: NSTextView,
+            documentID: DocumentID,
+            isInitialSetup: Bool = false
+        ) {
+            let previousSelection = textView.selectedRange()
+            let targetLocation = pendingProgrammaticCaret ?? previousSelection.location
+            let targetLength = (pendingProgrammaticCaret != nil) ? 0 : previousSelection.length
+            pendingProgrammaticCaret = nil
+
+            let isSameDocument = !isInitialSetup && activeDocumentID == documentID
+            isApplyingProgrammaticUpdate = true
+            defer {
+                isApplyingProgrammaticUpdate = false
+                invalidateLineIndex()
+            }
+
+            if isSameDocument {
+                let currentLength = (textView.string as NSString).length
+                let fullRange = NSRange(location: 0, length: currentLength)
+                if textView.string != newText {
+                    if textView.shouldChangeText(in: fullRange, replacementString: newText) {
+                        textView.textStorage?.replaceCharacters(in: fullRange, with: newText)
+                        textView.didChangeText()
+                    } else {
+                        textView.string = newText
+                    }
+                }
+            } else {
+                isSwappingTabBuffer = true
+                activeDocumentID = documentID
+                textView.string = newText
+                tabSwapScratchUndoManager.removeAllActions()
+                isSwappingTabBuffer = false
+            }
+
+            let newLength = (newText as NSString).length
+            let clampedLocation = min(max(0, targetLocation), newLength)
+            let clampedLength = min(max(0, targetLength), newLength - clampedLocation)
+            textView.setSelectedRange(NSRange(location: clampedLocation, length: clampedLength))
+        }
+
+        /// Zero-bridge cache lookup used by `renderingAttributesValidator`: avoids touching `textView.string` completely on cache hits.
+        func lineIndex(
+            textProvider: () -> String,
+            expectedLength: Int,
+            documentID: DocumentID?,
+            revision: BufferRevision?
+        ) -> MarkdownLineIndex {
+            if let cachedLineIndex,
+               cachedIndexLength == expectedLength,
+               cachedIndexDocumentID == documentID,
+               cachedIndexRevision == revision,
+               revision != nil || (documentID == nil && cachedIndexLength == expectedLength) {
+                return cachedLineIndex
+            }
+            let text = textProvider()
             let index = MarkdownLineIndex(text: text)
             cachedLineIndex = index
+            cachedIndexDocumentID = documentID
+            cachedIndexRevision = revision
+            cachedIndexLength = index.units.count
+            return index
+        }
+
+        /// Line index cached by `(DocumentID, BufferRevision, utf16Count)` so same-length edits invalidate deterministically without scanning every keystroke when unchanged (`BUG-015`).
+        func lineIndex(
+            for text: String,
+            documentID: DocumentID? = nil,
+            revision: BufferRevision? = nil
+        ) -> MarkdownLineIndex {
+            let length = text.utf16.count
+            if let cachedLineIndex,
+               cachedIndexLength == length,
+               cachedIndexDocumentID == documentID,
+               cachedIndexRevision == revision,
+               revision != nil || (documentID == nil && cachedIndexLength == length) {
+                return cachedLineIndex
+            }
+            let index = MarkdownLineIndex(text: text)
+            cachedLineIndex = index
+            cachedIndexDocumentID = documentID
+            cachedIndexRevision = revision
             cachedIndexLength = length
             return index
         }
 
-        func invalidateLineIndex() { cachedLineIndex = nil; cachedIndexLength = -1 }
+        func invalidateLineIndex() {
+            cachedLineIndex = nil
+            cachedIndexDocumentID = nil
+            cachedIndexRevision = nil
+            cachedIndexLength = -1
+        }
 
         var isApplyingProgrammaticUpdate = false
         var pendingProgrammaticCaret: Int?
@@ -394,6 +925,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             guard !isApplyingProgrammaticUpdate,
                   let textView = notification.object as? NSTextView else { return }
             invalidateLineIndex()
+            hasPendingLocalEdit = true
             onTextChange(textView.string)
         }
 
@@ -402,7 +934,6 @@ struct TextKit2EditorView: NSViewRepresentable {
                   let textView = notification.object as? NSTextView else { return }
             let range = textView.selectedRange()
             onSelectionChange(SwiftEditCore.TextRange(location: range.location, length: range.length))
-            textView.needsDisplay = true
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {

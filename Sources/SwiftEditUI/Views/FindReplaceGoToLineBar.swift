@@ -45,16 +45,24 @@ public struct FindReplaceBarState: Equatable, Sendable {
 }
 
 #if os(macOS)
-/// Inline Purple-themed bar supporting Find (`Cmd+F`), Find & Replace (`Cmd+H`), and Go to Line (`Cmd+G`) (`UI-001`, `UI-009`).
+/// Inline Purple-themed bar supporting Find (`Cmd+F`), Find & Replace (`Opt+Cmd+F`), and Go to Line (`Cmd+G`) with `@FocusState` auto-focus and single Replace (`BUG-008`, `BUG-009`, `UI-001`, `UI-009`).
 public struct FindReplaceGoToLineBar: View {
+    private enum FocusTarget: Hashable {
+        case query
+        case replacement
+        case goToLine
+    }
+
     @Binding public var state: FindReplaceBarState
     public let palette: PurpleThemePalette
     public let onFind: () -> Void
     public let onFindNext: () -> Void
     public let onFindPrevious: () -> Void
+    public let onReplace: () -> Void
     public let onReplaceAll: () -> Void
     public let onGoToLine: () -> Void
     public let onClose: () -> Void
+    @FocusState private var focusedField: FocusTarget?
 
     public init(
         state: Binding<FindReplaceBarState>,
@@ -62,6 +70,7 @@ public struct FindReplaceGoToLineBar: View {
         onFind: @escaping () -> Void,
         onFindNext: @escaping () -> Void,
         onFindPrevious: @escaping () -> Void,
+        onReplace: @escaping () -> Void = {},
         onReplaceAll: @escaping () -> Void,
         onGoToLine: @escaping () -> Void,
         onClose: @escaping () -> Void
@@ -71,56 +80,82 @@ public struct FindReplaceGoToLineBar: View {
         self.onFind = onFind
         self.onFindNext = onFindNext
         self.onFindPrevious = onFindPrevious
+        self.onReplace = onReplace
         self.onReplaceAll = onReplaceAll
         self.onGoToLine = onGoToLine
         self.onClose = onClose
     }
 
     public var body: some View {
-        if state.mode != .hidden {
-            HStack(spacing: 8) {
-                if state.mode == .goToLine {
-                    Text("Go to Line:")
-                        .font(.caption.weight(.semibold))
-                    TextField("Line number (1...)", text: $state.goToLineText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 140)
-                        .onSubmit { onGoToLine() }
-                    Button("Jump") { onGoToLine() }
-                } else {
-                    TextField("Find…", text: $state.query)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 180)
-                        .onSubmit { onFind() }
-                    Toggle("Aa", isOn: $state.isCaseSensitive)
-                        .toggleStyle(.button)
-                    Button("Find") { onFind() }
-                    Button("◀") { onFindPrevious() }
-                        .disabled(state.matches.isEmpty)
-                    Button("▶") { onFindNext() }
-                        .disabled(state.matches.isEmpty)
-                    Text("\(state.matches.count) match(es)")
-                        .font(.caption.monospacedDigit())
-                    if state.mode == .findAndReplace {
-                        TextField("Replace…", text: $state.replacement)
+        Group {
+            if state.mode != .hidden {
+                HStack(spacing: 8) {
+                    if state.mode == .goToLine {
+                        Text("Go to Line:")
+                            .font(.caption.weight(.semibold))
+                        TextField("Line number (1...)", text: $state.goToLineText)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 160)
-                        Button("Replace All") { onReplaceAll() }
+                            .frame(width: 140)
+                            .focused($focusedField, equals: .goToLine)
+                            .onSubmit { onGoToLine() }
+                        Button("Jump") { onGoToLine() }
+                    } else {
+                        TextField("Find…", text: $state.query)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 180)
+                            .focused($focusedField, equals: .query)
+                            .onSubmit { onFind() }
+                        Toggle("Aa", isOn: $state.isCaseSensitive)
+                            .toggleStyle(.button)
+                        Button("Find") { onFind() }
+                        Button("◀") { onFindPrevious() }
+                            .disabled(state.matches.isEmpty)
+                        Button("▶") { onFindNext() }
+                            .disabled(state.matches.isEmpty)
+                        Text("\(state.matches.count) match(es)")
+                            .font(.caption.monospacedDigit())
+                        if state.mode == .findAndReplace {
+                            TextField("Replace…", text: $state.replacement)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 160)
+                                .focused($focusedField, equals: .replacement)
+                            Button("Replace") { onReplace() }
+                                .disabled(state.query.isEmpty || state.matches.isEmpty)
+                            Button("Replace All") { onReplaceAll() }
+                                .disabled(state.query.isEmpty)
+                        }
                     }
+                    Spacer()
+                    Button(action: onClose) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close Find Bar")
                 }
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(palette.secondaryForeground.swiftUIColor)
-                }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .foregroundStyle(palette.chromeForeground.swiftUIColor)
+                .tint(palette.chromeAccent.swiftUIColor)
+                .background(palette.findBarSurface.swiftUIColor)
+                .purpleHairlineBorder(palette: palette, edge: .bottom)
+                .onAppear { syncFocus(for: state.mode) }
+                .onExitCommand { onClose() }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .foregroundStyle(palette.chromeForeground.swiftUIColor)
-            .tint(palette.chromeAccent.swiftUIColor)
-            .background(palette.findBarSurface.swiftUIColor)
-            .purpleHairlineBorder(palette: palette, edge: .bottom)
+        }
+        .onChange(of: state.mode) { _, newMode in
+            syncFocus(for: newMode)
+        }
+    }
+
+    private func syncFocus(for mode: FindBarPresentationMode) {
+        switch mode {
+        case .find, .findAndReplace:
+            focusedField = .query
+        case .goToLine:
+            focusedField = .goToLine
+        case .hidden:
+            focusedField = nil
         }
     }
 }

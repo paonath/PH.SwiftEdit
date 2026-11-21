@@ -42,41 +42,39 @@ public struct EditorPreferences: Codable, Equatable, Sendable {
     }
 }
 
-/// Anti-Corruption Layer adapter serializing `EditorPreferences` inside an isolated `UserDefaults` suite without storing document contents (`BC-007`, `DATA-008`, `TEST-003`).
+/// Anti-Corruption Layer adapter serializing `EditorPreferences` through `PreferencesProviding` (`UserDefaults.standard` in production or `InMemoryKeyValueStore` in tests) without storing document contents (`BC-007`, `DATA-008`, `PERF-003`, `TEST-003`).
 public struct EditorPreferencesStore: Sendable {
     public static let appearanceModeKey = "swiftedit.appearanceMode"
     public static let zoomPercentKey = "swiftedit.zoomPercent"
 
     public let suiteName: String?
+    private let store: any PreferencesProviding
+
+    public init(store: any PreferencesProviding) {
+        self.suiteName = nil
+        self.store = store
+    }
 
     public init(suiteName: String? = nil) {
         self.suiteName = suiteName
+        self.store = UserDefaultsPreferencesStore(suiteName: suiteName)
     }
 
-    /// Writes `preferences` into the configured `UserDefaults` suite.
+    /// Writes `preferences` into the configured preferences store.
     public func save(_ preferences: EditorPreferences) {
-        let defaults = resolveDefaults()
-        defaults.set(preferences.appearanceMode.rawValue, forKey: Self.appearanceModeKey)
-        defaults.set(preferences.zoomPercent, forKey: Self.zoomPercentKey)
+        store.set(preferences.appearanceMode.rawValue, forKey: Self.appearanceModeKey)
+        store.set(preferences.zoomPercent, forKey: Self.zoomPercentKey)
     }
 
-    /// Reads and clamps `EditorPreferences` from the configured `UserDefaults` suite, defaulting unknown modes to `.auto` and missing zoom to `100%`.
+    /// Reads and clamps `EditorPreferences` from the configured preferences store, defaulting unknown modes to `.auto` and missing zoom to `100%`.
     public func load() -> EditorPreferences {
-        let defaults = resolveDefaults()
-        let mode = defaults.string(forKey: Self.appearanceModeKey).flatMap(AppearanceMode.init(rawValue:)) ?? .auto
+        let mode = store.string(forKey: Self.appearanceModeKey).flatMap(AppearanceMode.init(rawValue:)) ?? .auto
         let zoom: Int
-        if defaults.object(forKey: Self.zoomPercentKey) != nil {
-            zoom = defaults.integer(forKey: Self.zoomPercentKey)
+        if store.object(forKey: Self.zoomPercentKey) != nil {
+            zoom = store.integer(forKey: Self.zoomPercentKey)
         } else {
             zoom = EditorPreferences.defaultZoomPercent
         }
         return EditorPreferences(appearanceMode: mode, zoomPercent: zoom)
-    }
-
-    private func resolveDefaults() -> UserDefaults {
-        if let suiteName, let suiteDefaults = UserDefaults(suiteName: suiteName) {
-            return suiteDefaults
-        }
-        return .standard
     }
 }

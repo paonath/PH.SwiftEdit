@@ -81,25 +81,22 @@ struct DiagnosticsUIWiringTests {
     }
 
     @MainActor
-    private static func makeModel(recovery: URL) -> (SwiftEditWorkbenchModel, String) {
-        let suite = "it.ph.SwiftEdit.test.diagwiring.\(UUID().uuidString)"
-        let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suite,
-            recentFilesSuiteName: "\(suite).recent",
+    private static func makeModel(recovery: URL) -> SwiftEditWorkbenchModel {
+        SwiftEditWorkbenchModel(
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recovery,
             systemDarkDetector: { false },
             savePanelProvider: { _ in nil }
         )
-        return (model, suite)
     }
 
     @Test("P4: Shift+Cmd+M popover toggles, Jump-to-Range selects the diagnostic, and Fix All adds exactly one revision")
     @MainActor
     func p4PopoverJumpAndFixAll() throws {
         let dir = Self.tmp
-        let (model, suite) = Self.makeModel(recovery: dir)
+        let model = Self.makeModel(recovery: dir)
         defer {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: dir)
         }
         model.handleEditorTextChanged("#Heading\n\n![](a.png)\n")
@@ -128,9 +125,8 @@ struct DiagnosticsUIWiringTests {
     @MainActor
     func n6BinaryAndNonMarkdownInert() throws {
         let dir = Self.tmp
-        let (model, suite) = Self.makeModel(recovery: dir)
+        let model = Self.makeModel(recovery: dir)
         defer {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: dir)
         }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

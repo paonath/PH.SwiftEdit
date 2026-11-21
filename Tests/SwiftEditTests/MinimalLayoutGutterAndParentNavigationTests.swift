@@ -18,12 +18,9 @@ struct MinimalLayoutGutterAndParentNavigationTests {
         try Data("alpha\r\nbeta\r\ngamma".utf8).write(to: fileURL)
 
         let recoveryDir = tempRoot.appendingPathComponent("Recovery", isDirectory: true)
-        let suiteName = "it.ph.SwiftEdit.test.\(UUID().uuidString)"
-        defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
-
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suiteName,
-            recentFilesSuiteName: suiteName + ".recent",
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recoveryDir
         )
 
@@ -89,11 +86,9 @@ struct MinimalLayoutGutterAndParentNavigationTests {
         let canonicalWorkspace = workspaceURL.resolvingSymlinksInPath().standardizedFileURL
         let canonicalSources = sourcesURL.resolvingSymlinksInPath().standardizedFileURL
 
-        let suiteName = "it.ph.SwiftEdit.upnav.\(UUID().uuidString)"
-        defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suiteName,
-            recentFilesSuiteName: suiteName + ".recent",
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: baseTemp.appendingPathComponent("Recovery", isDirectory: true),
             parentPermissionChecker: { candidate in
                 candidate.standardizedFileURL.path == canonicalOuter.path
@@ -132,12 +127,10 @@ struct MinimalLayoutGutterAndParentNavigationTests {
         defer { try? FileManager.default.removeItem(at: baseTemp) }
 
         let canonicalWorkspace = workspaceURL.resolvingSymlinksInPath().standardizedFileURL
-        let suiteName = "it.ph.SwiftEdit.noperm.\(UUID().uuidString)"
-        defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
 
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suiteName,
-            recentFilesSuiteName: suiteName + ".recent",
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: baseTemp.appendingPathComponent("Recovery", isDirectory: true),
             parentPermissionChecker: { _ in false }
         )

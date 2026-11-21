@@ -6,91 +6,72 @@ import Testing
 @Suite("TranslucentHeaderBrandSubmenuTests")
 struct TranslucentHeaderBrandSubmenuTests {
 
-    @Test("P1: HeaderSubmenuStateMachine opens at 120 ms dwell or 0 ms click, bridges 180 ms travel, ignores trailing controls, and keeps 36 pt header height")
-    func p1DwellClickTravelAndZeroLayoutShift() {
-        // GIVEN a closed state machine
-        var dwell = HeaderSubmenuStateMachine()
+    @Test("P1: HeaderSubmenuStateMachine opens at 0 ms click/keyboard, stays sticky >= 1000 ms across hover exit, supports arrow/Home/End navigation, and keeps 36 pt height")
+    func p1ClickOnlyStickyNavigationAndZeroLayoutShift() {
+        // GIVEN a closed click-only state machine and command catalog
         var click = HeaderSubmenuStateMachine()
-        var travel = HeaderSubmenuStateMachine()
-        var trailing = HeaderSubmenuStateMachine()
+        let items = HeaderCommandCatalog.items(canSave: true, canFormat: true, showMarkdownPreview: false, showDiffPane: false)
 
-        // WHEN dwelling 119 ms then 1 ms, clicking, traveling to the panel within 180 ms, and hovering trailing controls
-        dwell.pointerEntered(.trigger)
-        dwell.advance(by: .milliseconds(119))
-        let openAt119 = dwell.isOpen
-        dwell.advance(by: .milliseconds(1))
-
+        // WHEN clicking to open, moving pointer across trigger/outside/trailingControls, waiting >= 1000 ms, and navigating items with keyboard helpers
         click.clickToggle()
+        let openAt0ms = click.isOpen
+        click.pointerEntered(.trigger)
+        click.pointerEntered(.outside)
+        click.pointerEntered(.trailingControls)
+        click.advance(by: .milliseconds(1_200))
+        let stillOpenAt1200ms = click.isOpen
+        click.moveSelection(delta: 1, items: items)
+        let secondCommand = click.selectedCommandID(in: items)
+        click.selectLast(items: items)
+        let lastCommand = click.selectedCommandID(in: items)
+        click.selectFirst(items: items)
+        let firstCommand = click.selectedCommandID(in: items)
 
-        travel.clickToggle()
-        travel.pointerEntered(.trigger)
-        travel.pointerEntered(.outside)
-        travel.advance(by: .milliseconds(179))
-        travel.pointerEntered(.panel)
-        travel.advance(by: .milliseconds(500))
-
-        trailing.pointerEntered(.trailingControls)
-        trailing.advance(by: .milliseconds(1000))
-
-        // THEN open at exactly 120 ms, instantly on click, stays open through travel, never opens from trailing hover, header stays 36 pt
-        #expect(openAt119 == false)
-        #expect(dwell.isOpen == true)
-        #expect(click.isOpen == true)
-        #expect(travel.isOpen == true)
-        #expect(trailing.isOpen == false)
+        // THEN submenu opens in 0 ms, stays persistently open past 1000 ms regardless of hover exit, navigates cleanly, and keeps exact 36 pt height
+        #expect(openAt0ms == true)
+        #expect(stillOpenAt1200ms == true)
+        #expect(firstCommand == .newDocument)
+        #expect(secondCommand == .openFile)
+        #expect(lastCommand == .showCheatSheet)
         #expect(HeaderSubmenuStateMachine.topBarHeight == 36.0)
     }
 
-    @Test("N1: sub-120 ms pass-through and active drag keep submenu closed, and Escape closes immediately and latches until pointer exit")
-    func n1PassThroughDragAndEscapeLatch() {
-        // GIVEN state machines for pass-through, drag, and an open submenu hovered on the trigger
-        var passThrough = HeaderSubmenuStateMachine()
-        var dragging = HeaderSubmenuStateMachine()
-        var latched = HeaderSubmenuStateMachine()
+    @Test("N1: prolonged hover (>= 700 ms) and active drag never auto-open submenu; Escape, outside dismiss, and resign-key close cleanly; zero 20ms .task polling")
+    func n1HoverNeverOpensAndExplicitDismissClosesCleanly() throws {
+        // GIVEN closed state machines exposed to prolonged hover/drag plus open instances for dismiss checks
+        var hoverMachine = HeaderSubmenuStateMachine()
+        var dragMachine = HeaderSubmenuStateMachine()
+        var escapeMachine = HeaderSubmenuStateMachine()
+        var resignMachine = HeaderSubmenuStateMachine()
 
-        // WHEN 90 ms pass-through, drag with 500 ms dwell, and Escape while open over the trigger then more dwell, then pointer exit and re-entry
-        passThrough.pointerEntered(.trigger)
-        passThrough.advance(by: .milliseconds(90))
-        passThrough.pointerEntered(.outside)
-        passThrough.advance(by: .milliseconds(500))
+        // WHEN hovering brand trigger and trailing controls for >= 700 ms, dragging, then testing Escape and window resign-key
+        hoverMachine.pointerEntered(.trigger)
+        hoverMachine.advance(by: .milliseconds(750))
+        hoverMachine.pointerEntered(.trailingControls)
+        hoverMachine.advance(by: .milliseconds(500))
 
-        dragging.setDragging(true)
-        dragging.pointerEntered(.trigger)
-        dragging.advance(by: .milliseconds(500))
+        dragMachine.setDragging(true)
+        dragMachine.pointerEntered(.trigger)
+        dragMachine.advance(by: .milliseconds(500))
 
-        latched.clickToggle()
-        latched.pointerEntered(.trigger)
-        latched.escapePressed()
-        let closedAfterEscape = latched.isOpen
-        let suppressedAfterEscape = latched.isSuppressedUntilPointerExit
-        latched.advance(by: .milliseconds(500))
-        let stillClosedWhileLatched = latched.isOpen
-        latched.pointerEntered(.outside)
-        latched.pointerEntered(.trigger)
-        latched.advance(by: .milliseconds(120))
+        escapeMachine.clickToggle()
+        escapeMachine.escapePressed()
 
-        // THEN pass-through and drag never open, Escape closes and latches, and re-entry after exit reopens after dwell
-        #expect(passThrough.isOpen == false)
-        #expect(dragging.isOpen == false)
-        #expect(closedAfterEscape == false)
-        #expect(suppressedAfterEscape == true)
-        #expect(stillClosedWhileLatched == false)
-        #expect(latched.isSuppressedUntilPointerExit == false)
-        #expect(latched.isOpen == true)
-    }
+        resignMachine.clickToggle()
+        resignMachine.windowResignedKey()
 
-    @Test("N12: active sidebar divider drag blocks submenu hover opening")
-    func n12DragBlocksHoverOpen() {
-        // GIVEN a drag in progress
-        var machine = HeaderSubmenuStateMachine()
-        machine.setDragging(true)
+        let rootViewURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/SwiftEditUI/Views/SwiftEditRootView.swift")
+        let rootSource = try String(contentsOf: rootViewURL, encoding: .utf8)
 
-        // WHEN the pointer dwells on the trigger for 120 ms
-        machine.pointerEntered(.trigger)
-        machine.advance(by: .milliseconds(120))
-
-        // THEN the submenu stays closed
-        #expect(machine.isOpen == false)
+        // THEN hover and drag never open submenu, Escape/resign-key close immediately, and SwiftEditRootView contains zero 20ms .task polling
+        #expect(hoverMachine.isOpen == false)
+        #expect(dragMachine.isOpen == false)
+        #expect(escapeMachine.isOpen == false)
+        #expect(resignMachine.isOpen == false)
+        #expect(!rootSource.contains(".milliseconds(20)"))
+        #expect(!rootSource.contains("model.headerSubmenu.advance("))
     }
 
     // MARK: - Command catalog, single-source shortcuts, format section
@@ -99,11 +80,10 @@ struct TranslucentHeaderBrandSubmenuTests {
     private static func makeModel(
         savePanelCalls: SavePanelSpy = SavePanelSpy(),
         recoveryDir: URL
-    ) -> (SwiftEditWorkbenchModel, String) {
-        let suite = "it.ph.SwiftEdit.test.header.\(UUID().uuidString)"
-        let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suite,
-            recentFilesSuiteName: "\(suite).recent",
+    ) -> SwiftEditWorkbenchModel {
+        SwiftEditWorkbenchModel(
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recoveryDir,
             systemDarkDetector: { false },
             savePanelProvider: { _ in
@@ -111,7 +91,6 @@ struct TranslucentHeaderBrandSubmenuTests {
                 return nil
             }
         )
-        return (model, suite)
     }
 
     final class SavePanelSpy: @unchecked Sendable {
@@ -119,9 +98,8 @@ struct TranslucentHeaderBrandSubmenuTests {
     }
 
     private static var repoTmp: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".tmp/test-results/header-\(UUID().uuidString)", isDirectory: true)
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("SwiftEditHeader-\(UUID().uuidString)", isDirectory: true)
     }
 
     @Test("P2/P3/P9: descriptive catalog titles and badges, default-off Cmd+P preview, format section in one revision, and CheatSheet entries")
@@ -129,9 +107,8 @@ struct TranslucentHeaderBrandSubmenuTests {
     func p2CatalogBadgesPreviewToggleFormatSectionAndCheatSheet() throws {
         // GIVEN a model holding two malformed headings with the selection on line 1
         let dir = Self.repoTmp
-        let (model, suite) = Self.makeModel(recoveryDir: dir)
+        let model = Self.makeModel(recoveryDir: dir)
         defer {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: dir)
         }
         model.handleEditorTextChanged("#BadHeading\n\n#Untouched")
@@ -174,9 +151,8 @@ struct TranslucentHeaderBrandSubmenuTests {
     func n3FormatSectionOnFormattedTextIsNoOp() throws {
         // GIVEN an already formatted document with the selection on line 1
         let dir = Self.repoTmp
-        let (model, suite) = Self.makeModel(recoveryDir: dir)
+        let model = Self.makeModel(recoveryDir: dir)
         defer {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: dir)
         }
         model.handleEditorTextChanged("# Good\n\ntext")
@@ -202,9 +178,8 @@ struct TranslucentHeaderBrandSubmenuTests {
         let binaryURL = dir.appendingPathComponent("payload.bin")
         try Data([0x50, 0x4B, 0x00, 0x04, 0x41]).write(to: binaryURL)
         let spy = SavePanelSpy()
-        let (model, suite) = Self.makeModel(savePanelCalls: spy, recoveryDir: dir.appendingPathComponent("rec"))
+        let model = Self.makeModel(savePanelCalls: spy, recoveryDir: dir.appendingPathComponent("rec"))
         defer {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: dir)
         }
         model.openFile(at: binaryURL, withinScope: dir)

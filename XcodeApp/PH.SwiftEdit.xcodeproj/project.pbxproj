@@ -123,19 +123,21 @@
 /* Begin PBXShellScriptBuildPhase section */
 		800000030000000300000003 /* Stamp Info.plist from version.json */ = {
 			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
+			alwaysOutOfDate = 0;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputPaths = (
 				"$(SRCROOT)/../version.json",
+				"$(SRCROOT)/Info.plist",
 			);
 			name = "Stamp Info.plist from version.json";
 			outputPaths = (
+				"$(DERIVED_FILE_DIR)/stamp-info-plist.done",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "\"${SRCROOT}/../Scripts/stamp-info-plist.sh\"\n";
+			shellScript = "\"${SRCROOT}/../Scripts/stamp-info-plist.sh\"\ntouch \"${DERIVED_FILE_DIR}/stamp-info-plist.done\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -154,6 +156,7 @@
 		700000110000001100000011 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				SDKROOT = macosx;
@@ -164,6 +167,7 @@
 		700000120000001200000012 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				SDKROOT = macosx;

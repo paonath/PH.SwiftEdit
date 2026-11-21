@@ -14,16 +14,14 @@ struct ListIndentationWorkbenchTests {
     }
 
     @MainActor
-    private static func makeModel(recovery: URL) -> (SwiftEditWorkbenchModel, String) {
-        let suite = "it.ph.SwiftEdit.test.listindent.\(UUID().uuidString)"
-        let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suite,
-            recentFilesSuiteName: "\(suite).recent",
+    private static func makeModel(recovery: URL) -> SwiftEditWorkbenchModel {
+        SwiftEditWorkbenchModel(
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recovery,
             systemDarkDetector: { false },
             savePanelProvider: { _ in nil }
         )
-        return (model, suite)
     }
 
     @Test("P5: applyListIndentation nests in exactly one BufferRevision, translates the caret, and coalesces edits into one replacement")
@@ -31,9 +29,8 @@ struct ListIndentationWorkbenchTests {
     func p5WorkbenchAppliesTabInOneRevision() throws {
         // GIVEN a Markdown tab ending with an empty third item and the caret at its end
         let dir = Self.tmp
-        let (model, suite) = Self.makeModel(recovery: dir)
+        let model = Self.makeModel(recovery: dir)
         defer {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: dir)
         }
         let text = "1. a\n2. b\n3. "
@@ -78,9 +75,8 @@ struct ListIndentationWorkbenchTests {
         try Data([0x2D, 0x20, 0x00, 0x41]).write(to: binaryURL)
         let swiftURL = dir.appendingPathComponent("notes.swift")
         try Data("- a\n- b".utf8).write(to: swiftURL)
-        let (model, suite) = Self.makeModel(recovery: dir.appendingPathComponent("rec"))
+        let model = Self.makeModel(recovery: dir.appendingPathComponent("rec"))
         defer {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: dir)
         }
 

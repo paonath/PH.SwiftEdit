@@ -76,8 +76,8 @@ public struct WorkspaceTabSession: Equatable, Sendable {
             caretLocation: max(0, caretLocation),
             revision: snapshot.revision
         )
+        // Appending an unpinned tab preserves pinned-first invariant in O(1) without reallocating `tabs`.
         tabs.append(newTab)
-        tabs = Self.partitionPinnedFirst(tabs)
         activeTabID = snapshot.id
     }
 
@@ -109,11 +109,7 @@ public struct WorkspaceTabSession: Equatable, Sendable {
         guard let sourceIndex = tabs.firstIndex(where: { $0.id == id }) else {
             throw DomainError.tabNotFound(id)
         }
-        let range = partitionRange(forPinned: tabs[sourceIndex].isPinned)
-        let clampedDestination = min(max(destinationIndex, range.lowerBound), range.upperBound)
-        guard clampedDestination != sourceIndex else { return }
-        let moved = tabs.remove(at: sourceIndex)
-        tabs.insert(moved, at: clampedDestination)
+        moveTab(fromIndex: sourceIndex, toIndex: destinationIndex)
     }
 
     /// Moves the tab matching `id` one slot left inside its pinned or unpinned partition (`BC-006`, `BC-008`).
@@ -122,7 +118,7 @@ public struct WorkspaceTabSession: Equatable, Sendable {
         guard let sourceIndex = tabs.firstIndex(where: { $0.id == id }) else {
             throw DomainError.tabNotFound(id)
         }
-        try moveTab(id: id, toIndex: sourceIndex - 1)
+        moveTab(fromIndex: sourceIndex, toIndex: sourceIndex - 1)
     }
 
     /// Moves the tab matching `id` one slot right inside its pinned or unpinned partition (`BC-006`, `BC-008`).
@@ -131,7 +127,15 @@ public struct WorkspaceTabSession: Equatable, Sendable {
         guard let sourceIndex = tabs.firstIndex(where: { $0.id == id }) else {
             throw DomainError.tabNotFound(id)
         }
-        try moveTab(id: id, toIndex: sourceIndex + 1)
+        moveTab(fromIndex: sourceIndex, toIndex: sourceIndex + 1)
+    }
+
+    private mutating func moveTab(fromIndex sourceIndex: Int, toIndex destinationIndex: Int) {
+        let range = partitionRange(forPinned: tabs[sourceIndex].isPinned)
+        let clampedDestination = min(max(destinationIndex, range.lowerBound), range.upperBound)
+        guard clampedDestination != sourceIndex else { return }
+        let moved = tabs.remove(at: sourceIndex)
+        tabs.insert(moved, at: clampedDestination)
     }
 
     private func partitionRange(forPinned isPinned: Bool) -> ClosedRange<Int> {
@@ -194,11 +198,12 @@ public struct WorkspaceTabSession: Equatable, Sendable {
     /// Reconciles open tabs in place after a sidebar file or folder rename, preserving `DocumentID`s (`BC-006`, `BC-008`).
     public mutating func applyRename(from oldURL: URL, to newURL: URL) {
         let oldPath = oldURL.standardizedFileURL.path
+        let oldPrefix = oldPath.hasSuffix("/") ? oldPath : oldPath + "/"
         let newBaseURL = newURL.standardizedFileURL
         for index in tabs.indices {
             guard let currentURL = tabs[index].fileURL else { continue }
             let currentPath = currentURL.standardizedFileURL.path
-            guard let match = Self.matchPathOrDescendant(candidatePath: currentPath, targetRootPath: oldPath) else {
+            guard let match = Self.matchPathOrDescendant(candidatePath: currentPath, targetRootPath: oldPath, targetPrefix: oldPrefix) else {
                 continue
             }
             if match.isExact {
@@ -214,34 +219,42 @@ public struct WorkspaceTabSession: Equatable, Sendable {
     /// Reconciles open tabs after a sidebar item moves to Trash: closes clean matching tabs (including pinned) and detaches dirty tabs (`fileURL = nil`) so unsaved edits are never silently lost (`BC-008`, `DATA-006`).
     public mutating func applyTrash(of trashedURL: URL) {
         let trashedPath = trashedURL.standardizedFileURL.path
-        var cleanIDsToClose: [DocumentID] = []
-        for index in tabs.indices {
-            guard let currentURL = tabs[index].fileURL else { continue }
-            let currentPath = currentURL.standardizedFileURL.path
-            guard Self.matchPathOrDescendant(candidatePath: currentPath, targetRootPath: trashedPath) != nil else {
+        let trashedPrefix = trashedPath.hasSuffix("/") ? trashedPath : trashedPath + "/"
+        var kept: [TabDescriptor] = []
+        kept.reserveCapacity(tabs.count)
+        var removedActiveFallbackIndex: Int?
+
+        for tab in tabs {
+            guard let currentURL = tab.fileURL,
+                  Self.matchPathOrDescendant(candidatePath: currentURL.standardizedFileURL.path, targetRootPath: trashedPath, targetPrefix: trashedPrefix) != nil else {
+                kept.append(tab)
                 continue
             }
-            if tabs[index].isDirty {
-                tabs[index].fileURL = nil
-            } else {
-                cleanIDsToClose.append(tabs[index].id)
+            if tab.isDirty {
+                var detached = tab
+                detached.fileURL = nil
+                kept.append(detached)
+            } else if tab.id == activeTabID {
+                removedActiveFallbackIndex = kept.count
             }
         }
-        for id in cleanIDsToClose {
-            _ = try? closeTab(id: id, forcePinned: true)
+
+        tabs = kept
+        if let fallbackPos = removedActiveFallbackIndex {
+            activeTabID = resolveFallbackActiveTab(removedAt: fallbackPos)
         }
     }
 
     private static func matchPathOrDescendant(
         candidatePath: String,
-        targetRootPath: String
+        targetRootPath: String,
+        targetPrefix: String
     ) -> (isExact: Bool, relativeSubpath: String)? {
         if candidatePath == targetRootPath {
             return (true, "")
         }
-        let prefix = targetRootPath.hasSuffix("/") ? targetRootPath : targetRootPath + "/"
-        if candidatePath.hasPrefix(prefix) {
-            let relative = String(candidatePath.dropFirst(prefix.count))
+        if candidatePath.hasPrefix(targetPrefix) {
+            let relative = String(candidatePath.dropFirst(targetPrefix.count))
             return (false, relative)
         }
         return nil

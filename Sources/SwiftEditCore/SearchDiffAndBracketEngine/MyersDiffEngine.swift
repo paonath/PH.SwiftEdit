@@ -73,26 +73,24 @@ extension SearchDiffAndBracketEngine {
         let lhsLines = splitDiffLines(lhs.text)
         let rhsLines = splitDiffLines(rhs.text)
 
-        guard let rawOps = diffWithTrimmedAffixes(lhs: lhsLines, rhs: rhsLines, clock: clock) else {
+        guard let hunksAndFlag = diffWithTrimmedAffixes(lhs: lhsLines, rhs: rhsLines, clock: clock) else {
             return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: diffDeadlineMilliseconds))
         }
-
-        let (hunks, hasDifferences) = materializeDiffHunks(from: rawOps)
 
         return .completed(FileCompareDiffResult(
             lhsID: lhs.id,
             lhsRevision: lhs.revision,
             rhsID: rhs.id,
             rhsRevision: rhs.revision,
-            hunks: hunks,
-            hasDifferences: hasDifferences
+            hunks: hunksAndFlag.hunks,
+            hasDifferences: hunksAndFlag.hasDifferences
         ))
     }
 
-    private enum RawDiffOp {
-        case unchanged(String)
-        case removed(String)
-        case inserted(String)
+    private enum CompactDiffOp {
+        case unchanged(Int)
+        case removed(Int)
+        case inserted(Int)
     }
 
     private static func preflightDiffCheck(
@@ -120,16 +118,42 @@ extension SearchDiffAndBracketEngine {
         return nil
     }
 
-    private static func splitDiffLines(_ text: String) -> [String] {
+    /// Splits `text` into zero-copy `Substring` lines treating `\r\n`, `\n`, and bare `\r` as line breaks without normalizing/copying the buffer.
+    private static func splitDiffLines(_ text: String) -> [Substring] {
         guard !text.isEmpty else { return [] }
-        return LineEnding.normalizeToLF(text).components(separatedBy: "\n")
+        let utf8 = text.utf8
+        var lines: [Substring] = []
+        lines.reserveCapacity(max(16, utf8.count / 40))
+        var lineStart = utf8.startIndex
+        var idx = lineStart
+        while idx < utf8.endIndex {
+            let b = utf8[idx]
+            if b == 0x0A {
+                lines.append(text[lineStart..<idx])
+                idx = utf8.index(after: idx)
+                lineStart = idx
+            } else if b == 0x0D {
+                lines.append(text[lineStart..<idx])
+                let next = utf8.index(after: idx)
+                if next < utf8.endIndex && utf8[next] == 0x0A {
+                    idx = utf8.index(after: next)
+                } else {
+                    idx = next
+                }
+                lineStart = idx
+            } else {
+                idx = utf8.index(after: idx)
+            }
+        }
+        lines.append(text[lineStart..<utf8.endIndex])
+        return lines
     }
 
     private static func diffWithTrimmedAffixes(
-        lhs: [String],
-        rhs: [String],
+        lhs: [Substring],
+        rhs: [Substring],
         clock: any ElapsedTimeProviding
-    ) -> [RawDiffOp]? {
+    ) -> (hunks: [DiffHunk], hasDifferences: Bool)? {
         var prefixCount = 0
         let minCount = min(lhs.count, rhs.count)
         while prefixCount < minCount && lhs[prefixCount] == rhs[prefixCount] {
@@ -142,53 +166,140 @@ extension SearchDiffAndBracketEngine {
             suffixCount += 1
         }
 
-        let midLhs = Array(lhs[prefixCount..<(lhs.count - suffixCount)])
-        let midRhs = Array(rhs[prefixCount..<(rhs.count - suffixCount)])
-        guard let midOps = myersShortestEditScript(lhs: midLhs, rhs: midRhs, clock: clock) else {
-            return nil
+        let midLhsStart = prefixCount
+        let midLhsEnd = lhs.count - suffixCount
+        let midRhsStart = prefixCount
+        let midRhsEnd = rhs.count - suffixCount
+        let midN = midLhsEnd - midLhsStart
+        let midM = midRhsEnd - midRhsStart
+
+        let midOps: [CompactDiffOp]
+        if midN == 0 && midM == 0 {
+            if clock.elapsedMilliseconds() > diffDeadlineMilliseconds {
+                return nil
+            }
+            midOps = []
+        } else if midN == 0 {
+            if clock.elapsedMilliseconds() > diffDeadlineMilliseconds {
+                return nil
+            }
+            var ops: [CompactDiffOp] = []
+            ops.reserveCapacity(midM)
+            for j in 0..<midM { ops.append(.inserted(j)) }
+            midOps = ops
+        } else if midM == 0 {
+            if clock.elapsedMilliseconds() > diffDeadlineMilliseconds {
+                return nil
+            }
+            var ops: [CompactDiffOp] = []
+            ops.reserveCapacity(midN)
+            for i in 0..<midN { ops.append(.removed(i)) }
+            midOps = ops
+        } else {
+            // Intern middle lines to dense Int IDs so Myers snake loops compare Int == Int with zero ARC / Unicode overhead.
+            var internTable: [Substring: Int] = Dictionary(minimumCapacity: midN + midM)
+            var nextID = 0
+            var lhsIDs: [Int] = []
+            lhsIDs.reserveCapacity(midN)
+            for i in midLhsStart..<midLhsEnd {
+                let line = lhs[i]
+                if let existing = internTable[line] {
+                    lhsIDs.append(existing)
+                } else {
+                    internTable[line] = nextID
+                    lhsIDs.append(nextID)
+                    nextID += 1
+                }
+            }
+            var rhsIDs: [Int] = []
+            rhsIDs.reserveCapacity(midM)
+            for j in midRhsStart..<midRhsEnd {
+                let line = rhs[j]
+                if let existing = internTable[line] {
+                    rhsIDs.append(existing)
+                } else {
+                    internTable[line] = nextID
+                    rhsIDs.append(nextID)
+                    nextID += 1
+                }
+            }
+            guard let computed = myersShortestEditScript(lhsIDs: lhsIDs, rhsIDs: rhsIDs, clock: clock) else {
+                return nil
+            }
+            midOps = computed
         }
 
-        var ops: [RawDiffOp] = []
-        ops.reserveCapacity(prefixCount + midOps.count + suffixCount)
+        var hunks: [DiffHunk] = []
+        hunks.reserveCapacity(prefixCount + midOps.count + suffixCount)
+        var lhsLine = 1
+        var rhsLine = 1
+        var hasDifferences = false
 
         for index in 0..<prefixCount {
-            ops.append(.unchanged(lhs[index]))
+            hunks.append(DiffHunk(kind: .unchanged, lineText: String(lhs[index]), lhsLineNumber: lhsLine, rhsLineNumber: rhsLine))
+            lhsLine += 1
+            rhsLine += 1
         }
-        ops.append(contentsOf: midOps)
-
+        for op in midOps {
+            switch op {
+            case .unchanged(let relIdx):
+                hunks.append(DiffHunk(kind: .unchanged, lineText: String(lhs[midLhsStart + relIdx]), lhsLineNumber: lhsLine, rhsLineNumber: rhsLine))
+                lhsLine += 1
+                rhsLine += 1
+            case .removed(let relIdx):
+                hasDifferences = true
+                hunks.append(DiffHunk(kind: .removed, lineText: String(lhs[midLhsStart + relIdx]), lhsLineNumber: lhsLine, rhsLineNumber: nil))
+                lhsLine += 1
+            case .inserted(let relIdx):
+                hasDifferences = true
+                hunks.append(DiffHunk(kind: .inserted, lineText: String(rhs[midRhsStart + relIdx]), lhsLineNumber: nil, rhsLineNumber: rhsLine))
+                rhsLine += 1
+            }
+        }
         let suffixStart = lhs.count - suffixCount
         for index in suffixStart..<lhs.count {
-            ops.append(.unchanged(lhs[index]))
+            hunks.append(DiffHunk(kind: .unchanged, lineText: String(lhs[index]), lhsLineNumber: lhsLine, rhsLineNumber: rhsLine))
+            lhsLine += 1
+            rhsLine += 1
         }
 
-        return ops
+        return (hunks, hasDifferences)
     }
 
+    /// Runs Myers SES packing only the `d` active diagonals per step into a single flat triangular `[Int]` arena (`O(D²/2)` space, zero per-step CoW array copies).
     private static func myersShortestEditScript(
-        lhs: [String],
-        rhs: [String],
+        lhsIDs: [Int],
+        rhsIDs: [Int],
         clock: any ElapsedTimeProviding
-    ) -> [RawDiffOp]? {
+    ) -> [CompactDiffOp]? {
         if clock.elapsedMilliseconds() > diffDeadlineMilliseconds {
             return nil
         }
-        let n = lhs.count
-        let m = rhs.count
-        if n == 0 && m == 0 { return [] }
-        if n == 0 { return rhs.map { .inserted($0) } }
-        if m == 0 { return lhs.map { .removed($0) } }
-
+        let n = lhsIDs.count
+        let m = rhsIDs.count
         let maxD = n + m
         let offset = maxD
         var v = Array(repeating: 0, count: 2 * maxD + 1)
-        var trace: [[Int]] = []
+        // Flat triangular arena: step `d >= 1` stores the `d` live diagonals from step `d - 1`
+        // at base index `d * (d - 1) / 2`, where diagonal `k` in `-(d-1)...(d-1)` sits at `base + (k + (d - 1)) >> 1`.
+        var traceArena: [Int] = []
+        traceArena.reserveCapacity(min(maxD * 8, 4096))
+        var finalD = 0
 
         outer: for d in 0...maxD {
             if clock.elapsedMilliseconds() > diffDeadlineMilliseconds {
                 return nil
             }
-            trace.append(v)
-            for k in stride(from: -d, through: d, by: 2) {
+            if d > 0 {
+                let prevLimit = d - 1
+                var kPrev = -prevLimit
+                while kPrev <= prevLimit {
+                    traceArena.append(v[offset + kPrev])
+                    kPrev += 2
+                }
+            }
+            var k = -d
+            while k <= d {
                 var x: Int
                 if k == -d || (k != d && v[offset + k - 1] < v[offset + k + 1]) {
                     x = v[offset + k + 1]
@@ -196,93 +307,76 @@ extension SearchDiffAndBracketEngine {
                     x = v[offset + k - 1] + 1
                 }
                 var y = x - k
-                while x < n && y < m && lhs[x] == rhs[y] {
+                while x < n && y < m && lhsIDs[x] == rhsIDs[y] {
                     x += 1
                     y += 1
                 }
                 v[offset + k] = x
                 if x >= n && y >= m {
+                    finalD = d
                     break outer
                 }
+                k += 2
             }
         }
 
-        return backtrackMyersTrace(trace: trace, offset: offset, lhs: lhs, rhs: rhs)
+        return backtrackMyersArena(traceArena: traceArena, finalD: finalD, n: n, m: m)
     }
 
-    private static func backtrackMyersTrace(
-        trace: [[Int]],
-        offset: Int,
-        lhs: [String],
-        rhs: [String]
-    ) -> [RawDiffOp] {
-        var reversedOps: [RawDiffOp] = []
-        var x = lhs.count
-        var y = rhs.count
+    private static func backtrackMyersArena(
+        traceArena: [Int],
+        finalD: Int,
+        n: Int,
+        m: Int
+    ) -> [CompactDiffOp] {
+        var ops: [CompactDiffOp] = []
+        ops.reserveCapacity(max(n, m) + finalD)
+        var x = n
+        var y = m
 
-        for d in (0..<trace.count).reversed() {
+        for d in stride(from: finalD, through: 0, by: -1) {
             if d == 0 {
                 while x > 0 && y > 0 {
                     x -= 1
                     y -= 1
-                    reversedOps.append(.unchanged(lhs[x]))
+                    ops.append(.unchanged(x))
                 }
                 break
             }
 
-            let vPrev = trace[d]
+            let base = (d * (d - 1)) >> 1
+            let prevLimit = d - 1
             let k = x - y
             let prevK: Int
-            if k == -d || (k != d && vPrev[offset + k - 1] < vPrev[offset + k + 1]) {
+            if k == -d {
                 prevK = k + 1
-            } else {
+            } else if k == d {
                 prevK = k - 1
+            } else {
+                let leftVal = traceArena[base + ((k - 1 + prevLimit) >> 1)]
+                let rightVal = traceArena[base + ((k + 1 + prevLimit) >> 1)]
+                prevK = (leftVal < rightVal) ? (k + 1) : (k - 1)
             }
 
-            let prevX = vPrev[offset + prevK]
+            let prevX = traceArena[base + ((prevK + prevLimit) >> 1)]
             let prevY = prevX - prevK
 
             while x > prevX && y > prevY {
                 x -= 1
                 y -= 1
-                reversedOps.append(.unchanged(lhs[x]))
+                ops.append(.unchanged(x))
             }
 
             if x == prevX {
                 y -= 1
-                reversedOps.append(.inserted(rhs[y]))
+                ops.append(.inserted(y))
             } else {
                 x -= 1
-                reversedOps.append(.removed(lhs[x]))
+                ops.append(.removed(x))
             }
         }
 
-        return reversedOps.reversed()
-    }
-
-    private static func materializeDiffHunks(from ops: [RawDiffOp]) -> (hunks: [DiffHunk], hasDifferences: Bool) {
-        var hunks: [DiffHunk] = []
-        hunks.reserveCapacity(ops.count)
-        var lhsLine = 1
-        var rhsLine = 1
-        var hasDifferences = false
-
-        for op in ops {
-            switch op {
-            case .unchanged(let text):
-                hunks.append(DiffHunk(kind: .unchanged, lineText: text, lhsLineNumber: lhsLine, rhsLineNumber: rhsLine))
-                lhsLine += 1
-                rhsLine += 1
-            case .removed(let text):
-                hasDifferences = true
-                hunks.append(DiffHunk(kind: .removed, lineText: text, lhsLineNumber: lhsLine, rhsLineNumber: nil))
-                lhsLine += 1
-            case .inserted(let text):
-                hasDifferences = true
-                hunks.append(DiffHunk(kind: .inserted, lineText: text, lhsLineNumber: nil, rhsLineNumber: rhsLine))
-                rhsLine += 1
-            }
-        }
-        return (hunks, hasDifferences)
+        ops.reverse()
+        return ops
     }
 }

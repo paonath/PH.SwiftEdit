@@ -88,12 +88,10 @@ struct RecentFilesStoreTests {
     @Test("P3: Reopening an existing file deduplicates and moves it to index 0, and recording an 11th file evicts the oldest")
     func p3ReopenDeduplicatesToTopAndEleventhEvictsOldest() throws {
         // GIVEN an isolated RecentFilesStore already holding 10 text files including notes.md at index 4
-        let suiteName = "test.recents.\(UUID().uuidString)"
-        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
         let fs = InMemoryFileSystemFake()
         let clock = MutableTestClock(initial: Date(timeIntervalSince1970: 1_700_000_000))
         let store = RecentFilesStore(
-            suiteName: suiteName,
+            store: InMemoryKeyValueStore(),
             fileSystem: fs,
             bookmarkCoder: FakeBookmarkCoder(),
             now: { clock.now() }
@@ -122,11 +120,9 @@ struct RecentFilesStoreTests {
     @Test("N3: Binary files are rejected with binaryFileSaveForbidden and deleted files are omitted from entries()")
     func n3BinaryAndDeletedFilesAreExcluded() throws {
         // GIVEN a recorded text file that is later deleted and a binary file containing a NUL byte
-        let suiteName = "test.recents.\(UUID().uuidString)"
-        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
         let fs = InMemoryFileSystemFake()
         let store = RecentFilesStore(
-            suiteName: suiteName,
+            store: InMemoryKeyValueStore(),
             fileSystem: fs,
             bookmarkCoder: FakeBookmarkCoder()
         )
@@ -154,12 +150,11 @@ struct RecentFilesStoreTests {
     @Test("P4 & P5: resolve(entry:) brackets security-scoped access (1 == 1) and clear() erases persisted bookmark blobs")
     func p4AndP5BalancedResolveAndClearErasesBookmarks() throws {
         // GIVEN a store with a counting security-scope fake and one recorded entry
-        let suiteName = "test.recents.\(UUID().uuidString)"
-        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+        let kvStore = InMemoryKeyValueStore()
         let fs = InMemoryFileSystemFake()
         let scope = CountingSecurityScopeFake()
         let store = RecentFilesStore(
-            suiteName: suiteName,
+            store: kvStore,
             fileSystem: fs,
             bookmarkCoder: FakeBookmarkCoder(),
             securityScope: scope
@@ -172,34 +167,32 @@ struct RecentFilesStoreTests {
         // WHEN resolving the entry and subsequently clearing recent documents
         let resolvedURL = try store.resolve(entry: entry)
         store.clear()
-        let suiteDefaults = try #require(UserDefaults(suiteName: suiteName))
 
-        // THEN start/stop counts are both 1, entries() is empty, and the UserDefaults key is removed
+        // THEN start/stop counts are both 1, entries() is empty, and the preferences key is removed
         #expect(resolvedURL.standardizedFileURL.path == "/workspace/notes.md")
         #expect(scope.startCount == 1)
         #expect(scope.stopCount == 1)
         #expect(store.entries().isEmpty)
-        #expect(suiteDefaults.object(forKey: RecentFilesStore.recentFilesKey) == nil)
+        #expect(kvStore.object(forKey: RecentFilesStore.recentFilesKey) == nil)
     }
 
     @Test("N4 & N5 [Security]: Stale or mismatched bookmarks prune with balanced release, and corrupted or >1 MiB blobs fail closed")
     func n4AndN5SecurityStaleMismatchedBookmarksAndCorruptedBlobsFailClosed() throws {
-        // GIVEN recorded entries resolved against a failing coder and a path-spoofing coder, plus corrupted/oversized UserDefaults blobs
-        let suiteName = "test.recents.\(UUID().uuidString)"
-        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+        // GIVEN recorded entries resolved against a failing coder and a path-spoofing coder, plus corrupted/oversized payloads
+        let kvStore = InMemoryKeyValueStore()
         let fs = InMemoryFileSystemFake()
         let scope = CountingSecurityScopeFake()
         let aURL = URL(fileURLWithPath: "/workspace/a.md")
         let bURL = URL(fileURLWithPath: "/workspace/b.md")
         fs.seed(url: aURL, data: Data("a".utf8))
         fs.seed(url: bURL, data: Data("b".utf8))
-        let writer = RecentFilesStore(suiteName: suiteName, fileSystem: fs, bookmarkCoder: FakeBookmarkCoder(), securityScope: scope)
+        let writer = RecentFilesStore(store: kvStore, fileSystem: fs, bookmarkCoder: FakeBookmarkCoder(), securityScope: scope)
         _ = try writer.record(url: aURL)
         let recorded = try writer.record(url: bURL)
         let entryB = try #require(recorded.first)
         let entryA = try #require(recorded.last)
-        let failingStore = RecentFilesStore(suiteName: suiteName, fileSystem: fs, bookmarkCoder: FakeBookmarkCoder(shouldFailResolve: true), securityScope: scope)
-        let mismatchedStore = RecentFilesStore(suiteName: suiteName, fileSystem: fs, bookmarkCoder: FakeBookmarkCoder(overrideResolvedPath: "/etc/passwd"), securityScope: scope)
+        let failingStore = RecentFilesStore(store: kvStore, fileSystem: fs, bookmarkCoder: FakeBookmarkCoder(shouldFailResolve: true), securityScope: scope)
+        let mismatchedStore = RecentFilesStore(store: kvStore, fileSystem: fs, bookmarkCoder: FakeBookmarkCoder(overrideResolvedPath: "/etc/passwd"), securityScope: scope)
 
         // WHEN resolving stale/mismatched bookmarks and loading malformed or >1 MiB persisted payloads
         #expect(throws: DomainError.self) {
@@ -209,13 +202,12 @@ struct RecentFilesStoreTests {
             _ = try mismatchedStore.resolve(entry: entryB)
         }
         let prunedEntries = writer.entries()
-        let suiteDefaults = try #require(UserDefaults(suiteName: suiteName))
-        suiteDefaults.set(Data("{corrupted".utf8), forKey: RecentFilesStore.recentFilesKey)
+        kvStore.set(Data("{corrupted".utf8), forKey: RecentFilesStore.recentFilesKey)
         let afterCorrupt = writer.entries()
-        let corruptRemoved = (suiteDefaults.object(forKey: RecentFilesStore.recentFilesKey) == nil)
-        suiteDefaults.set(Data(repeating: 0x41, count: RecentFilesStore.maxPersistedPayloadBytes + 1), forKey: RecentFilesStore.recentFilesKey)
+        let corruptRemoved = (kvStore.object(forKey: RecentFilesStore.recentFilesKey) == nil)
+        kvStore.set(Data(repeating: 0x41, count: RecentFilesStore.maxPersistedPayloadBytes + 1), forKey: RecentFilesStore.recentFilesKey)
         let afterOversized = writer.entries()
-        let oversizedRemoved = (suiteDefaults.object(forKey: RecentFilesStore.recentFilesKey) == nil)
+        let oversizedRemoved = (kvStore.object(forKey: RecentFilesStore.recentFilesKey) == nil)
 
         // THEN both entries were pruned, start/stop stayed equal, and both invalid UserDefaults blobs were purged
         #expect(prunedEntries.isEmpty)

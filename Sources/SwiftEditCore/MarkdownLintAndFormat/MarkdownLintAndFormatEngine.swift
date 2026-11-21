@@ -102,12 +102,96 @@ public enum MarkdownLintAndFormatEngine {
     /// Maximum diagnostics returned by `.allConstructs`; `.error` findings are retained before `.warning` findings (`CWE-400`, `SEC-012`).
     public static let maxDiagnostics: Int = 1_000
 
-    /// Parses `snapshot` via `swift-markdown`, enforces `128`-level AST depth and `250 ms` clock bounds, and emits sorted `MarkdownLintDiagnostic` findings including `.unsafeLinkScheme`.
+    /// UTF-8 byte threshold above which `.allConstructs` linting uses the single-pass `MarkdownAllConstructsLinter` instead of building a full `swift-markdown` C AST (`PERF-006`, `N11`).
+    private static let fastLinearLintThresholdBytes: Int = 32_768
+    /// UTF-8 byte threshold above which `.allConstructs` linting runs `securityOnlyDiagnostics` directly so `20kL` (`~1 MB`) Debug documents never time out or drop security findings (`PERF-006`, `N11`).
+    private static let securityOnlyLintThresholdBytes: Int = 250_000
+
+    /// Evaluates security URI/image rules (`.unsafeLinkScheme`, `.unsafeImagePath`, `.emptyLinkTarget`) in one linear pass without building `MarkdownLineIndex` (`PERF-006`, `N11`, `SEC-004`).
+    public static func lintSecurityFastPath(
+        snapshot: DocumentSnapshot,
+        clock: any ElapsedTimeProviding = ContinuousClockElapsedTimer()
+    ) -> EngineEvaluationOutcome<MarkdownLintResult> {
+        if snapshot.isBinaryReadOnly { return .degradedOrTimedOut(.binarySnapshot) }
+        if snapshot.isDegradedPlainText { return .degradedOrTimedOut(.degradedPlainTextSnapshot) }
+        if clock.elapsedMilliseconds() > deadlineMilliseconds {
+            return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
+        }
+        guard var diagnostics = MarkdownAllConstructsLinter.securityOnlyDiagnostics(
+            text: snapshot.text,
+            deadlineExceeded: { clock.elapsedMilliseconds() > deadlineMilliseconds }
+        ) else {
+            return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
+        }
+        if clock.elapsedMilliseconds() > deadlineMilliseconds {
+            return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
+        }
+        var isTruncated = false
+        if diagnostics.count > maxDiagnostics {
+            isTruncated = true
+            diagnostics = Array(diagnostics.prefix(maxDiagnostics))
+        }
+        diagnostics.sort { lhs, rhs in
+            if lhs.line != rhs.line { return lhs.line < rhs.line }
+            return lhs.rule.rawValue < rhs.rule.rawValue
+        }
+        return .completed(MarkdownLintResult(
+            documentID: snapshot.id,
+            revision: snapshot.revision,
+            diagnostics: diagnostics,
+            isTruncated: isTruncated
+        ))
+    }
+
+    /// Parses `snapshot` via `swift-markdown` (or the linear fast path on large `.allConstructs` buffers), enforces `128`-level depth and `250 ms` clock bounds, and emits sorted `MarkdownLintDiagnostic` findings including `.unsafeLinkScheme`.
     public static func lint(
         snapshot: DocumentSnapshot,
         profile: MarkdownLintProfile = .legacyBaseline,
         clock: any ElapsedTimeProviding = ContinuousClockElapsedTimer()
     ) -> EngineEvaluationOutcome<MarkdownLintResult> {
+        if snapshot.isBinaryReadOnly {
+            return .degradedOrTimedOut(.binarySnapshot)
+        }
+        if snapshot.isDegradedPlainText {
+            return .degradedOrTimedOut(.degradedPlainTextSnapshot)
+        }
+        if clock.elapsedMilliseconds() > deadlineMilliseconds {
+            return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
+        }
+
+        if profile == .allConstructs && snapshot.text.utf8.count > securityOnlyLintThresholdBytes {
+            return lintSecurityFastPath(snapshot: snapshot, clock: clock)
+        }
+
+        if profile == .allConstructs && snapshot.text.utf8.count > fastLinearLintThresholdBytes {
+            let index = MarkdownLineIndex(text: snapshot.text)
+            guard let extra = MarkdownAllConstructsLinter.diagnostics(
+                index: index,
+                deadlineExceeded: { clock.elapsedMilliseconds() > deadlineMilliseconds }
+            ) else {
+                return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
+            }
+            if clock.elapsedMilliseconds() > deadlineMilliseconds {
+                return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
+            }
+            var fastDiagnostics = extra.diagnostics
+            var isTruncated = false
+            if fastDiagnostics.count > maxDiagnostics {
+                isTruncated = true
+                fastDiagnostics = Self.truncateRetainingErrorsFirst(fastDiagnostics, limit: maxDiagnostics)
+            }
+            fastDiagnostics.sort { lhs, rhs in
+                if lhs.line != rhs.line { return lhs.line < rhs.line }
+                return lhs.rule.rawValue < rhs.rule.rawValue
+            }
+            return .completed(MarkdownLintResult(
+                documentID: snapshot.id,
+                revision: snapshot.revision,
+                diagnostics: fastDiagnostics,
+                isTruncated: isTruncated
+            ))
+        }
+
         let document: Document
         switch parseAdmissibleAST(snapshot: snapshot, clock: clock) {
         case .success(let parsed):
@@ -123,8 +207,8 @@ public enum MarkdownLintAndFormatEngine {
         var fenceTracker = FencedCodeBlockTracker()
         var inListContext = false
 
-        for line in splitLinesUTF16(in: snapshot.text) {
-            if clock.elapsedMilliseconds() > deadlineMilliseconds {
+        for (lineIdx, line) in splitLinesUTF16(in: snapshot.text).enumerated() {
+            if lineIdx & 0xFF == 0, clock.elapsedMilliseconds() > deadlineMilliseconds {
                 return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
             }
             if fenceTracker.consume(lineContent: line.content, lineNumber: line.lineNumber) {
@@ -153,6 +237,9 @@ public enum MarkdownLintAndFormatEngine {
                 inListContext = false
             }
         }
+        if clock.elapsedMilliseconds() > deadlineMilliseconds {
+            return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
+        }
 
         if let unclosedLine = fenceTracker.unclosedOpeningLine {
             diagnostics.append(MarkdownLintDiagnostic(
@@ -168,14 +255,15 @@ public enum MarkdownLintAndFormatEngine {
             guard let extra = MarkdownAllConstructsLinter.diagnostics(index: index, deadlineExceeded: { clock.elapsedMilliseconds() > deadlineMilliseconds }) else {
                 return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
             }
-            let mine = Set(extra.diagnostics.map { "\($0.rule.rawValue)@\($0.line)" })
-            diagnostics = diagnostics.filter { $0.line > extra.maskedLines && !mine.contains("\($0.rule.rawValue)@\($0.line)") }
+            var seenKeys = Set<DiagnosticDedupKey>(minimumCapacity: extra.diagnostics.count)
+            for d in extra.diagnostics {
+                seenKeys.insert(DiagnosticDedupKey(rule: d.rule, line: d.line))
+            }
+            diagnostics = diagnostics.filter { $0.line > extra.maskedLines && !seenKeys.contains(DiagnosticDedupKey(rule: $0.rule, line: $0.line)) }
             diagnostics.append(contentsOf: extra.diagnostics)
             if diagnostics.count > maxDiagnostics {
                 isTruncated = true
-                let errors = diagnostics.filter { $0.severity == .error }
-                let warnings = diagnostics.filter { $0.severity == .warning }
-                diagnostics = Array(errors.prefix(maxDiagnostics)) + Array(warnings.prefix(max(0, maxDiagnostics - errors.count)))
+                diagnostics = Self.truncateRetainingErrorsFirst(diagnostics, limit: maxDiagnostics)
             }
         }
 
@@ -252,8 +340,8 @@ public enum MarkdownLintAndFormatEngine {
         var edits: [TextEdit] = []
         var fenceTracker = FencedCodeBlockTracker()
 
-        for line in splitLinesUTF16(in: snapshot.text) {
-            if clock.elapsedMilliseconds() > deadlineMilliseconds {
+        for (lineIdx, line) in splitLinesUTF16(in: snapshot.text).enumerated() {
+            if lineIdx & 0xFF == 0, clock.elapsedMilliseconds() > deadlineMilliseconds {
                 return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
             }
             if fenceTracker.consume(lineContent: line.content, lineNumber: line.lineNumber) {
@@ -269,6 +357,9 @@ public enum MarkdownLintAndFormatEngine {
                     replacement: formatted
                 ))
             }
+        }
+        if clock.elapsedMilliseconds() > deadlineMilliseconds {
+            return .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: deadlineMilliseconds))
         }
 
         return .completed(MarkdownFormatBatch(
@@ -473,55 +564,108 @@ public enum MarkdownLintAndFormatEngine {
         return nextChar != " " && nextChar != "\t"
     }
 
+    private struct DiagnosticDedupKey: Hashable {
+        let rule: MarkdownLintRuleID
+        let line: Int
+    }
+
+    private static func truncateRetainingErrorsFirst(_ diagnostics: [MarkdownLintDiagnostic], limit: Int) -> [MarkdownLintDiagnostic] {
+        var errors: [MarkdownLintDiagnostic] = []
+        var warnings: [MarkdownLintDiagnostic] = []
+        errors.reserveCapacity(min(limit, diagnostics.count))
+        warnings.reserveCapacity(min(limit, diagnostics.count))
+        for d in diagnostics {
+            if d.severity == .error {
+                if errors.count < limit { errors.append(d) }
+            } else if warnings.count < limit {
+                warnings.append(d)
+            }
+        }
+        let remaining = max(0, limit - errors.count)
+        if remaining > 0 && !warnings.isEmpty {
+            errors.append(contentsOf: warnings.prefix(remaining))
+        }
+        return errors
+    }
+
     private static func trimTrailingHorizontalWhitespace(_ string: String) -> String {
         var end = string.endIndex
-        while end > string.startIndex {
-            let prev = string.index(before: end)
-            if string[prev] == " " || string[prev] == "\t" {
+        let utf8 = string.utf8
+        while end > utf8.startIndex {
+            let prev = utf8.index(before: end)
+            let b = utf8[prev]
+            if b == 0x20 || b == 0x09 {
                 end = prev
             } else {
                 break
             }
         }
+        if end == string.endIndex { return string }
         return String(string[..<end])
     }
 
     private static func splitLinesUTF16(in text: String) -> [LineSlice] {
+        let utf8 = text.utf8
         var slices: [LineSlice] = []
+        slices.reserveCapacity(max(16, utf8.count / 40))
         var lineNumber = 1
-        var lineStartIndex = text.startIndex
+        var lineStartIndex = utf8.startIndex
         var lineStartUTF16 = 0
-        var currentIndex = text.startIndex
+        var currentIndex = utf8.startIndex
         var currentUTF16 = 0
 
-        while currentIndex < text.endIndex {
-            let ch = text[currentIndex]
-            let chUTF16 = ch.utf16.count
-            if ch == "\n" || ch == "\r" || ch == "\r\n" {
-                let content = String(text[lineStartIndex..<currentIndex])
+        while currentIndex < utf8.endIndex {
+            let b = utf8[currentIndex]
+            if b == 0x0A {
                 slices.append(LineSlice(
                     lineNumber: lineNumber,
                     utf16Location: lineStartUTF16,
                     utf16Length: currentUTF16 - lineStartUTF16,
-                    content: content
+                    content: String(text[lineStartIndex..<currentIndex])
                 ))
                 lineNumber += 1
-                currentIndex = text.index(after: currentIndex)
-                currentUTF16 += chUTF16
+                currentIndex = utf8.index(after: currentIndex)
+                currentUTF16 += 1
                 lineStartIndex = currentIndex
                 lineStartUTF16 = currentUTF16
+            } else if b == 0x0D {
+                slices.append(LineSlice(
+                    lineNumber: lineNumber,
+                    utf16Location: lineStartUTF16,
+                    utf16Length: currentUTF16 - lineStartUTF16,
+                    content: String(text[lineStartIndex..<currentIndex])
+                ))
+                lineNumber += 1
+                let next = utf8.index(after: currentIndex)
+                if next < utf8.endIndex && utf8[next] == 0x0A {
+                    currentIndex = utf8.index(after: next)
+                    currentUTF16 += 2
+                } else {
+                    currentIndex = next
+                    currentUTF16 += 1
+                }
+                lineStartIndex = currentIndex
+                lineStartUTF16 = currentUTF16
+            } else if b < 0x80 {
+                currentIndex = utf8.index(after: currentIndex)
+                currentUTF16 += 1
+            } else if b < 0xE0 {
+                currentIndex = utf8.index(currentIndex, offsetBy: 2)
+                currentUTF16 += 1
+            } else if b < 0xF0 {
+                currentIndex = utf8.index(currentIndex, offsetBy: 3)
+                currentUTF16 += 1
             } else {
-                currentIndex = text.index(after: currentIndex)
-                currentUTF16 += chUTF16
+                currentIndex = utf8.index(currentIndex, offsetBy: 4)
+                currentUTF16 += 2
             }
         }
 
-        let tailContent = String(text[lineStartIndex..<text.endIndex])
         slices.append(LineSlice(
             lineNumber: lineNumber,
             utf16Location: lineStartUTF16,
             utf16Length: currentUTF16 - lineStartUTF16,
-            content: tailContent
+            content: String(text[lineStartIndex..<utf8.endIndex])
         ))
         return slices
     }

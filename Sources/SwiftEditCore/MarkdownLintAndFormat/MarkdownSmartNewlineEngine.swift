@@ -50,31 +50,54 @@ public enum MarkdownSmartNewlineEngine {
     ) -> SmartNewlineEdit? {
         guard isMarkdownDocument,
               !snapshot.isBinaryReadOnly,
-              !snapshot.isDegradedPlainText else {
+              !snapshot.isDegradedPlainText,
+              caretLocation >= 0 else {
             return nil
         }
 
-        let units = Array(snapshot.text.utf16)
-        guard caretLocation >= 0 && caretLocation <= units.count else {
+        // Resolve the caret line directly in UTF-8 without copying the entire document into `[UInt16]`.
+        let text = snapshot.text
+        let utf16 = text.utf16
+        guard let caretIdx = utf16.index(utf16.startIndex, offsetBy: caretLocation, limitedBy: utf16.endIndex) else {
             return nil
         }
-
-        let (lineStart, lineEnd) = currentLineBounds(in: units, around: caretLocation)
-        guard (lineEnd - lineStart) <= SearchDiffAndBracketEngine.maxBracketScanLineUTF16Length else {
-            return nil
+        let utf8 = text.utf8
+        var lineStartIdx = caretIdx
+        while lineStartIdx > utf8.startIndex {
+            let prev = utf8.index(before: lineStartIdx)
+            let b = utf8[prev]
+            if b == 0x0A || b == 0x0D { break }
+            lineStartIdx = prev
+        }
+        var lineEndIdx = caretIdx
+        while lineEndIdx < utf8.endIndex {
+            let b = utf8[lineEndIdx]
+            if b == 0x0A || b == 0x0D { break }
+            lineEndIdx = utf8.index(after: lineEndIdx)
         }
 
-        if isInsideFencedCodeBlock(in: units, beforeOffset: lineStart) {
+        let leadingUTF16 = utf16.distance(from: lineStartIdx, to: caretIdx)
+        let trailingUTF16 = utf16.distance(from: caretIdx, to: lineEndIdx)
+        let lineUTF16Length = leadingUTF16 + trailingUTF16
+        guard lineUTF16Length <= SearchDiffAndBracketEngine.maxBracketScanLineUTF16Length else {
             return nil
         }
+        let lineStart = caretLocation - leadingUTF16
+        let lineEnd = caretLocation + trailingUTF16
 
-        let lineString = String(decoding: units[lineStart..<lineEnd], as: UTF16.self)
+        // Parse the current line FIRST: on normal prose (90%+ of Enter presses), returns nil in O(lineLength) with zero prefix scan.
+        let lineString = String(text[lineStartIdx..<lineEndIdx])
         guard let parsed = parseContinuationMarker(in: lineString) else {
             return nil
         }
 
         let markerEndOffset = lineStart + parsed.markerUTF16Length
         guard caretLocation >= markerEndOffset else {
+            return nil
+        }
+
+        // Only verify fenced-code state when the current line actually has a continuation marker.
+        if isInsideFencedCodeBlockUTF8(in: text, beforeIndex: lineStartIdx) {
             return nil
         }
 
@@ -110,92 +133,87 @@ public enum MarkdownSmartNewlineEngine {
         var isNestedOrdered: Bool = false
     }
 
-    private static func currentLineBounds(in units: [UInt16], around caret: Int) -> (start: Int, end: Int) {
-        var start = caret
-        while start > 0 && units[start - 1] != lfUnit && units[start - 1] != crUnit {
-            start -= 1
-        }
-        var end = caret
-        while end < units.count && units[end] != lfUnit && units[end] != crUnit {
-            end += 1
-        }
-        return (start, end)
-    }
-
-    private static func isInsideFencedCodeBlock(in units: [UInt16], beforeOffset limitOffset: Int) -> Bool {
-        var activeChar: UInt16?
+    private static func isInsideFencedCodeBlockUTF8(in text: String, beforeIndex limitIdx: String.Index) -> Bool {
+        let utf8 = text.utf8
+        guard limitIdx > utf8.startIndex else { return false }
+        var activeChar: UInt8 = 0
         var activeLength = 0
-        var lineStart = 0
+        var lineStart = utf8.startIndex
 
-        while lineStart < limitOffset {
+        while lineStart < limitIdx {
             var lineEnd = lineStart
-            while lineEnd < limitOffset && units[lineEnd] != lfUnit && units[lineEnd] != crUnit {
-                lineEnd += 1
+            while lineEnd < limitIdx {
+                let b = utf8[lineEnd]
+                if b == 0x0A || b == 0x0D { break }
+                lineEnd = utf8.index(after: lineEnd)
             }
 
-            if let fenceChar = activeChar {
-                if isClosingFence(in: units, lineStart: lineStart, lineEnd: lineEnd, fenceChar: fenceChar, minCount: activeLength) {
-                    activeChar = nil
+            if activeChar != 0 {
+                if isClosingFenceUTF8(utf8, lineStart: lineStart, lineEnd: lineEnd, fenceChar: activeChar, minCount: activeLength) {
+                    activeChar = 0
                     activeLength = 0
                 }
-            } else if let opened = openingFence(in: units, lineStart: lineStart, lineEnd: lineEnd) {
+            } else if let opened = openingFenceUTF8(utf8, lineStart: lineStart, lineEnd: lineEnd) {
                 activeChar = opened.char
                 activeLength = opened.count
             }
 
-            if lineEnd < limitOffset {
-                if units[lineEnd] == crUnit, lineEnd + 1 < limitOffset, units[lineEnd + 1] == lfUnit {
-                    lineStart = lineEnd + 2
+            if lineEnd < limitIdx {
+                let next = utf8.index(after: lineEnd)
+                if utf8[lineEnd] == 0x0D, next < limitIdx, utf8[next] == 0x0A {
+                    lineStart = utf8.index(after: next)
                 } else {
-                    lineStart = lineEnd + 1
+                    lineStart = next
                 }
             } else {
                 break
             }
         }
-        return activeChar != nil
+        return activeChar != 0
     }
 
-    private static func openingFence(in units: [UInt16], lineStart: Int, lineEnd: Int) -> (char: UInt16, count: Int)? {
+    private static func openingFenceUTF8(_ utf8: String.UTF8View, lineStart: String.Index, lineEnd: String.Index) -> (char: UInt8, count: Int)? {
         var idx = lineStart
         var spaces = 0
-        while idx < lineEnd && units[idx] == spaceUnit && spaces < 3 {
-            idx += 1
+        while idx < lineEnd && utf8[idx] == 0x20 && spaces < 3 {
+            idx = utf8.index(after: idx)
             spaces += 1
         }
         guard idx < lineEnd else { return nil }
-        let ch = units[idx]
-        guard ch == backtickUnit || ch == tildeUnit else { return nil }
-        let start = idx
-        while idx < lineEnd && units[idx] == ch {
-            idx += 1
+        let ch = utf8[idx]
+        guard ch == 0x60 || ch == 0x7E else { return nil }
+        var count = 0
+        while idx < lineEnd && utf8[idx] == ch {
+            idx = utf8.index(after: idx)
+            count += 1
         }
-        let count = idx - start
         guard count >= 3 else { return nil }
-        if ch == backtickUnit {
+        if ch == 0x60 {
             while idx < lineEnd {
-                if units[idx] == backtickUnit { return nil }
-                idx += 1
+                if utf8[idx] == 0x60 { return nil }
+                idx = utf8.index(after: idx)
             }
         }
         return (ch, count)
     }
 
-    private static func isClosingFence(in units: [UInt16], lineStart: Int, lineEnd: Int, fenceChar: UInt16, minCount: Int) -> Bool {
+    private static func isClosingFenceUTF8(_ utf8: String.UTF8View, lineStart: String.Index, lineEnd: String.Index, fenceChar: UInt8, minCount: Int) -> Bool {
         var idx = lineStart
         var spaces = 0
-        while idx < lineEnd && units[idx] == spaceUnit && spaces < 3 {
-            idx += 1
+        while idx < lineEnd && utf8[idx] == 0x20 && spaces < 3 {
+            idx = utf8.index(after: idx)
             spaces += 1
         }
-        let start = idx
-        while idx < lineEnd && units[idx] == fenceChar {
-            idx += 1
+        var count = 0
+        while idx < lineEnd && utf8[idx] == fenceChar {
+            idx = utf8.index(after: idx)
+            count += 1
         }
-        guard idx - start >= minCount else { return false }
+        guard count >= minCount else { return false }
         while idx < lineEnd {
-            if units[idx] != spaceUnit && units[idx] != tabUnit { return false }
-            idx += 1
+            let b = utf8[idx]
+            if b != 0x20 && b != 0x09 { return false }
+            idx = utf8.index(after: idx)
         }
         return true
     }

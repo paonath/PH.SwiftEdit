@@ -109,16 +109,14 @@ struct GFMEditorPipelineWiringTests {
     }
 
     @MainActor
-    private static func makeModel(recovery: URL) -> (SwiftEditWorkbenchModel, String) {
-        let suite = "it.ph.SwiftEdit.test.gfmwiring.\(UUID().uuidString)"
-        let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: suite,
-            recentFilesSuiteName: "\(suite).recent",
+    private static func makeModel(recovery: URL) -> SwiftEditWorkbenchModel {
+        SwiftEditWorkbenchModel(
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recovery,
             systemDarkDetector: { false },
             savePanelProvider: { _ in nil }
         )
-        return (model, suite)
     }
 
     private static func recoveryText(in dir: URL) -> String {
@@ -131,9 +129,8 @@ struct GFMEditorPipelineWiringTests {
     @MainActor
     func p6PipelineWiring() async throws {
         let dir = Self.tmp
-        let (model, suite) = Self.makeModel(recovery: dir)
+        let model = Self.makeModel(recovery: dir)
         defer {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: dir)
         }
         model.recoveryDebounceNanoseconds = 60_000_000
@@ -183,9 +180,8 @@ struct GFMEditorPipelineWiringTests {
     @MainActor
     func n7BinaryTabLockout() throws {
         let dir = Self.tmp
-        let (model, suite) = Self.makeModel(recovery: dir)
+        let model = Self.makeModel(recovery: dir)
         defer {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: dir)
         }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

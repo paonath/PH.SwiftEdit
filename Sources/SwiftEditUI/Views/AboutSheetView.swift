@@ -52,7 +52,7 @@ public struct AboutSheetDescriptor: Equatable, Sendable {
     /// Resolves runtime bundle version strings from `Bundle.main` with deterministic fallback (`AR-014`).
     public static func resolveFromMainBundle() -> AboutSheetDescriptor {
         let short = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.1"
-        let full = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "0.0.1-alpha3"
+        let full = resolveFallbackFullVersion(bundleFullVersion: Bundle.main.infoDictionary?["CFBundleVersion"] as? String)
         return AboutSheetDescriptor(
             appName: officialAppName,
             shortVersion: short,
@@ -61,6 +61,11 @@ public struct AboutSheetDescriptor: Equatable, Sendable {
             licenseName: officialLicenseName,
             licenseURL: officialLicenseURL
         )
+    }
+
+    /// Returns the runtime bundle full version string or the aligned `0.0.1-alpha5` fallback (`BUG-018`).
+    public static func resolveFallbackFullVersion(bundleFullVersion: String?) -> String {
+        bundleFullVersion ?? "0.0.1-alpha5"
     }
 
     /// Validates an external repository, license, or help link exclusively for `https` with a non-empty host (`SEC-004`, `UI-008`).

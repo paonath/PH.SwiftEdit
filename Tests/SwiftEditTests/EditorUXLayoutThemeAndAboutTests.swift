@@ -9,19 +9,15 @@ struct EditorUXLayoutThemeAndAboutTests {
     @Test("P5: Three-way Light/Dark/Auto selector syncs system colorScheme, exposes highlight and binary-disabled tokens, scales sidebar zoom, and projects non-mutating visual highlights")
     @MainActor
     func p5ThemeAutoSyncHighlightTokensSidebarZoomAndNonMutatingProjection() throws {
-        // GIVEN a workbench in Auto mode with isolated suites and a document containing nested brackets and backticks
-        let prefsSuite = "test.swiftedit.ux.p5.prefs.\(UUID().uuidString)"
-        let recentsSuite = "test.swiftedit.ux.p5.recents.\(UUID().uuidString)"
+        // GIVEN a workbench in Auto mode with isolated in-memory stores and a document containing nested brackets and backticks
         let recoveryDir = FileManager.default.temporaryDirectory.appendingPathComponent("swiftedit-ux-p5-\(UUID().uuidString)")
         defer {
-            UserDefaults.standard.removePersistentDomain(forName: prefsSuite)
-            UserDefaults.standard.removePersistentDomain(forName: recentsSuite)
             try? FileManager.default.removeItem(at: recoveryDir)
         }
 
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: prefsSuite,
-            recentFilesSuiteName: recentsSuite,
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recoveryDir
         )
         let sampleText = "scrivo{a[b(c)]} `code`"
@@ -65,18 +61,14 @@ struct EditorUXLayoutThemeAndAboutTests {
     @MainActor
     func n7BinarySidebarClickInertAndSidebarZoomClamps() throws {
         // GIVEN a workbench, a binary FolderEntryDescriptor, and boundary zoom controllers
-        let prefsSuite = "test.swiftedit.ux.n7.prefs.\(UUID().uuidString)"
-        let recentsSuite = "test.swiftedit.ux.n7.recents.\(UUID().uuidString)"
         let recoveryDir = FileManager.default.temporaryDirectory.appendingPathComponent("swiftedit-ux-n7-\(UUID().uuidString)")
         defer {
-            UserDefaults.standard.removePersistentDomain(forName: prefsSuite)
-            UserDefaults.standard.removePersistentDomain(forName: recentsSuite)
             try? FileManager.default.removeItem(at: recoveryDir)
         }
 
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: prefsSuite,
-            recentFilesSuiteName: recentsSuite,
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recoveryDir
         )
         let tabCountBefore = model.tabSession.tabs.count
@@ -106,13 +98,9 @@ struct EditorUXLayoutThemeAndAboutTests {
     func p6PercentageSidebarPinHoverToolbarContextCreateAndTabReorder() throws {
         // GIVEN a mounted workspace folder with a subfolder and file, plus multiple open tabs
         let workspace = try NavigatorTestSandbox.makeWorkspace(label: "ux-p6")
-        let prefsSuite = "test.swiftedit.ux.p6.prefs.\(UUID().uuidString)"
-        let recentsSuite = "test.swiftedit.ux.p6.recents.\(UUID().uuidString)"
         let recoveryDir = workspace.appendingPathComponent(".recovery")
         defer {
             try? FileManager.default.removeItem(at: workspace)
-            UserDefaults.standard.removePersistentDomain(forName: prefsSuite)
-            UserDefaults.standard.removePersistentDomain(forName: recentsSuite)
         }
         let docsURL = workspace.appendingPathComponent("docs")
         let readmeURL = workspace.appendingPathComponent("readme.md")
@@ -120,8 +108,8 @@ struct EditorUXLayoutThemeAndAboutTests {
         try Data("# hi".utf8).write(to: readmeURL)
 
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: prefsSuite,
-            recentFilesSuiteName: recentsSuite,
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recoveryDir
         )
         model.selectWorkspaceFolder(workspace)
@@ -166,17 +154,13 @@ struct EditorUXLayoutThemeAndAboutTests {
     func n8SidebarRatioClampingZeroWidthAndInvalidNames() throws {
         // GIVEN out-of-bounds ratios, zero container width, and invalid prompt names
         let workspace = try NavigatorTestSandbox.makeWorkspace(label: "ux-n8")
-        let prefsSuite = "test.swiftedit.ux.n8.prefs.\(UUID().uuidString)"
-        let recentsSuite = "test.swiftedit.ux.n8.recents.\(UUID().uuidString)"
         let recoveryDir = workspace.appendingPathComponent(".recovery")
         defer {
             try? FileManager.default.removeItem(at: workspace)
-            UserDefaults.standard.removePersistentDomain(forName: prefsSuite)
-            UserDefaults.standard.removePersistentDomain(forName: recentsSuite)
         }
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: prefsSuite,
-            recentFilesSuiteName: recentsSuite,
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recoveryDir
         )
         model.selectWorkspaceFolder(workspace)
@@ -204,21 +188,17 @@ struct EditorUXLayoutThemeAndAboutTests {
         // GIVEN a workspace with an escaping symlinked directory
         let workspace = try NavigatorTestSandbox.makeWorkspace(label: "ux-n9-ws")
         let outside = try NavigatorTestSandbox.makeWorkspace(label: "ux-n9-out")
-        let prefsSuite = "test.swiftedit.ux.n9.prefs.\(UUID().uuidString)"
-        let recentsSuite = "test.swiftedit.ux.n9.recents.\(UUID().uuidString)"
         let recoveryDir = workspace.appendingPathComponent(".recovery")
         defer {
             try? FileManager.default.removeItem(at: workspace)
             try? FileManager.default.removeItem(at: outside)
-            UserDefaults.standard.removePersistentDomain(forName: prefsSuite)
-            UserDefaults.standard.removePersistentDomain(forName: recentsSuite)
         }
         let escapingDirLink = workspace.appendingPathComponent("linked-out")
         try FileManager.default.createSymbolicLink(at: escapingDirLink, withDestinationURL: outside)
 
         let model = SwiftEditWorkbenchModel(
-            preferencesSuiteName: prefsSuite,
-            recentFilesSuiteName: recentsSuite,
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
             recoveryDirectoryURL: recoveryDir
         )
         model.selectWorkspaceFolder(workspace)
