@@ -1,12 +1,12 @@
 # Capability: constitution-v1-3-governance-and-fitness
 
 ## Purpose
-Synchronizes `openspec/Constitution.md` and its Bare-Bones atomic micro-files (`UI-001`, `DATA-004`, `SEC-004`) to `v1.3.0` and introduces `ConstitutionGovernanceValidator` in `SwiftEditCore` to continuously verify SemVer metadata, `Single-Reference Lock` line caps, active security/governance area floors, and `v1.3.0` layout, `CR` line-ending, MRU, and directory-only `NSWorkspace` confinement invariants.
+Moves the constitutional governance fitness check from `v1.3.0` to `v1.4.0` so the validator requires the amended `UI-002` (monospaced editor typography as default rather than mandate) and its Sync Impact Report row.
 
 ## Requirements
 
 ### Requirement: REQ-001 Constitution v1.3.0 SemVer Metadata Line Caps and Sync Impact Verification
-WHEN validating repository constitutional metadata, the constitution governance validator SHALL verify version `1.3.0`, active `Single-Reference Lock`, Bare-Bones line caps across `Constitution.md` and area mini-indexes, and the `1.3.0` `Sync Impact Report` entry for `UI-001`, `DATA-004`, and `SEC-004` [SDD-004][SDD-005][SDD-006][SDD-009][TEST-006].
+WHEN validating repository constitutional metadata, the constitution governance validator SHALL verify version `1.4.0`, active `Single-Reference Lock`, Bare-Bones line caps across `Constitution.md` and area mini-indexes, and the `1.3.0` (`UI-001`, `DATA-004`, `SEC-004`) and `1.4.0` (`UI-002`) `Sync Impact Report` entries [SDD-004][SDD-005][SDD-006][SDD-009][TEST-006].
 
 #### Scenario: P1 Valid Constitution v1.3.0 Root and Area Mini-Indexes Pass Governance Check
 - **Path**: P1
@@ -21,6 +21,20 @@ WHEN validating repository constitutional metadata, the constitution governance 
 - **GIVEN** a `Constitution.md` fixture retaining `version: "1.2.0"`, omitting the `1.3.0` `Sync Impact Report` entry, or exceeding `45` lines, or a mini-index exceeding `25` lines
 - **WHEN** `ConstitutionGovernanceValidator.validateConstitutionManifest(content:miniIndexes:)` evaluates the input
 - **THEN** validation returns non-empty typed `ConstitutionGovernanceViolation` items identifying the stale version, missing sync report row, or line-cap overflow
+
+#### Scenario: P3 Valid Constitution v1.4.0 With UI-002 Amendment Passes Governance Check
+- **Path**: P3
+- **Trait**: positive
+- **GIVEN** `openspec/Constitution.md` at `version: "1.4.0"` with `single_reference_lock: true`, line count `<= 45`, `1.3.0` and `1.4.0` Sync Impact rows (the latter citing `UI-002`), and mini-indexes each `<= 25` lines
+- **WHEN** `ConstitutionGovernanceValidator.validateConstitutionRoot(at:)` evaluates the repository `openspec/` directory
+- **THEN** validation succeeds with `version == "1.4.0"`, `singleReferenceLock == true`, and an empty `violations` list
+
+#### Scenario: N5 Stale v1.3.0 Missing UI-002 Row or Line-Cap Overflow Fails Validation
+- **Path**: N5
+- **Trait**: negative
+- **GIVEN** a `Constitution.md` fixture retaining `version: "1.3.0"`, omitting the `1.4.0` `UI-002` Sync Impact row, exceeding `45` lines, or a mini-index exceeding `25` lines
+- **WHEN** `ConstitutionGovernanceValidator.validateConstitutionManifest(content:miniIndexes:)` evaluates the input
+- **THEN** validation returns non-empty typed `ConstitutionGovernanceViolation` items identifying the stale version, missing row or line-cap overflow
 
 ### Requirement: REQ-002 Active Security and Governance Area Floor Protection
 IF a constitutional manifest downgrades active governance or security areas or disables `Single-Reference Lock`, THEN the constitution governance validator SHALL return typed governance security violations [SDD-007][SDD-009][SEC-009][SEC-010][TEST-006].

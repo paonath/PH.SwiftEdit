@@ -5,11 +5,11 @@ always_read:
   - "openspec/Constitution.md"
 specs:
   - id: "017-deep-debug-zoom-fonts-opendyslexic-and-perf"
-    status: "draft"
+    status: "implemented"
     date: "2026-11-21"
-    capabilities: ["deep-debug-zoom-fonts-opendyslexic-and-perf", "swifteditui-purple-zed-layout-textkit2-and-appicons", "editor-ux-highlighting-sidebar-pin-tabs-and-about", "constitution-v1-3-governance-and-fitness"]
-    path: "openspec/changes/017-deep-debug-zoom-fonts-opendyslexic-and-perf"
-    summary: "3x Deep Debug Audit, Zoomed Tabs/Sidebar/Gutter, System & OpenDyslexic App Fonts, Extreme Perf Passes"
+    capabilities: ["editor-ux-highlighting-sidebar-pin-tabs-and-about", "deep-debug-zoom-fonts-opendyslexic-and-perf", "constitution-v1-3-governance-and-fitness", "swifteditui-purple-zed-layout-textkit2-and-appicons"]
+    path: "openspec/changes/archive/2026-11-21-017-deep-debug-zoom-fonts-opendyslexic-and-perf"
+    summary: "3x Deep Debug Audit, Zoomed Tabs/Sidebar/Gutter, System & OpenDyslexic App Fonts and Extreme Performance Passes"
   - id: "016-yaml-native-support-frontmatter-properties-and-perf"
     status: "implemented"
     date: "2026-11-21"

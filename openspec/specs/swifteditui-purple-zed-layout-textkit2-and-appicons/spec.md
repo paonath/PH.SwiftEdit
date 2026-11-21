@@ -1,12 +1,12 @@
 # Capability: swifteditui-purple-zed-layout-textkit2-and-appicons
 
 ## Purpose
-Updates `REQ-001` and `REQ-002` of `swifteditui-purple-zed-layout-textkit2-and-appicons` so `PurpleThemePalette` replaces `public let brandGround` with contrast-verified role-specific semantic Light and Black tokens across all chrome, gutter, tab, sheet, and security-warning surfaces while preserving `21:1` `#FFFFFF`/`#000000` editor contrast and all binary quarantine and Trojan Source BiDi controls.
+Extends the Purple chrome and zoom contract so zoom also scales the tab strip, left navigator and gutter width, and the editor canvas keeps its inverted `#FFFFFF`/`#000000` colors with a user-selectable font instead of a mandatory monospaced face.
 
 ## Requirements
 
 ### Requirement: REQ-001 Concept E2 Purple Chrome Inverted B/W Canvas and 50..300 Percent Zoom
-WHEN resolving theme tokens, layout state, or zoom commands across `Light`, `Black`, and `Auto` modes, the theme and zoom controller SHALL expose role-specific Concept E2 Purple surface, foreground, accent, gutter, tab, sheet, highlight, and disabled-binary tokens without `brandGround`, invert the `#FFFFFF`/`#000000` canvas at `21:1` contrast, sync `.auto` to unmasked OS appearance, and scale editor and sidebar zoom across `50%..300%` [UI-001][UI-002][UI-003][UI-004][UI-009].
+WHEN resolving theme tokens, layout state, or zoom commands across `Light`, `Black`, and `Auto` modes, the theme and zoom controller SHALL expose role-specific Concept E2 Purple tokens without `brandGround`, invert the `#FFFFFF`/`#000000` canvas at `21:1` contrast in the user-selected editor font (monospaced by default), sync `.auto` to unmasked OS appearance, and scale editor, tab strip, left navigator and gutter across `50%..300%` [UI-001][UI-002][UI-003][UI-004][UI-009].
 
 #### Scenario: P1 Purple Chrome Tokens Inverted B/W Canvas and Zoom Scaling
 - **Path**: P1
@@ -63,6 +63,20 @@ WHEN resolving theme tokens, layout state, or zoom commands across `Light`, `Bla
 - **GIVEN** `PurpleThemePalette` resolved in `.light` and `.black` modes
 - **WHEN** `unbalancedBracketHighlight` is compared against `unbalancedBracketBackground`
 - **THEN** `contrastRatio` is at least `4.5` in both `.light` (`#991B1B` on `#FEE2E2`) and `.black` (`#FCA5A5` on `#450A0A`)
+
+#### Scenario: P7 Zoom Scales Tab Strip Navigator and Gutter With the Editor
+- **Path**: P7
+- **Trait**: positive
+- **GIVEN** an `EditorZoomController` at `100%` and the derived `ZoomedChromeMetrics`
+- **WHEN** `zoomIn()` runs ten times to reach `200%`
+- **THEN** the editor font, tab font, tab height, navigator row height and gutter width are each exactly twice their `100%` values
+
+#### Scenario: N11 Non-Monospaced Editor Font Keeps 21 to 1 Canvas Contrast
+- **Path**: N11
+- **Trait**: negative
+- **GIVEN** the editor font set to `OpenDyslexic` in `Light` and `Black` modes
+- **WHEN** canvas tokens resolve
+- **THEN** canvas text and background keep `21.0` contrast and the zoom clamps remain `50%` and `300%`
 
 ### Requirement: REQ-002 Binary Read-Only Lockout BiDi Trojan Source Badges and URI Gate
 IF a document snapshot is binary read-only, contains Unicode BiDi control characters, or triggers an external URI handoff, THEN `InspectionSafetyBannerState` and `PurpleThemePalette` SHALL disable mutating commands on binary buffers, emit BiDi, Binary Quarantine, and Inert HTML `RGBAColorToken` triples at `>= 4.5:1` text and `>= 3.0:1` border contrast across `.light` and `.black`, and require confirmation on allowlisted `https`/`http`/`mailto` URIs [DATA-003][SEC-004][SEC-012][UI-008][UI-009].

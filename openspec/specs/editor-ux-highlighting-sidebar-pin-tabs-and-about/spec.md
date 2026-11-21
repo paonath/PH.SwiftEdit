@@ -1,7 +1,7 @@
 # Capability: editor-ux-highlighting-sidebar-pin-tabs-and-about
 
 ## Purpose
-Updates `REQ-006` from `120 ms` dwell header submenu opening to click/keyboard-only activation while aligning `REQ-007`'s About fallback version string to `"0.0.1-alpha5"` and preserving all sidebar confinement, theme, and external HTTPS confirmation security checks.
+Extends proportional zoom scaling from left-sidebar typography to the full tab strip, navigator row metrics and gutter so the whole editing surface grows and shrinks together while appearance switching behavior stays unchanged.
 
 ## Requirements
 
@@ -95,7 +95,7 @@ WHEN enumerating shallow workspace entries for the left sidebar, the folder navi
 - **THEN** the call throws `DomainError.securityScopeViolation` before any `8 KiB` probe occurs and `startCount == stopCount`
 
 ### Requirement: REQ-005 Live Light Dark Auto Selector Current-Line Highlighting and Sidebar Zoom Scaling
-WHEN switching appearance modes, syncing unmasked system appearance, or adjusting zoom across `50%..300%`, the workbench and theme controller SHALL update `Light`, `Dark`, and `Auto` semantic palettes, synchronize `NSApp.appearance` and `TextKit2EditorView` selection, caret, and scroller styling without reloading buffers or poisoning `systemPrefersDark`, and scale editor and left sidebar typography proportionally [UI-001][UI-002][UI-003][UI-004][UI-005].
+WHEN switching appearance modes, syncing unmasked system appearance, or adjusting zoom across `50%..300%`, the workbench and theme controller SHALL update `Light`, `Dark`, and `Auto` semantic palettes, synchronize `NSApp.appearance` and `TextKit2EditorView` styling without reloading buffers or poisoning `systemPrefersDark`, and scale editor typography, left sidebar rows, tab strip and gutter proportionally with `>= 24 pt` targets [UI-001][UI-002][UI-003][UI-004][UI-005].
 
 #### Scenario: P5 Three-Way Appearance Switch System Auto Sync Highlight Tokens and Sidebar Zoom
 - **Path**: P5
@@ -124,6 +124,20 @@ WHEN switching appearance modes, syncing unmasked system appearance, or adjustin
 - **GIVEN** `SwiftEditWorkbenchModel` initialized with `systemDarkDetector: { true }` and switched explicitly to `.light`
 - **WHEN** SwiftUI emits a light container `colorScheme` change (`prefersDark: false`) while `appearanceMode == .light` and the user then switches to `.auto`
 - **THEN** `systemPrefersDark` remains `true` and `.auto` resolves `.black`
+
+#### Scenario: P12 Sidebar Rows Tabs and Gutter Follow Zoom Proportionally
+- **Path**: P12
+- **Trait**: positive
+- **GIVEN** a workbench with an open folder, three tabs and zoom at `100%`
+- **WHEN** zoom is set to `150%`
+- **THEN** `ZoomedChromeMetrics` reports sidebar row height, icon size, indent, tab font, tab height and gutter width at `1.5x` their `100%` values, and the sidebar font equals `19.5 pt`
+
+#### Scenario: N14 Fifty Percent Zoom Never Shrinks Targets Below 24 pt
+- **Path**: N14
+- **Trait**: negative
+- **GIVEN** zoom at `50%`
+- **WHEN** tab, tab close button and sidebar row metrics are computed
+- **THEN** each clickable height is `>= 24 pt` while text sizes still scale to `0.5x`
 
 ### Requirement: REQ-006 Percentage-Based Collapsible Pinned Sidebar Hover Topbar and Confined Right-Click Create
 WHEN laying out the left sidebar, interacting with the top bar brand region, or right-clicking the sidebar to create a file or folder, the workbench SHALL size sidebar width as `0.12...0.65` of container width, support manual pin/collapse, toggle `HeaderBrandSubmenuView` solely via click or keyboard, keep Logo, Zoom, and Theme visible, and validate prompted creation names inside scope [BC-012][SEC-003][SEC-012][UI-001][UI-005][UI-011].

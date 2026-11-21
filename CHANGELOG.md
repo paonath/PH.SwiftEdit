@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-21 UTC
+Branch: feature/FirstStub | Commit: d353ded
+
+### Added
+- Added user-selectable interface and editor typography: `FontChoice` / `TypographyRole` persisted in `EditorPreferencesStore` (`swiftedit.font.interface`, `swiftedit.font.editor`), cached `AppTypography` resolver with trait synthesis and fallback, `SystemFontCatalog` with `SystemFontFamilyCache` prewarming, `OpenDyslexicBundle` (`Sources/SwiftEditUI/Resources/Fonts/` + `OFL.txt`, SHA-256 pinned), and SwiftUI `Settings` window (`Cmd+,`, `SettingsView` + `SettingsViewModel`) with searchable "Interface font" and "Editor font" pickers (`openspec/specs/deep-debug-zoom-fonts-opendyslexic-and-perf/spec.md`, archived at `openspec/changes/archive/2026-11-21-017-deep-debug-zoom-fonts-opendyslexic-and-perf/`).
+- Added `ZoomedChromeMetrics` scaling tab strip text/badges/height/min-max width, left-navigator row height/header/icons/indent, and gutter width linearly across `50%..300%` while enforcing `>= 24 pt` minimum hit targets (`openspec/specs/swifteditui-purple-zed-layout-textkit2-and-appicons/spec.md` REQ-001, `openspec/specs/editor-ux-highlighting-sidebar-pin-tabs-and-about/spec.md` REQ-005).
+- Added 3x baseline and final verification audit reports (`docs/qa/debug-audit-report-017-baseline.md`, `docs/qa/debug-verification-report-017.md`) and `docs/qa/perf-analysis-017.md` with `PerfGolden017` behavioral fingerprints.
+
+### Changed
+- Amended Constitution `UI-002` (`v1.4.0`) so monospaced typography is the default rather than a mandate, updated `ConstitutionGovernanceValidator` to `1.4.0`, and routed all `SwiftEditUI` `.font(...)` sites and `EditorRenderingFonts` through `AppTypography` (`openspec/specs/constitution-v1-3-governance-and-fitness/spec.md` REQ-001).
+- Offloaded >64 KiB Markdown preview projection off `@MainActor` (`PERF-017-B1`, `7.261 ms → 0.034 ms`, −99.5%), moved first `SystemFontCatalog` CoreText enumeration off the main actor (`PERF-017-B2`, p95 `29.784 ms → 0.024 ms`, −99.9%), and shared one per-revision `MarkdownLineIndex` across the TextKit 2 validator, heading navigator, and YAML outline (`PERF-017-B3`, `2.795 ms → 0.439 ms`, −84.3%).
+
+### Fixed
+- Bounded `LineNumberGutterView` viewport line-metric sampling (`maxGutterLineMetrics = 512`), cutting 20k-line document relaunch memory from `1.1–1.3 GB` to `104 MB` (`−90.7%`) and cold-start-to-first-window from `5.1 s` to `564 ms` (`−88.9%`) (`F-017-01`).
+- Raised Black-mode `editorLinkForeground` contrast on `#000000` from `3.69:1` to `7.72:1` (`F-017-02`), enlarged tab strip pin/move/close hit targets to `>= 24 × 24 pt` (`F-017-03`), and added `accessibilityLabel` to all 11 icon-only buttons (`F-017-04`).
+
+### Security
+- Verified bundled OpenDyslexic `.otf` and `OFL.txt` SHA-256 digests fail-closed before `CTFontManagerScope.process` registration (`CWE-494`), resolved faces strictly by registered PostScript name to block shadow system families, and enforced printable `<= 128`-scalar family-name validation on `FontChoice` decoding (`CWE-22`, `CWE-20`).
+
+## [Unreleased] - 2026-11-21 UTC
 Branch: feature/FirstStub | Commit: 25538fd
 
 ### Added
