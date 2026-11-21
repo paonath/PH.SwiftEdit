@@ -163,7 +163,8 @@ struct TextKit2EditorView: NSViewRepresentable {
     let onListIndent: (Bool) -> SmartListOutcome
     /// GFM table `Tab` / `Shift+Tab` handler; evaluated before the list engine in the Tab chain (`Ctrl+Tab` escape is a distinct AppKit selector and is never intercepted).
     let onTableTab: (Bool) -> TableEditOutcome
-    let isMarkdownDocument: Bool
+    /// Syntax language for the rendering validator; `.plainText` disables styling (binary, degraded, quarantined tabs).
+    let documentLanguage: DocumentLanguage
     /// Selection requested by a model-side command, adopted once per `programmaticSelectionToken` change.
     let programmaticSelection: SwiftEditCore.TextRange
     let programmaticSelectionToken: Int
@@ -245,7 +246,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         coordinator.onViewportMetricsChange = onViewportMetricsChange
         coordinator.undoRegistry = undoRegistry
         coordinator.activeBufferRevision = bufferRevision
-        coordinator.gfmEnabled = isMarkdownDocument
+        coordinator.syntaxLanguage = documentLanguage
         coordinator.gfmPalette = palette
         coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints)
 
@@ -261,7 +262,7 @@ struct TextKit2EditorView: NSViewRepresentable {
                 coordinator.hasPendingLocalEdit = false
                 coordinator.markSynced(documentID: documentID, revision: bufferRevision)
                 coordinator.retagCachedLineIndexRevision(documentID: documentID, revision: bufferRevision, storageLength: textView.textStorage?.length ?? 0)
-            } else if coordinator.activeDocumentID != documentID || textView.string != text {
+            } else if coordinator.activeDocumentID != documentID || !coordinator.isDisplaying(text, in: textView) {
                 coordinator.applyProgrammaticTextUpdate(text, to: textView, documentID: documentID)
                 coordinator.markSynced(documentID: documentID, revision: bufferRevision)
                 textMutated = true
@@ -303,48 +304,33 @@ struct TextKit2EditorView: NSViewRepresentable {
 
     /// Installs the viewport-only GFM `renderingAttributesValidator` (hot path): only the laid-out fragment is scanned, prose keeps `#FFFFFF`/`#000000` (`21:1`), and cached fonts + `>= 4.5:1` palette tokens are applied (`UI-002`, `UI-012`).
     private func installGFMValidator(on textView: SwiftEditNSTextView, coordinator: Coordinator) {
-        coordinator.gfmEnabled = isMarkdownDocument
+        coordinator.syntaxLanguage = documentLanguage
         coordinator.gfmPalette = palette
         coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints)
         textView.textLayoutManager?.renderingAttributesValidator = { [weak coordinator, weak textView] layoutManager, fragment in
-            guard let coordinator, let textView, coordinator.gfmEnabled,
+            guard let coordinator, let textView, coordinator.syntaxLanguage != .plainText,
                   let contentManager = layoutManager.textContentManager else { return }
             let docStart = contentManager.documentRange.location
             let fragStart = contentManager.offset(from: docStart, to: fragment.rangeInElement.location)
             let fragEnd = contentManager.offset(from: docStart, to: fragment.rangeInElement.endLocation)
             guard fragEnd > fragStart else { return }
-            let storageLength = textView.textStorage?.length ?? 0
-            let index = coordinator.lineIndex(
-                textProvider: { textView.string },
-                expectedLength: storageLength,
+            let index = coordinator.renderingLineIndex(
+                for: textView,
                 documentID: coordinator.activeDocumentID,
                 revision: coordinator.activeBufferRevision
             )
-            let spans = MarkdownSyntaxHighlighter.spans(index: index, visibleRange: SwiftEditCore.TextRange(location: fragStart, length: fragEnd - fragStart))
+            let spans = DocumentSyntaxHighlighter.spans(index: index, visibleRange: SwiftEditCore.TextRange(location: fragStart, length: fragEnd - fragStart), language: coordinator.syntaxLanguage)
             guard !spans.isEmpty else { return }
             let palette = coordinator.gfmPalette
-            let boldFont = coordinator.cachedBoldFont
-            let italicFont = coordinator.cachedItalicFont
+            let fonts = coordinator.cachedFonts
             for span in spans {
-                guard let start = contentManager.location(docStart, offsetBy: span.range.location),
-                      let end = contentManager.location(start, offsetBy: span.range.length) else { continue }
-                guard let range = NSTextRange(location: start, end: end) else { continue }
-                switch span.kind {
-                case .heading, .bold:
-                    layoutManager.addRenderingAttribute(.font, value: boldFont, for: range)
-                case .italic:
-                    layoutManager.addRenderingAttribute(.font, value: italicFont, for: range)
-                case .strikethrough:
-                    layoutManager.addRenderingAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, for: range)
-                case .inlineCode, .codeBlock:
-                    layoutManager.addRenderingAttribute(.backgroundColor, value: palette.backtickInlineBackground.nsColor, for: range)
-                case .link, .image:
-                    layoutManager.addRenderingAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, for: range)
-                    layoutManager.addRenderingAttribute(.foregroundColor, value: palette.primaryAccent.nsColor, for: range)
-                case .inlineHTML:
-                    layoutManager.addRenderingAttribute(.foregroundColor, value: palette.inertHTMLWarningForeground.nsColor, for: range)
-                case .task, .blockquote, .tableRow, .thematicBreak:
-                    layoutManager.addRenderingAttribute(.foregroundColor, value: palette.secondaryForeground.nsColor, for: range)
+                let attributes = EditorRenderingAttributes.attributes(for: span.kind, palette: palette, fonts: fonts)
+                guard !attributes.isEmpty,
+                      let start = contentManager.location(docStart, offsetBy: span.range.location),
+                      let end = contentManager.location(start, offsetBy: span.range.length),
+                      let range = NSTextRange(location: start, end: end) else { continue }
+                for attribute in attributes {
+                    layoutManager.addRenderingAttribute(attribute.key, value: attribute.value, for: range)
                 }
             }
         }
@@ -605,12 +591,13 @@ struct TextKit2EditorView: NSViewRepresentable {
         var onSmartNewline: (Int) -> Int?
         var onListIndent: (Bool) -> SmartListOutcome
         var onTableTab: (Bool) -> TableEditOutcome
-        var gfmEnabled = false
+        var syntaxLanguage: DocumentLanguage = .plainText
         var gfmPalette: PurpleThemePalette = .resolve(appearance: .light, systemPrefersDark: false)
         var gfmFontSize: Double = 13
-        var cachedRegularFont: NSFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        var cachedBoldFont: NSFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
-        var cachedItalicFont: NSFont = NSFontManager.shared.convert(NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), toHaveTrait: .italicFontMask)
+        var cachedFonts = EditorRenderingFonts(fontSizePoints: 13)
+        var cachedRegularFont: NSFont { cachedFonts.regular }
+        var cachedBoldFont: NSFont { cachedFonts.bold }
+        var cachedItalicFont: NSFont { cachedFonts.italic }
         var lastStyledPalette: PurpleThemePalette?
         var lastStyledFontSize: Double?
         var lastStyledIsEditable: Bool?
@@ -636,10 +623,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         func updateGFMFontsIfNeeded(fontSizePoints: Double) {
             guard gfmFontSize != fontSizePoints else { return }
             gfmFontSize = fontSizePoints
-            let regular = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .regular)
-            cachedRegularFont = regular
-            cachedBoldFont = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .bold)
-            cachedItalicFont = NSFontManager.shared.convert(regular, toHaveTrait: .italicFontMask)
+            cachedFonts = EditorRenderingFonts(fontSizePoints: fontSizePoints)
         }
 
         func markSynced(documentID: DocumentID, revision: BufferRevision) {
@@ -828,9 +812,9 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
 
             if isSameDocument {
-                let currentLength = (textView.string as NSString).length
+                let currentLength = textView.textStorage?.length ?? 0
                 let fullRange = NSRange(location: 0, length: currentLength)
-                if textView.string != newText {
+                if !isDisplaying(newText, in: textView) {
                     if textView.shouldChangeText(in: fullRange, replacementString: newText) {
                         textView.textStorage?.replaceCharacters(in: fullRange, with: newText)
                         textView.didChangeText()
@@ -846,10 +830,39 @@ struct TextKit2EditorView: NSViewRepresentable {
                 isSwappingTabBuffer = false
             }
 
+            updateNativeTextMirror(newText)
             let newLength = (newText as NSString).length
             let clampedLocation = min(max(0, targetLocation), newLength)
             let clampedLength = min(max(0, targetLength), newLength - clampedLocation)
             textView.setSelectedRange(NSRange(location: clampedLocation, length: clampedLength))
+        }
+
+        /// Native UTF-8 copy of the text-storage contents, refreshed on every `textDidChange` and programmatic update (`PERF-B3`).
+        ///
+        /// Invariant: every storage mutation either posts `textDidChange` (typing, undo/redo, Find & Replace, `insertText`)
+        /// or goes through `applyProgrammaticTextUpdate`, so the mirror is current whenever its UTF-16 length matches the
+        /// storage; on a length mismatch callers fall back to the bridged `textView.string`.
+        private(set) var nativeTextMirror: (text: String, utf16Length: Int)?
+
+        func updateNativeTextMirror(_ text: String) {
+            let native = NativeTextNormalizer.native(text)
+            nativeTextMirror = (native, native.utf16.count)
+        }
+
+        /// Native text for `textView` when the mirror is current, else the bridged storage string.
+        func currentNativeText(of textView: NSTextView) -> String {
+            if let mirror = nativeTextMirror, mirror.utf16Length == (textView.textStorage?.length ?? -1) { return mirror.text }
+            return textView.string
+        }
+
+        /// Validator line index built from native text instead of re-bridging `textView.string` on every revision.
+        func renderingLineIndex(for textView: NSTextView, documentID: DocumentID?, revision: BufferRevision?) -> MarkdownLineIndex {
+            lineIndex(textProvider: { currentNativeText(of: textView) }, expectedLength: textView.textStorage?.length ?? 0, documentID: documentID, revision: revision)
+        }
+
+        /// `true` when the editor already shows `text`; compares native storage (memcmp) instead of a bridged `O(N)` walk.
+        func isDisplaying(_ text: String, in textView: NSTextView) -> Bool {
+            currentNativeText(of: textView) == text
         }
 
         /// Zero-bridge cache lookup used by `renderingAttributesValidator`: avoids touching `textView.string` completely on cache hits.
@@ -926,7 +939,8 @@ struct TextKit2EditorView: NSViewRepresentable {
                   let textView = notification.object as? NSTextView else { return }
             invalidateLineIndex()
             hasPendingLocalEdit = true
-            onTextChange(textView.string)
+            updateNativeTextMirror(textView.string)
+            onTextChange(nativeTextMirror?.text ?? textView.string)
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -950,6 +964,52 @@ struct TextKit2EditorView: NSViewRepresentable {
                 return true
             }
             return false
+        }
+    }
+}
+#endif
+
+#if os(macOS)
+/// Editor font set cached once per zoom level so the rendering validator never creates fonts per fragment (`UI-012`).
+struct EditorRenderingFonts {
+    let regular: NSFont
+    let bold: NSFont
+    let italic: NSFont
+    /// YAML keys use a lighter (not ultra-light) weight to read as secondary while staying legible at `50%` zoom (`REQ-010`).
+    let yamlKey: NSFont
+
+    init(fontSizePoints: Double) {
+        regular = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .regular)
+        bold = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .bold)
+        italic = NSFontManager.shared.convert(regular, toHaveTrait: .italicFontMask)
+        yamlKey = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .light)
+    }
+}
+
+/// Single source of truth mapping every `MarkdownSyntaxKind` (GFM and YAML) to non-mutating TextKit 2 rendering attributes.
+///
+/// Prose and YAML values receive no foreground attribute so they keep the `#FFFFFF`/`#000000` canvas text (`21:1`, `UI-002`).
+enum EditorRenderingAttributes {
+    static func attributes(for kind: MarkdownSyntaxKind, palette: PurpleThemePalette, fonts: EditorRenderingFonts) -> [(key: NSAttributedString.Key, value: Any)] {
+        switch kind {
+        case .heading, .bold:
+            return [(.font, fonts.bold)]
+        case .italic:
+            return [(.font, fonts.italic)]
+        case .strikethrough:
+            return [(.strikethroughStyle, NSUnderlineStyle.single.rawValue)]
+        case .inlineCode, .codeBlock:
+            return [(.backgroundColor, palette.backtickInlineBackground.nsColor)]
+        case .link, .image:
+            return [(.underlineStyle, NSUnderlineStyle.single.rawValue), (.foregroundColor, palette.primaryAccent.nsColor)]
+        case .inlineHTML:
+            return [(.foregroundColor, palette.inertHTMLWarningForeground.nsColor)]
+        case .task, .blockquote, .tableRow, .thematicBreak, .yamlPunctuation, .yamlComment:
+            return [(.foregroundColor, palette.secondaryForeground.nsColor)]
+        case .yamlKey:
+            return [(.foregroundColor, palette.yamlKeyForeground.nsColor), (.font, fonts.yamlKey)]
+        case .yamlValue:
+            return []
         }
     }
 }

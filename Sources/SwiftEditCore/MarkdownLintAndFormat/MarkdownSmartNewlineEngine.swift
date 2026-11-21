@@ -20,7 +20,6 @@ public struct SmartNewlineEdit: Equatable, Sendable {
 /// - Aborts lines exceeding `4096` UTF-16 code units and checks `Int.addingReportingOverflow(1)` before incrementing ordered-list numerals.
 /// - Executes linearly with zero backtracking regular expressions and suppresses continuation inside fenced code blocks.
 public enum MarkdownSmartNewlineEngine {
-    private static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd"]
     private static let lfUnit: UInt16 = 0x0A
     private static let crUnit: UInt16 = 0x0D
     private static let spaceUnit: UInt16 = 0x20
@@ -30,11 +29,7 @@ public enum MarkdownSmartNewlineEngine {
 
     /// Returns `true` when `filename` is `nil` (untitled buffer) or carries a recognized Markdown extension (`.md`, `.markdown`, `.mdown`, `.mkd`).
     public static func isMarkdownFilename(_ filename: String?) -> Bool {
-        guard let filename, !filename.isEmpty else {
-            return true
-        }
-        let ext = (filename as NSString).pathExtension.lowercased()
-        return markdownExtensions.contains(ext)
+        DocumentLanguage.resolve(filename: filename) == .markdown
     }
 
     /// Evaluates whether pressing Enter at `caretLocation` in `snapshot` should insert a consistent next Markdown list/blockquote prefix or clear an empty marker to exit the list.

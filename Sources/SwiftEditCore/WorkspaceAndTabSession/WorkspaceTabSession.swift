@@ -3,12 +3,15 @@ import Foundation
 /// Serializable Notepad++ tab descriptor referencing an open text document strictly by `DocumentID` and `BufferRevision` (`AR-004`, `BC-006`, `BC-008`).
 public struct TabDescriptor: Equatable, Codable, Sendable {
     public let id: DocumentID
-    public var title: String
+    /// Display name; every change re-resolves the cached `language` (open, rename, save-as).
+    public var title: String { didSet { language = DocumentLanguage.resolve(filename: title) } }
     public var fileURL: URL?
     public var isPinned: Bool
     public var isDirty: Bool
     public var caretLocation: Int
     public var revision: BufferRevision
+    /// Language resolved once from `title` and cached so render and keystroke paths never re-parse the extension (`PERF-C1`).
+    public private(set) var language: DocumentLanguage
 
     public init(
         id: DocumentID,
@@ -21,11 +24,40 @@ public struct TabDescriptor: Equatable, Codable, Sendable {
     ) {
         self.id = id
         self.title = title
+        self.language = DocumentLanguage.resolve(filename: title)
         self.fileURL = fileURL
         self.isPinned = isPinned
         self.isDirty = isDirty
         self.caretLocation = caretLocation
         self.revision = revision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, fileURL, isPinned, isDirty, caretLocation, revision
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(DocumentID.self, forKey: .id),
+            title: try c.decode(String.self, forKey: .title),
+            fileURL: try c.decodeIfPresent(URL.self, forKey: .fileURL),
+            isPinned: try c.decode(Bool.self, forKey: .isPinned),
+            isDirty: try c.decode(Bool.self, forKey: .isDirty),
+            caretLocation: try c.decode(Int.self, forKey: .caretLocation),
+            revision: try c.decode(BufferRevision.self, forKey: .revision)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encodeIfPresent(fileURL, forKey: .fileURL)
+        try c.encode(isPinned, forKey: .isPinned)
+        try c.encode(isDirty, forKey: .isDirty)
+        try c.encode(caretLocation, forKey: .caretLocation)
+        try c.encode(revision, forKey: .revision)
     }
 }
 

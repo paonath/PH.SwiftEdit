@@ -15,6 +15,20 @@ public enum MarkdownLintRuleID: String, Codable, Sendable, CaseIterable {
     case missingImageAltText, unsafeImagePath
     case blanksAroundFences, missingFenceLanguage, multipleSpacesAfterBlockquote
     case trailingSpaces, hardTabs, multipleBlankLines
+    // YAML structural rules (`YML001`..`YML005`) for `.yaml` tabs and Markdown frontmatter (`REQ-004`).
+    case yamlTabIndentation, yamlDuplicateKey, yamlInconsistentIndent, yamlUnterminatedFrontmatter, yamlNestingTooDeep
+
+    /// Stable short code for YAML rules (`YML00x`); Markdown rules keep their case name.
+    public var code: String {
+        switch self {
+        case .yamlTabIndentation: return "YML001"
+        case .yamlDuplicateKey: return "YML002"
+        case .yamlInconsistentIndent: return "YML003"
+        case .yamlUnterminatedFrontmatter: return "YML004"
+        case .yamlNestingTooDeep: return "YML005"
+        default: return rawValue
+        }
+    }
 
     /// `true` for the hardened URI/image rules whose diagnostics are never auto-fixed nor suppressed (`SEC-004`, `SEC-LINT-01`).
     public var isSecurityRule: Bool {

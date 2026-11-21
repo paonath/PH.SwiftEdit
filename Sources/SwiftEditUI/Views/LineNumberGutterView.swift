@@ -26,6 +26,15 @@ public struct LineNumberGutterProjection: Equatable, Sendable {
         self.fontSizePoints = fontSizePoints
     }
 
+    /// `O(log L)` variant over a per-revision `DocumentTextIndex`; results equal `evaluate(text:caretLocation:fontSizePoints:)` (`PERF-B2`).
+    public static func evaluate(index: DocumentTextIndex, caretLocation: Int, fontSizePoints: Double) -> LineNumberGutterProjection {
+        LineNumberGutterProjection(
+            lineCount: index.lineCount,
+            activeLine: min(max(1, index.gutterActiveLine(caret: caretLocation)), index.lineCount),
+            fontSizePoints: fontSizePoints
+        )
+    }
+
     /// Evaluates 1-based line count and active caret line in one allocation-free UTF-16 pass without forcing whole-document TextKit layout (`UI-012`, `PERF-007`).
     /// - Parameters:
     ///   - text: Active buffer string (`LF`, `CRLF`, or `CR` breaks).
@@ -85,6 +94,19 @@ public struct StatusBarMetricsProjection: Equatable, Sendable {
         self.characterCount = characterCount
         self.encodingLabel = encodingLabel
         self.lineEnding = lineEnding
+    }
+
+    /// `O(log L)` variant over the snapshot's per-revision `DocumentTextIndex`; results equal `evaluate(snapshot:caretLocation:)` (`PERF-B2`).
+    public static func evaluate(snapshot: DocumentSnapshot, index: DocumentTextIndex, caretLocation: Int) -> StatusBarMetricsProjection {
+        let clampedCaret = min(max(0, caretLocation), index.utf16Count)
+        let cursor = index.cursorLineAndColumn(caret: clampedCaret) ?? (1, 1)
+        return StatusBarMetricsProjection(
+            line: cursor.line,
+            column: cursor.column,
+            characterCount: index.unicodeScalarCount,
+            encodingLabel: displayLabel(for: snapshot.encoding),
+            lineEnding: snapshot.lineEnding
+        )
     }
 
     /// Evaluates clamped cursor and wire-format counters for `snapshot` at `caretLocation` (`UI-001`).

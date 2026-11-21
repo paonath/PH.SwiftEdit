@@ -7,6 +7,16 @@ public enum MarkdownSyntaxKind: Equatable, Sendable {
     case codeBlock
     case task(checked: Bool)
     case blockquote, tableRow, thematicBreak
+    /// YAML key (grey, lighter weight), value (canvas text), structural punctuation and comment (`UI-002`, `REQ-010`).
+    case yamlKey, yamlValue, yamlPunctuation, yamlComment
+
+    /// `true` for the four YAML kinds emitted by `YAMLSyntaxHighlighter`.
+    public var isYAML: Bool {
+        switch self {
+        case .yamlKey, .yamlValue, .yamlPunctuation, .yamlComment: return true
+        default: return false
+        }
+    }
 }
 
 /// A construct kind with its UTF-16 range in the document.
@@ -26,6 +36,9 @@ public struct MarkdownLineIndex: Sendable {
     public let lineStarts: [Int]
     /// Inclusive `(openLine, closeLine)` pairs; an unclosed fence extends to the last line.
     public let fences: [(open: Int, close: Int)]
+    /// Lines `0..<frontmatterLineCount` form a line-1 YAML frontmatter block (both delimiters included); `0` when absent.
+    /// Computed once per revision (bounded by `YAMLFrontmatterScanner.maxLines`) so per-fragment queries never rescan it.
+    public private(set) var frontmatterLineCount: Int = 0
 
     public init(text: String) {
         let units = Array(text.utf16)
@@ -59,6 +72,7 @@ public struct MarkdownLineIndex: Sendable {
         self.units = units
         self.lineStarts = starts
         self.fences = found
+        self.frontmatterLineCount = YAMLFrontmatterScanner.maskedLineCount(in: self)
     }
 
     public var lineCount: Int { lineStarts.count }
@@ -143,6 +157,14 @@ public enum MarkdownSyntaxHighlighter {
         var out: [MarkdownSyntaxSpan] = []
         out.reserveCapacity(max(16, (last - first + 1) * 2))
 
+        // Frontmatter lines are YAML, not GFM: delegate them and start the GFM scan after the closing delimiter.
+        let frontmatter = index.frontmatterLineCount
+        if first < frontmatter {
+            out += YAMLSyntaxHighlighter.spans(index: index, visibleRange: visibleRange, lineLimit: frontmatter)
+        }
+        let gfmFirst = max(first, frontmatter)
+        guard gfmFirst <= last else { return out }
+
         // Locate initial fence cursor via binary search, then advance monotonically in O(1) amortized.
         let fences = index.fences
         var fenceCursor = 0
@@ -150,12 +172,12 @@ public enum MarkdownSyntaxHighlighter {
             var lo = 0, hi = fences.count
             while lo < hi {
                 let mid = lo + (hi - lo) / 2
-                if fences[mid].close < first { lo = mid + 1 } else { hi = mid }
+                if fences[mid].close < gfmFirst { lo = mid + 1 } else { hi = mid }
             }
             fenceCursor = lo
         }
 
-        for line in first...last {
+        for line in gfmFirst...last {
             while fenceCursor < fences.count && fences[fenceCursor].close < line {
                 fenceCursor += 1
             }

@@ -8,8 +8,15 @@ public struct MarkdownHeading: Equatable, Sendable, Identifiable {
     public let title: String
     /// UTF-16 offset of the heading line start (caret target).
     public let utf16Offset: Int
+    /// Entry kind, so Markdown headings and YAML top-level keys share one navigator row type and jump path.
+    public var kind: OutlineEntryKind = .heading
     public var id: Int { utf16Offset }
+    /// Grey row badge: `H<level>` for headings, `KEY` for YAML keys.
+    public var badge: String { kind == .yamlKey ? "KEY" : "H\(level)" }
 }
+
+/// Navigator entry source (`REQ-005`).
+public enum OutlineEntryKind: Equatable, Sendable { case heading, yamlKey }
 
 /// Pure on-the-fly ATX heading scanner (`#`..`######`) used by the document navigator.
 ///

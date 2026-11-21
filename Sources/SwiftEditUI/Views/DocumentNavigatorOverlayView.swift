@@ -65,11 +65,11 @@ struct DocumentNavigatorOverlayView: View {
 
     private func rowView(_ heading: MarkdownHeading, selected: Bool) -> some View {
         HStack(spacing: 10) {
-            Text(verbatim: "H\(heading.level)")
+            Text(verbatim: heading.badge)
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .opacity(0.6)
-                .frame(width: 26, alignment: .leading)
+                .frame(width: 30, alignment: .leading)
             Text(verbatim: heading.title.isEmpty ? "(empty)" : String(heading.title.prefix(200)))
                 .font(.system(size: Self.fontSize(forLevel: heading.level), weight: heading.level <= 2 ? .semibold : .regular))
                 .lineLimit(1)

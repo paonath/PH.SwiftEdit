@@ -245,12 +245,14 @@ public final class SwiftEditWorkbenchModel {
               !session.isBinaryReadOnly else {
             return nil
         }
-        let isMarkdown = MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle)
-        guard let smart = MarkdownSmartNewlineEngine.evaluateNewline(
-            in: session.snapshot,
-            caretLocation: caretLocation,
-            isMarkdownDocument: isMarkdown
-        ) else {
+        let language = activeDocumentLanguage
+        // YAML context (`.yaml` tab or Markdown frontmatter) takes precedence over Markdown list continuation.
+        guard let smart = YAMLSmartIndentEngine.evaluateNewline(in: session.snapshot, caretLocation: caretLocation, language: language)
+            ?? MarkdownSmartNewlineEngine.evaluateNewline(
+                in: session.snapshot,
+                caretLocation: caretLocation,
+                isMarkdownDocument: language == .markdown
+            ) else {
             return nil
         }
         do {
@@ -339,6 +341,8 @@ public final class SwiftEditWorkbenchModel {
     private let savePanelProvider: @MainActor (String) -> URL?
     @ObservationIgnored private var distributedThemeObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var cachedParentNavigation: (folder: URL?, scope: URL?, canNavigate: Bool)?
+    /// Per-revision line-break table shared by the gutter and the status bar so caret moves never rescan the buffer (`PERF-B2`).
+    @ObservationIgnored private let textIndexCache = DocumentTextIndexCache()
     @ObservationIgnored private var cachedGutterProjection: (id: DocumentID, revision: BufferRevision, caret: Int, fontSize: Double, value: LineNumberGutterProjection)?
     @ObservationIgnored private var cachedStatusBarMetrics: (id: DocumentID, revision: BufferRevision, caret: Int, value: StatusBarMetricsProjection)?
     @ObservationIgnored private var cachedPreviewSourceLine: (id: DocumentID, revision: BufferRevision, caret: Int, value: Int)?
@@ -481,7 +485,7 @@ public final class SwiftEditWorkbenchModel {
             return cached.value
         }
         let value = LineNumberGutterProjection.evaluate(
-            text: session.text,
+            index: textIndexCache.index(for: session.snapshot),
             caretLocation: caret,
             fontSizePoints: fontSize
         )
@@ -500,8 +504,10 @@ public final class SwiftEditWorkbenchModel {
            cached.caret == caret {
             return cached.value
         }
+        let snapshot = session.snapshot
         let value = StatusBarMetricsProjection.evaluate(
-            snapshot: session.snapshot,
+            snapshot: snapshot,
+            index: textIndexCache.index(for: snapshot),
             caretLocation: caret
         )
         cachedStatusBarMetrics = (session.id, session.revision, caret, value)
@@ -552,6 +558,17 @@ public final class SwiftEditWorkbenchModel {
         grantedScopeRootURL = canonical
         isLeftSidebarCollapsed = false
         refreshFolderEntries()
+    }
+
+    /// Cached language of the active tab (`PERF-C1`): binary inspections and the empty workspace are `.plainText`; degraded
+    /// buffers keep their tab language so lint reports `Paused` rather than `Off`.
+    public var activeDocumentLanguage: DocumentLanguage {
+        if activeBinaryInspection != nil { return .plainText }
+        guard let activeID = tabSession.activeTabID,
+              let tab = tabSession.tabs.first(where: { $0.id == activeID }) else {
+            return .plainText
+        }
+        return tab.language
     }
 
     public var activeTabTitle: String {
@@ -804,7 +821,9 @@ public final class SwiftEditWorkbenchModel {
         }
     }
 
-    public func handleEditorTextChanged(_ newText: String) {
+    public func handleEditorTextChanged(_ editorText: String) {
+        // TextKit hands over an NSString-bridged buffer; normalize once so comparison and every downstream scan stay native (`PERF-B1`).
+        let newText = NativeTextNormalizer.native(editorText)
         guard activeBinaryInspection == nil,
               let activeID = tabSession.activeTabID,
               var session = sessionsByID[activeID],
@@ -941,6 +960,31 @@ public final class SwiftEditWorkbenchModel {
         return targetURL.deletingLastPathComponent()
     }
 
+    /// Language-dispatched lint shared by the synchronous and background refresh paths (`REQ-003`, `REQ-004`).
+    ///
+    /// Markdown runs the 26-rule `.allConstructs` linter (security fast path on deadline) plus frontmatter `YML00x` rules;
+    /// YAML runs `YAMLStructureLinter`; plain text is never linted.
+    nonisolated static func lintDiagnostics(for snap: DocumentSnapshot, language: DocumentLanguage) -> [MarkdownLintDiagnostic] {
+        switch language {
+        case .plainText:
+            return []
+        case .yaml:
+            return YAMLStructureLinter.lint(snapshot: snap)
+        case .markdown:
+            var lint: [MarkdownLintDiagnostic]
+            switch MarkdownLintAndFormatEngine.lint(snapshot: snap, profile: .allConstructs) {
+            case .completed(let result):
+                lint = result.diagnostics
+            case .degradedOrTimedOut(.deadlineExceeded):
+                lint = MarkdownLintAndFormatEngine.lintSecurityFastPath(snapshot: snap).completedValue?.diagnostics ?? []
+            case .degradedOrTimedOut:
+                lint = []
+            }
+            lint += YAMLStructureLinter.lint(snapshot: snap, frontmatterOnly: true)
+            return lint
+        }
+    }
+
     /// Refreshes lint, bracket topology, backticks, safety banner, and diff state: synchronous below `4096` UTF-8 bytes, off-`@MainActor` with `(DocumentID, BufferRevision)` race protection above `4096` (`PERF-002`, `PERF-006`, `N11`).
     public func refreshDiagnosticsForActiveDocument() {
         diagnosticsTask?.cancel()
@@ -953,15 +997,11 @@ public final class SwiftEditWorkbenchModel {
         }
         let snap = session.snapshot
         let caret = currentSelection.location
-        let isMarkdown = MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle)
+        let language = activeDocumentLanguage
 
         if snap.text.utf8.count <= Self.syncDiagnosticThresholdUTF8 {
             safetyBanner = InspectionSafetyBannerState.evaluate(snapshot: snap)
-            if isMarkdown {
-                lintDiagnostics = MarkdownLintAndFormatEngine.lint(snapshot: snap, profile: .allConstructs).completedValue?.diagnostics ?? []
-            } else {
-                lintDiagnostics = []
-            }
+            lintDiagnostics = Self.lintDiagnostics(for: snap, language: language)
             if case .off = activeLintStatus { isDiagnosticsPopoverPresented = false }
             if let topology = SearchDiffAndBracketEngine.scanTopology(in: snap).completedValue {
                 bracketTopologyCache = (snap.id, snap.revision, topology)
@@ -989,7 +1029,7 @@ public final class SwiftEditWorkbenchModel {
         if let cached = bracketTopologyCache, cached.id == snap.id, cached.revision == snap.revision {
             bracketResult = SearchDiffAndBracketEngine.balanceResult(from: cached.topology, caretLocation: caret)
         }
-        if !isMarkdown {
+        if language == .plainText {
             lintDiagnostics = []
             isDiagnosticsPopoverPresented = false
         }
@@ -1001,20 +1041,7 @@ public final class SwiftEditWorkbenchModel {
                 guard !Task.isCancelled else { return nil }
                 let safety = InspectionSafetyBannerState.evaluate(snapshot: snap)
                 guard !Task.isCancelled else { return nil }
-                let lint: [MarkdownLintDiagnostic]
-                if isMarkdown {
-                    switch MarkdownLintAndFormatEngine.lint(snapshot: snap, profile: .allConstructs) {
-                    case .completed(let result):
-                        lint = result.diagnostics
-                    case .degradedOrTimedOut(.deadlineExceeded):
-                        guard !Task.isCancelled else { return nil }
-                        lint = MarkdownLintAndFormatEngine.lintSecurityFastPath(snapshot: snap).completedValue?.diagnostics ?? []
-                    case .degradedOrTimedOut:
-                        lint = []
-                    }
-                } else {
-                    lint = []
-                }
+                let lint = Self.lintDiagnostics(for: snap, language: language)
                 guard !Task.isCancelled else { return nil }
                 let topology = SearchDiffAndBracketEngine.scanTopology(in: snap).completedValue
                 guard !Task.isCancelled else { return nil }
@@ -1347,11 +1374,13 @@ public final class SwiftEditWorkbenchModel {
         guard let session = activeDocumentSession, !session.isBinaryReadOnly, safetyBanner.canSave else {
             return .notApplicable
         }
+        let yaml = YAMLSmartIndentEngine.evaluateTab(in: session.snapshot, selection: currentSelection, outdent: outdent, language: activeDocumentLanguage)
+        if yaml != .notApplicable { return yaml }
         return MarkdownSmartListEngine.evaluateIndent(
             in: session.snapshot,
             selection: currentSelection,
             outdent: outdent,
-            isMarkdownDocument: MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle)
+            isMarkdownDocument: (activeDocumentLanguage == .markdown)
         )
     }
 
@@ -1410,11 +1439,15 @@ public final class SwiftEditWorkbenchModel {
     @ObservationIgnored public var windowFullScreenQuery: () -> Bool = { false }
     @ObservationIgnored public var windowFullScreenToggle: () -> Void = {}
 
-    /// `Option+\`: toggles the heading navigator of the active non-binary Markdown tab only.
+    /// `Option+\`: toggles the navigator (Markdown headings or YAML top-level keys) of the active writable, non-binary tab.
     public func toggleDocumentNavigator() {
         if navigatorState != nil { closeDocumentNavigator(); return }
-        guard isMarkdownMenuEnabled, let session = activeDocumentSession else { return }
-        navigatorState = DocumentNavigatorState(headings: MarkdownHeadingOutlineEngine.outline(for: session.text))
+        guard editorSyntaxLanguage != .plainText, let session = activeDocumentSession else { return }
+        switch editorSyntaxLanguage {
+        case .markdown: navigatorState = DocumentNavigatorState(headings: MarkdownHeadingOutlineEngine.outline(for: session.text))
+        case .yaml: navigatorState = DocumentNavigatorState(headings: YAMLOutlineEngine.outline(index: MarkdownLineIndex(text: session.text)))
+        case .plainText: return
+        }
     }
 
     public func closeDocumentNavigator() {
@@ -1468,10 +1501,60 @@ public final class SwiftEditWorkbenchModel {
         return false
     }
 
+    // MARK: Frontmatter Properties panel (016)
+
+    /// UI-only panel state (collapse) observed separately from the workbench to keep editor invalidation narrow.
+    public let propertiesPanel = PropertiesPanelState()
+    @ObservationIgnored private var propertiesCache: (id: DocumentID, revision: BufferRevision, model: FrontmatterPropertyModel?)?
+
+    /// Parsed frontmatter of the active writable Markdown tab, cached per `(DocumentID, BufferRevision)`; `nil` otherwise.
+    public var propertiesModel: FrontmatterPropertyModel? {
+        guard editorSyntaxLanguage == .markdown, let session = activeDocumentSession else { return nil }
+        if let cache = propertiesCache, cache.id == session.id, cache.revision == session.revision { return cache.model }
+        let parsed = FrontmatterPropertyParser.parse(snapshot: session.snapshot)
+        propertiesCache = (session.id, session.revision, parsed)
+        return parsed
+    }
+
+    /// `true` only for a writable, non-binary Markdown tab whose buffer starts with a frontmatter block (`REQ-009`).
+    public var isPropertiesPanelVisible: Bool { !isDistractionFree && propertiesModel != nil }
+
+    /// Applies one Properties panel operation as a single `TextEdit` and `BufferRevision` on the active tab.
+    ///
+    /// The editor adopts the new text through its undo-registered programmatic update, so each panel commit is exactly
+    /// one `Cmd+Z` step. Writer rejections leave the buffer untouched and surface a status banner.
+    @discardableResult
+    public func applyPropertyOperation(_ operation: FrontmatterPropertyOperation) -> FrontmatterWriteResult {
+        guard let model = propertiesModel,
+              let activeID = tabSession.activeTabID,
+              var session = sessionsByID[activeID] else { return .rejected(.readOnly) }
+        let result = FrontmatterPropertyWriter.apply(operation, model: model, snapshot: session.snapshot)
+        guard case .edit(let edit) = result else {
+            statusBannerMessage = "Property not changed: \(result)"
+            return result
+        }
+        do {
+            _ = try session.applyTextEdits([edit], expectedRevision: model.revision)
+        } catch {
+            return .staleRevision
+        }
+        sessionsByID[activeID] = session
+        try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+        persistRecoveryState()
+        refreshDiagnosticsForActiveDocument()
+        return result
+    }
+
+    /// Language handed to the TextKit 2 validator: `.plainText` for binary, degraded or quarantined buffers (`DATA-003`).
+    public var editorSyntaxLanguage: DocumentLanguage {
+        guard let session = activeDocumentSession, !session.isBinaryReadOnly, !session.isDegradedPlainText, safetyBanner.canSave else { return .plainText }
+        return activeDocumentLanguage
+    }
+
     /// `true` only for a writable, non-binary Markdown tab; gates the `Markdown` menu, table `Tab`, and preview (`DATA-003`, `UI-005`).
     public var isMarkdownMenuEnabled: Bool {
         guard let session = activeDocumentSession, !session.isBinaryReadOnly, safetyBanner.canSave else { return false }
-        return MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle)
+        return (activeDocumentLanguage == .markdown)
     }
 
     /// Preview projection for the active tab; `nil` (zero work) while `showMarkdownPreview == false` or on binary and non-Markdown tabs (`SEC-004`, `SEC-012`).
@@ -1574,11 +1657,11 @@ public final class SwiftEditWorkbenchModel {
     /// Whether the `⇧⌘M` diagnostics popover is shown; only presentable while lint is active for the tab (`UI-005`).
     public var isDiagnosticsPopoverPresented = false
 
-    /// Status-bar lint state: Off for non-Markdown and binary tabs, Paused for degraded buffers, Active otherwise (`DATA-003`).
+    /// Status-bar lint state: Off for plain-text and binary tabs, Paused for degraded buffers, Active otherwise (`DATA-003`).
     public var activeLintStatus: ActiveLintStatus {
         guard let session = activeDocumentSession else { return .off }
         return ActiveLintStatus.classify(
-            isMarkdownDocument: MarkdownSmartNewlineEngine.isMarkdownFilename(activeTabTitle),
+            language: activeDocumentLanguage,
             snapshot: session.snapshot,
             diagnosticCount: lintDiagnostics.count
         )
@@ -2093,6 +2176,9 @@ public struct SwiftEditRootView: View {
                             onGoToLine: { model.executeGoToLine() },
                             onClose: { model.presentFindBar(mode: .hidden) }
                         ) }
+                        if model.isPropertiesPanelVisible {
+                            PropertiesPanelView(model: model, state: model.propertiesPanel)
+                        }
                         editorAndOptionalPanels
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2734,7 +2820,7 @@ public struct SwiftEditRootView: View {
                         onSmartNewline: { model.applySmartNewlineIfApplicable(at: $0) },
                         onListIndent: { model.listIndentationOutcome(outdent: $0) },
                         onTableTab: { model.tableTabOutcome(backward: $0) },
-                        isMarkdownDocument: model.isMarkdownMenuEnabled,
+                        documentLanguage: model.editorSyntaxLanguage,
                         programmaticSelection: model.currentSelection,
                         programmaticSelectionToken: model.programmaticSelectionToken,
                         lintDiagnostics: model.visibleLintDiagnostics,
@@ -2804,6 +2890,8 @@ public struct SwiftEditRootView: View {
             Text("Brackets: \(model.bracketResult?.unbalancedBrackets.isEmpty == true ? "Balanced" : "Unbalanced (\(model.bracketResult?.unbalancedBrackets.count ?? 0))")")
             Text("Mode: \(model.palette.mode.rawValue.capitalized)")
             Spacer()
+            Text(model.activeDocumentLanguage.statusBarLabel)
+                .accessibilityLabel("Language: \(model.activeDocumentLanguage.statusBarLabel)")
             Text("Zoom: \(model.zoomController.zoomPercent)%")
             Text("Ln \(metrics.line), Col \(metrics.column)")
             Text("\(metrics.characterCount) chars")

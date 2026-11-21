@@ -290,6 +290,8 @@ public struct PurpleThemePalette: Equatable, Sendable {
     public let diffInsertedBackground: RGBAColorToken
     /// Removed-line background in Side-by-Side Myers Diff (`#FEE2E2` Light, `#450A0A` Black).
     public let diffRemovedBackground: RGBAColorToken
+    /// YAML key foreground (`#6B7280` Light 4.83:1, `#9CA3AF` Black 8.6:1); values keep `editorCanvasText` (`REQ-010`, `UI-009`).
+    public let yamlKeyForeground: RGBAColorToken
 
     /// Returns the deterministic depth-indexed color for a matched nested bracket pair (`AR-012`).
     public func nestedBracketColor(forDepth depth: Int) -> RGBAColorToken {
@@ -391,7 +393,8 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#7C3AED" : "#C4B5FD"),
                 selectionBackground: RGBAColorToken(hex: "#DDD6FE"),
                 diffInsertedBackground: RGBAColorToken(hex: "#DCFCE7"),
-                diffRemovedBackground: RGBAColorToken(hex: "#FEE2E2")
+                diffRemovedBackground: RGBAColorToken(hex: "#FEE2E2"),
+                yamlKeyForeground: RGBAColorToken(hex: "#6B7280")
             )
         case .black:
             return PurpleThemePalette(
@@ -447,7 +450,8 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#A78BFA" : "#3B1D6E"),
                 selectionBackground: RGBAColorToken(hex: "#3B0764"),
                 diffInsertedBackground: RGBAColorToken(hex: "#052E16"),
-                diffRemovedBackground: RGBAColorToken(hex: "#450A0A")
+                diffRemovedBackground: RGBAColorToken(hex: "#450A0A"),
+                yamlKeyForeground: RGBAColorToken(hex: "#9CA3AF")
             )
         }
     }
