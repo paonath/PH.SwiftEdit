@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "018-swiftedit-branding-settings-lint-updates-build"
+    status: "implemented"
+    date: "2026-11-21"
+    capabilities: ["swiftedit-branding-settings-lint-updates-build"]
+    path: "openspec/specs/swiftedit-branding-settings-lint-updates-build/spec.md"
+    summary: "SwiftEdit Branding, Dynamic Untitled Tab Titles, Prominent Lint, Sidebar Settings, GitHub Update Check & build/<ver>/"
   - id: "017-deep-debug-zoom-fonts-opendyslexic-and-perf"
     status: "implemented"
     date: "2026-11-21"

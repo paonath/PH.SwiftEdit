@@ -90,7 +90,7 @@ public enum SidebarLayoutGeometry {
 public enum SwiftEditHelpMenuCatalog {
     public static let itemTitles: [String] = [
         "Keyboard Shortcuts CheatSheet",
-        "About PH.SwiftEdit",
+        "About SwiftEdit",
     ]
 }
 
@@ -265,6 +265,7 @@ public final class SwiftEditWorkbenchModel {
                 caretLocation: smart.newCaretLocation,
                 revision: session.revision
             )
+            syncUntitledTabTitleIfNeeded(for: activeID, session: session)
             persistRecoveryState()
             refreshDiagnosticsForActiveDocument()
             return smart.newCaretLocation
@@ -285,14 +286,71 @@ public final class SwiftEditWorkbenchModel {
                 reduceTransparency: reduceTransparency,
                 increasedContrast: increasedContrast
             )
-            preferencesStore.save(EditorPreferences(appearanceMode: appearanceMode, zoomPercent: zoomController.zoomPercent))
+            savePreferences()
         }
     }
 
     public private(set) var palette: PurpleThemePalette
+    /// Zoom-driven tab, navigator and gutter sizes (`REQ-009`).
+    public var chromeMetrics: ZoomedChromeMetrics { ZoomedChromeMetrics(zoomPercent: zoomController.zoomPercent) }
+
+    /// Gutter width for the active document: digit advance of the editor font at 100% times the zoom factor (`REQ-009`).
+    public var gutterWidth: CGFloat {
+        let digitAdvance = ("0" as NSString).size(withAttributes: [.font: typography.nsFont(.editor, size: CGFloat(zoomController.baseFontSizePoints))]).width
+        return chromeMetrics.gutterWidth(lineCount: activeLineNumberGutter.lineCount, digitAdvanceAt100: digitAdvance)
+    }
+    /// Per-role font choices (`REQ-003`, `REQ-007`); views read fonts through `typography`, observing `typographyGeneration`.
+    public private(set) var interfaceFont: FontChoice = .default
+    public private(set) var editorFont: FontChoice = .default
+    /// Selected terminal bundle identifier (`nil` = Auto, preferring iTerm2 when installed).
+    public private(set) var preferredTerminalBundleID: String? = nil
+    /// Bumped on every font change so SwiftUI re-renders views that resolve fonts through `typography`.
+    public private(set) var typographyGeneration = 0
+    @ObservationIgnored public let typography = AppTypography()
+
+    /// Applies a font choice live to every view and the editor, then persists it; never mutates any buffer.
+    public func setFontChoice(_ choice: FontChoice, for role: TypographyRole) {
+        switch role {
+        case .interface:
+            guard interfaceFont != choice else { return }
+            interfaceFont = choice
+        case .editor:
+            guard editorFont != choice else { return }
+            editorFont = choice
+        }
+        typography.setChoice(choice, for: role)
+        typographyGeneration &+= 1
+        savePreferences()
+    }
+
+    /// Sets and persists the preferred terminal bundle ID (`nil` selects Auto).
+    public func setPreferredTerminalBundleID(_ bundleID: String?) {
+        let normalized: String?
+        if let trimmed = bundleID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty,
+           TerminalCatalog.allowedBundleIdentifiers.contains(trimmed) {
+            normalized = trimmed
+        } else {
+            normalized = nil
+        }
+        guard preferredTerminalBundleID != normalized else { return }
+        preferredTerminalBundleID = normalized
+        savePreferences()
+    }
+
+    /// Persists appearance, zoom, font choices, and preferred terminal together so no setting overwrites another.
+    private func savePreferences() {
+        preferencesStore.save(EditorPreferences(
+            appearanceMode: appearanceMode,
+            zoomPercent: zoomController.zoomPercent,
+            interfaceFont: interfaceFont,
+            editorFont: editorFont,
+            preferredTerminalBundleID: preferredTerminalBundleID
+        ))
+    }
     public var zoomController: EditorZoomController {
         didSet {
-            preferencesStore.save(EditorPreferences(appearanceMode: appearanceMode, zoomPercent: zoomController.zoomPercent))
+            savePreferences()
         }
     }
 
@@ -302,6 +360,7 @@ public final class SwiftEditWorkbenchModel {
     /// Transient quarantined binary payload excluded from `sessionsByID` and released immediately on dismiss or tab switch (`BUG-007`, `MEM-002`, `DATA-003`).
     public private(set) var activeBinaryInspection: BinaryInspectionPresentation?
     public private(set) var selectedFolderURL: URL?
+    public private(set) var selectedSidebarEntryURL: URL?
     public private(set) var grantedScopeRootURL: URL?
     public private(set) var folderEntries: [FolderEntryDescriptor] = []
     public private(set) var currentSelection = SwiftEditCore.TextRange(location: 0, length: 0)
@@ -323,6 +382,9 @@ public final class SwiftEditWorkbenchModel {
     public private(set) var pendingBatchFolderURL: URL?
     public private(set) var sidebarClipboard: SidebarFileClipboard?
     public private(set) var pendingTrashItemURL: URL?
+    public var isCheckingForUpdates: Bool = false
+    public var updateCheckOutcome: UpdateCheckOutcome?
+    public var isUpdateDialogPresented: Bool = false
 
     public let diffCoordinator = DiffPaneCoordinator()
     public let undoRegistry = PerTabUndoManagerRegistry()
@@ -336,9 +398,14 @@ public final class SwiftEditWorkbenchModel {
     private let preferencesStore: EditorPreferencesStore
     private let recoveryStore: SessionRecoveryStore
     private let parentPermissionChecker: (URL) -> Bool
+    private let updateChecker: GitHubReleaseUpdateChecker
+    private let installedTerminalBundleIDsProvider: @MainActor () -> Set<String>
     /// Unmasked host OS dark-mode detector consulted on Frame 0 initialization and `.auto` restoration (`UI-003`, `TEST-004`).
     private let systemDarkDetector: @MainActor () -> Bool
     private let savePanelProvider: @MainActor (String) -> URL?
+    private let openPanelProvider: @MainActor (_ chooseDirectories: Bool, _ prompt: String?) -> URL?
+    private let clipboardWriter: @MainActor (String) -> Void
+    @ObservationIgnored weak var hostWindow: NSWindow?
     @ObservationIgnored private var distributedThemeObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var cachedParentNavigation: (folder: URL?, scope: URL?, canNavigate: Bool)?
     /// Per-revision line-break table shared by the gutter and the status bar so caret moves never rescan the buffer (`PERF-B2`).
@@ -366,7 +433,21 @@ public final class SwiftEditWorkbenchModel {
             let panel = NSSavePanel()
             panel.nameFieldStringValue = suggestedName
             return panel.runModal() == .OK ? panel.url : nil
-        }
+        },
+        openPanelProvider: @escaping @MainActor (_ chooseDirectories: Bool, _ prompt: String?) -> URL? = { chooseDirectories, prompt in
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = !chooseDirectories
+            panel.canChooseDirectories = chooseDirectories
+            panel.allowsMultipleSelection = false
+            if let prompt { panel.prompt = prompt }
+            return panel.runModal() == .OK ? panel.url : nil
+        },
+        clipboardWriter: @escaping @MainActor (String) -> Void = { text in
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        },
+        updateFetcher: any HTTPDataFetching = URLSessionHTTPFetcher(),
+        installedTerminalBundleIDsProvider: (@MainActor () -> Set<String>)? = nil
     ) {
         self.fileSystem = fileSystem
         self.desktopWorkspace = desktopWorkspace
@@ -382,8 +463,13 @@ public final class SwiftEditWorkbenchModel {
             bookmarkCoder: bookmarkCoder
         )
         self.parentPermissionChecker = parentPermissionChecker
+        self.updateChecker = GitHubReleaseUpdateChecker(fetcher: updateFetcher)
+        self.installedTerminalBundleIDsProvider = installedTerminalBundleIDsProvider
+            ?? { Set(TerminalCatalog.installedTerminals().map(\.bundleIdentifier)) }
         self.systemDarkDetector = systemDarkDetector
         self.savePanelProvider = savePanelProvider
+        self.openPanelProvider = openPanelProvider
+        self.clipboardWriter = clipboardWriter
         let resolvedPrefsStore: any PreferencesProviding = preferencesStore
             ?? UserDefaultsPreferencesStore(suiteName: preferencesSuiteName)
         self.preferencesStore = EditorPreferencesStore(store: resolvedPrefsStore)
@@ -397,6 +483,9 @@ public final class SwiftEditWorkbenchModel {
             systemPrefersDark: initialSystemDark
         )
         self.zoomController = EditorZoomController(zoomPercent: prefs.zoomPercent)
+        self.interfaceFont = prefs.interfaceFont
+        self.editorFont = prefs.editorFont
+        self.preferredTerminalBundleID = prefs.preferredTerminalBundleID
 
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
@@ -406,9 +495,9 @@ public final class SwiftEditWorkbenchModel {
         self.recoveryStore = SessionRecoveryStore(recoveryDirectoryURL: resolvedRecoveryURL)
 
         let welcomeText = """
-        # PH.SwiftEdit — Sandbox Ready
+        # SwiftEdit — Sandbox Ready
 
-        Welcome to **PH.SwiftEdit** (Zed-minimal Purple Chrome + Inverted B/W TextKit 2 Canvas).
+        Welcome to **SwiftEdit** (Zed-minimal Purple Chrome + Inverted B/W TextKit 2 Canvas).
 
         - Press `Cmd+D` to duplicate the current line or selection.
         - Press `Cmd++` / `Cmd+-` / `Cmd+0` to scale Editor Zoom (`50%..300%`).
@@ -424,6 +513,10 @@ public final class SwiftEditWorkbenchModel {
         self.savedBaselineByID = [initialSession.id: initialSession.snapshot]
         self.safetyBanner = InspectionSafetyBannerState.evaluate(snapshot: initialSession.snapshot)
 
+        // Enumerate installed font families off the main actor so Settings opens without a stall (`PERF-017-B2`).
+        Task.detached(priority: .utility) { await SystemFontFamilyCache.shared.prewarm() }
+        typography.setChoice(interfaceFont, for: .interface)
+        typography.setChoice(editorFont, for: .editor)
         restoreSessionRecoveryIfPresent()
         recentFiles = self.recentFilesStore.entries()
         refreshDiagnosticsForActiveDocument()
@@ -441,6 +534,7 @@ public final class SwiftEditWorkbenchModel {
 
     isolated deinit {
         diagnosticsTask?.cancel()
+        updateCheckTask?.cancel()
         recoveryDebounceTask?.cancel()
         undoRegistry.removeAll()
         bracketTopologyCache = nil
@@ -583,21 +677,12 @@ public final class SwiftEditWorkbenchModel {
     }
 
     public func openFolderViaPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Grant Workspace Folder"
-        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+        guard let folderURL = openPanelProvider(true, "Grant Workspace Folder") else { return }
         selectWorkspaceFolder(folderURL)
     }
 
     public func openFileViaPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let fileURL = panel.url else { return }
+        guard let fileURL = openPanelProvider(false, nil) else { return }
         openFile(at: fileURL, withinScope: fileURL.deletingLastPathComponent())
     }
 
@@ -624,6 +709,7 @@ public final class SwiftEditWorkbenchModel {
     public func openFolderEntry(_ entry: FolderEntryDescriptor) {
         if entry.isDirectory {
             selectedFolderURL = entry.url.standardizedFileURL
+            selectedSidebarEntryURL = nil
             if grantedScopeRootURL == nil {
                 grantedScopeRootURL = selectedFolderURL
             }
@@ -634,6 +720,29 @@ public final class SwiftEditWorkbenchModel {
             return
         }
         openFile(at: entry.url, withinScope: grantedScopeRootURL ?? selectedFolderURL)
+    }
+
+    /// Finder-style single click in the left sidebar: selects folders without navigating into them, and opens eligible non-binary files (`UI-001`).
+    public func sidebarPrimaryClick(_ entry: FolderEntryDescriptor) {
+        selectedSidebarEntryURL = entry.url.standardizedFileURL
+        guard !entry.isDirectory else { return }
+        openFolderEntry(entry)
+    }
+
+    /// Finder-style double click in the left sidebar: enters folders and opens eligible non-binary files (`UI-001`).
+    public func sidebarDoubleClick(_ entry: FolderEntryDescriptor) {
+        if entry.isDirectory {
+            openFolderEntry(entry)
+            return
+        }
+        selectedSidebarEntryURL = entry.url.standardizedFileURL
+        openFolderEntry(entry)
+    }
+
+    /// Copies the standardized filesystem path of any sidebar file (including binary) or folder to the system pasteboard (`UI-001`).
+    public func sidebarCopyPathToClipboard(at url: URL) {
+        clipboardWriter(url.standardizedFileURL.path)
+        statusBannerMessage = "Copied path to clipboard."
     }
 
     public func openFile(at url: URL, withinScope scope: URL?) {
@@ -766,14 +875,28 @@ public final class SwiftEditWorkbenchModel {
         }
     }
 
+    private func syncUntitledTabTitleIfNeeded(for id: DocumentID, session: DocumentSession) {
+        guard let tab = tabSession.tabs.first(where: { $0.id == id }),
+              tab.fileURL == nil else {
+            return
+        }
+        let derived = TabTitleDeriver.untitledTitle(from: session.text)
+        if tab.title != derived {
+            try? tabSession.updateUntitledDisplayTitle(id: id, title: derived)
+        }
+    }
+
     public func newUntitledTab() {
         asyncOpenGeneration &+= 1
         activeBinaryInspection = nil
-        let count = tabSession.tabs.count + 1
         let session = DocumentSession(text: "")
         sessionsByID[session.id] = session
         savedBaselineByID[session.id] = session.snapshot
-        try? tabSession.openOrActivate(snapshot: session.snapshot, title: "Untitled-\(count).md", isDirty: true)
+        try? tabSession.openOrActivate(
+            snapshot: session.snapshot,
+            title: TabTitleDeriver.untitledTitle(from: ""),
+            isDirty: true
+        )
         statusBannerMessage = nil
         persistRecoveryState()
         refreshDiagnosticsForActiveDocument()
@@ -831,6 +954,7 @@ public final class SwiftEditWorkbenchModel {
               (try? session.replaceFullTextIfChanged(newText)) == true else { return }
         sessionsByID[activeID] = session
         try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+        syncUntitledTabTitleIfNeeded(for: activeID, session: session)
         scheduleRecoveryPersist()
         refreshDiagnosticsForActiveDocument()
     }
@@ -862,6 +986,7 @@ public final class SwiftEditWorkbenchModel {
             _ = try session.duplicateLineOrSelection(selection: currentSelection)
             sessionsByID[activeID] = session
             try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            syncUntitledTabTitleIfNeeded(for: activeID, session: session)
             statusBannerMessage = nil
             persistRecoveryState()
             refreshDiagnosticsForActiveDocument()
@@ -886,6 +1011,7 @@ public final class SwiftEditWorkbenchModel {
             _ = try session.applyTextEdits(batch.edits, expectedRevision: snap.revision)
             sessionsByID[activeID] = session
             try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            syncUntitledTabTitleIfNeeded(for: activeID, session: session)
             statusBannerMessage = batch.edits.isEmpty ? "Markdown already formatted." : "Formatted \(batch.edits.count) line(s)."
             persistRecoveryState()
             refreshDiagnosticsForActiveDocument()
@@ -987,6 +1113,7 @@ public final class SwiftEditWorkbenchModel {
 
     /// Refreshes lint, bracket topology, backticks, safety banner, and diff state: synchronous below `4096` UTF-8 bytes, off-`@MainActor` with `(DocumentID, BufferRevision)` race protection above `4096` (`PERF-002`, `PERF-006`, `N11`).
     public func refreshDiagnosticsForActiveDocument() {
+        schedulePreviewProjectionIfNeeded()
         diagnosticsTask?.cancel()
         diagnosticsTask = nil
         guard let session = activeDocumentSession else {
@@ -1081,6 +1208,11 @@ public final class SwiftEditWorkbenchModel {
     }
 
     /// Awaits any in-flight background diagnostic pass for deterministic verification (`PERF-006`, `N11`).
+    /// Waits for the in-flight background preview projection, if any (tests and headless callers).
+    public func awaitPendingPreview() async {
+        await previewTask?.value
+    }
+
     public func awaitPendingDiagnostics() async {
         await diagnosticsTask?.value
     }
@@ -1153,6 +1285,7 @@ public final class SwiftEditWorkbenchModel {
             _ = try session.applyTextEdits([edit], expectedRevision: expectedRev)
             sessionsByID[activeID] = session
             try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            syncUntitledTabTitleIfNeeded(for: activeID, session: session)
             let replacedSelection = SwiftEditCore.TextRange(
                 location: targetRange.location,
                 length: (findReplaceState.replacement as NSString).length
@@ -1187,6 +1320,7 @@ public final class SwiftEditWorkbenchModel {
             _ = try session.applyTextEdits(edits, expectedRevision: snap.revision)
             sessionsByID[activeID] = session
             try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            syncUntitledTabTitleIfNeeded(for: activeID, session: session)
             findReplaceState.matches = []
             statusBannerMessage = "Replaced \(edits.count) occurrence(s)."
             persistRecoveryState()
@@ -1322,12 +1456,7 @@ public final class SwiftEditWorkbenchModel {
 
     /// Presents `NSOpenPanel` for `Open All Files in Folder` (`Cmd+Shift+Option+O`).
     public func openAllFilesInFolderViaPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Open All Files in Folder"
-        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+        guard let folderURL = openPanelProvider(true, "Open All Files in Folder") else { return }
         openAllFilesInFolder(folderURL)
     }
 
@@ -1401,6 +1530,7 @@ public final class SwiftEditWorkbenchModel {
                 _ = try session.applyTextEdits(listEdit.edits, expectedRevision: session.revision)
                 sessionsByID[activeID] = session
                 try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+                syncUntitledTabTitleIfNeeded(for: activeID, session: session)
                 currentSelection = listEdit.newSelection
                 persistRecoveryState()
                 refreshDiagnosticsForActiveDocument()
@@ -1418,6 +1548,7 @@ public final class SwiftEditWorkbenchModel {
     public var recoveryDebounceNanoseconds: UInt64 = 500_000_000
     @ObservationIgnored private var recoveryDebounceTask: Task<Void, Never>?
     @ObservationIgnored private var diagnosticsTask: Task<Void, Never>?
+    @ObservationIgnored private var updateCheckTask: Task<Void, Never>?
     @ObservationIgnored private var asyncOpenGeneration: UInt64 = 0
     @ObservationIgnored private var bracketTopologyCache: (id: DocumentID, revision: BufferRevision, topology: BracketTopology)?
     @ObservationIgnored private var backtickCache: (id: DocumentID, revision: BufferRevision, result: BacktickHighlightResult?)?
@@ -1444,10 +1575,29 @@ public final class SwiftEditWorkbenchModel {
         if navigatorState != nil { closeDocumentNavigator(); return }
         guard editorSyntaxLanguage != .plainText, let session = activeDocumentSession else { return }
         switch editorSyntaxLanguage {
-        case .markdown: navigatorState = DocumentNavigatorState(headings: MarkdownHeadingOutlineEngine.outline(for: session.text))
-        case .yaml: navigatorState = DocumentNavigatorState(headings: YAMLOutlineEngine.outline(index: MarkdownLineIndex(text: session.text)))
+        case .markdown: navigatorState = DocumentNavigatorState(headings: MarkdownHeadingOutlineEngine.outline(index: activeLineIndex() ?? MarkdownLineIndex(text: session.text)))
+        case .yaml: navigatorState = DocumentNavigatorState(headings: YAMLOutlineEngine.outline(index: activeLineIndex() ?? MarkdownLineIndex(text: session.text)))
         case .plainText: return
         }
+    }
+
+    @ObservationIgnored private var lineIndexCache: (id: DocumentID, revision: BufferRevision, index: MarkdownLineIndex)?
+
+    /// One `MarkdownLineIndex` per `(DocumentID, BufferRevision)` shared by the editor validator, the navigator and the
+    /// YAML outline (`PERF-017-B3`); a same-length edit is a new revision, so the cache can never be stale.
+    public func activeLineIndex() -> MarkdownLineIndex? {
+        guard let session = activeDocumentSession else { return nil }
+        return lineIndex(for: session.id, revision: session.revision)
+    }
+
+    /// Shared index for `(id, revision)` when it matches the live session, else `nil`.
+    public func lineIndex(for id: DocumentID, revision: BufferRevision) -> MarkdownLineIndex? {
+        if let cache = lineIndexCache, cache.id == id, cache.revision == revision { return cache.index }
+        guard let session = sessionsByID[id] ?? activeDocumentSession.flatMap({ $0.id == id ? $0 : nil }),
+              session.revision == revision else { return nil }
+        let index = MarkdownLineIndex(text: session.text)
+        lineIndexCache = (id, revision, index)
+        return index
     }
 
     public func closeDocumentNavigator() {
@@ -1540,6 +1690,7 @@ public final class SwiftEditWorkbenchModel {
         }
         sessionsByID[activeID] = session
         try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+        syncUntitledTabTitleIfNeeded(for: activeID, session: session)
         persistRecoveryState()
         refreshDiagnosticsForActiveDocument()
         return result
@@ -1551,6 +1702,11 @@ public final class SwiftEditWorkbenchModel {
         return activeDocumentLanguage
     }
 
+    /// `true` when the Document Navigator (`Option+\`) can open for the active Markdown or YAML tab.
+    public var isNavigatorEnabled: Bool {
+        editorSyntaxLanguage != .plainText
+    }
+
     /// `true` only for a writable, non-binary Markdown tab; gates the `Markdown` menu, table `Tab`, and preview (`DATA-003`, `UI-005`).
     public var isMarkdownMenuEnabled: Bool {
         guard let session = activeDocumentSession, !session.isBinaryReadOnly, safetyBanner.canSave else { return false }
@@ -1559,11 +1715,45 @@ public final class SwiftEditWorkbenchModel {
 
     /// Preview projection for the active tab; `nil` (zero work) while `showMarkdownPreview == false` or on binary and non-Markdown tabs (`SEC-004`, `SEC-012`).
     public var markdownPreviewDocument: GFMPreviewDocument? {
+        _ = previewGeneration
         guard showMarkdownPreview, isMarkdownMenuEnabled, let session = activeDocumentSession else { return nil }
         if let cache = previewCache, cache.id == session.id, cache.revision == session.revision { return cache.document }
+        guard session.text.utf8.count <= Self.syncPreviewThresholdUTF8 else {
+            // Large buffers are projected off the main actor (`PERF-017-B1`); keep showing the previous projection of the
+            // same document until the current revision settles (scheduled from `refreshDiagnosticsForActiveDocument`).
+            return previewCache?.id == session.id ? previewCache?.document : nil
+        }
         let document = MarkdownPreviewProjector.project(snapshot: session.snapshot, showPreview: true)
         previewCache = (session.id, session.revision, document)
         return document
+    }
+
+    /// Buffers above this size are projected in the background (`PERF-017-B1`).
+    static let syncPreviewThresholdUTF8 = 64 * 1024
+    /// Bumped when a background projection lands so SwiftUI re-reads `markdownPreviewDocument`.
+    public private(set) var previewGeneration = 0
+    @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var previewTaskTarget: (id: DocumentID, revision: BufferRevision)?
+
+    /// Starts (or keeps) one background projection for the active revision; superseded revisions are discarded.
+    func schedulePreviewProjectionIfNeeded() {
+        guard showMarkdownPreview, isMarkdownMenuEnabled, let session = activeDocumentSession,
+              session.text.utf8.count > Self.syncPreviewThresholdUTF8 else { return }
+        if let cache = previewCache, cache.id == session.id, cache.revision == session.revision { return }
+        if let target = previewTaskTarget, target.id == session.id, target.revision == session.revision { return }
+        previewTask?.cancel()
+        let snapshot = session.snapshot
+        previewTaskTarget = (snapshot.id, snapshot.revision)
+        previewTask = Task { @MainActor [weak self] in
+            let document = await Task.detached(priority: .userInitiated) {
+                MarkdownPreviewProjector.project(snapshot: snapshot, showPreview: true)
+            }.value
+            guard let self, !Task.isCancelled,
+                  let current = self.activeDocumentSession, current.id == snapshot.id, current.revision == snapshot.revision else { return }
+            self.previewCache = (snapshot.id, snapshot.revision, document)
+            self.previewTaskTarget = nil
+            self.previewGeneration &+= 1
+        }
     }
 
     /// 1-based source line of the caret counting `\r\n`, `\n`, and `\r`, cached per `(DocumentID, BufferRevision, caretLocation)` and used as the single scroll driver of the preview (`BUG-016`, `UI-007`).
@@ -1726,6 +1916,7 @@ public final class SwiftEditWorkbenchModel {
             _ = try session.applyTextEdits(edit.edits, expectedRevision: session.revision)
             sessionsByID[activeID] = session
             try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            syncUntitledTabTitleIfNeeded(for: activeID, session: session)
             currentSelection = edit.newSelection
             programmaticSelectionToken += 1
             scheduleRecoveryPersist()
@@ -1752,6 +1943,7 @@ public final class SwiftEditWorkbenchModel {
             _ = try session.applyTextEdits(edit.edits, expectedRevision: session.revision)
             sessionsByID[activeID] = session
             try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            syncUntitledTabTitleIfNeeded(for: activeID, session: session)
             currentSelection = edit.newSelection
             programmaticSelectionToken += 1
             scheduleRecoveryPersist()
@@ -1777,8 +1969,12 @@ public final class SwiftEditWorkbenchModel {
     public func toggleMarkdownPreview() {
         showMarkdownPreview.toggle()
         if !showMarkdownPreview {
+            previewTask?.cancel()
+            previewTaskTarget = nil
             previewCache = nil
             PreviewThumbnailCache.shared.clear()
+        } else {
+            schedulePreviewProjectionIfNeeded()
         }
     }
 
@@ -1803,6 +1999,7 @@ public final class SwiftEditWorkbenchModel {
             _ = try session.applyTextEdits(batch.edits, expectedRevision: snap.revision)
             sessionsByID[activeID] = session
             try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            syncUntitledTabTitleIfNeeded(for: activeID, session: session)
             statusBannerMessage = "Formatted \(batch.edits.count) line(s) in selection."
             persistRecoveryState()
             refreshDiagnosticsForActiveDocument()
@@ -2017,17 +2214,63 @@ public final class SwiftEditWorkbenchModel {
         }
     }
 
-    /// Opens `iTerm2` (if installed & preferred) or `Terminal.app` at `targetURL` (or its parent directory when `targetURL` is a file) (`SEC-004`).
+    /// Opens the configured allowlisted terminal (`iTerm2` / Settings choice / `Terminal.app`) at `targetURL` (or its parent directory when `targetURL` is a file) (`SEC-004`).
     public func sidebarOpenInTerminal(at targetURL: URL) {
+        let explicitID: String?
+        if let selectedID = preferredTerminalBundleID,
+           installedTerminalBundleIDsProvider().contains(selectedID) {
+            explicitID = selectedID
+        } else {
+            explicitID = nil
+        }
         do {
             _ = try desktopWorkspace.openInTerminal(
                 targetURL: targetURL,
                 withinScope: grantedScopeRootURL ?? selectedFolderURL,
-                explicitBundleIdentifier: nil
+                explicitBundleIdentifier: explicitID
             )
         } catch {
             statusBannerMessage = "Open Terminal blocked: \(error)"
         }
+    }
+
+    public var currentAppVersionString: String {
+        AboutSheetDescriptor.resolveFromMainBundle().fullVersion
+    }
+
+    /// Queries GitHub Releases (`paonath/PH.SwiftEdit`) on user request and presents the update status dialog (`SEC-001`, `SEC-004`).
+    public func checkForUpdates() {
+        updateCheckTask?.cancel()
+        isCheckingForUpdates = true
+        updateCheckOutcome = nil
+        isUpdateDialogPresented = true
+        updateCheckTask = Task { @MainActor [weak self] in
+            await self?.performUpdateCheck()
+        }
+    }
+
+    /// Async core for `checkForUpdates()` enabling deterministic awaiting in headless tests (`TEST-004`).
+    public func performUpdateCheck(currentVersionOverride: String? = nil, presentDialog: Bool = true) async {
+        isCheckingForUpdates = true
+        let version = currentVersionOverride ?? currentAppVersionString
+        let outcome = await updateChecker.checkForUpdates(currentVersion: version)
+        guard !Task.isCancelled else { return }
+        isCheckingForUpdates = false
+        updateCheckOutcome = outcome
+        if presentDialog {
+            isUpdateDialogPresented = true
+        }
+    }
+
+    public func dismissUpdateDialog() {
+        updateCheckTask?.cancel()
+        isCheckingForUpdates = false
+        isUpdateDialogPresented = false
+    }
+
+    public func openVerifiedUpdateURL(_ url: URL) {
+        guard let verified = GitHubReleaseUpdateChecker.verifiedGitHubHTTPSURL(url.absoluteString) else { return }
+        NSWorkspace.shared.open(verified)
     }
 
     private func reconcileSessionURLsAfterRename(from oldURL: URL, to newURL: URL) {
@@ -2142,6 +2385,7 @@ public struct SwiftEditRootView: View {
     @State private var dragStartSidebarRatio: Double?
     @State private var presentedDirtyAlertTabID: DocumentID?
     @State private var gutterViewportMetrics: GutterViewportMetrics?
+    @State private var keyDownMonitor: Any?
 
     public init() {}
 
@@ -2209,6 +2453,7 @@ public struct SwiftEditRootView: View {
 
     public var body: some View {
         layoutContent
+        .background(HostingWindowFinder { window in model.hostWindow = window })
         .background(model.palette.chromeSurface.swiftUIColor)
         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
         .preferredColorScheme(model.preferredSwiftUIColorScheme)
@@ -2221,6 +2466,39 @@ public struct SwiftEditRootView: View {
                 reduceTransparency: reduceTransparency,
                 increasedContrast: colorSchemeContrast == .increased
             )
+            if keyDownMonitor == nil {
+                let activeModel = model
+                keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                    let consumed = MainActor.assumeIsolated { () -> Bool in
+                        guard let eventWindow = event.window, eventWindow.attachedSheet == nil else {
+                            return false
+                        }
+                        if let ownerWindow = activeModel.hostWindow {
+                            guard eventWindow === ownerWindow else { return false }
+                        } else if eventWindow.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" || eventWindow.isSheet {
+                            return false
+                        }
+                        guard !activeModel.isCheatSheetPresented,
+                              !activeModel.isAboutSheetPresented,
+                              !activeModel.isUpdateDialogPresented,
+                              activeModel.pendingDirtyCloseTabID == nil,
+                              activeModel.pendingBatchOpenPlan == nil,
+                              activeModel.pendingTrashItemURL == nil else {
+                            return false
+                        }
+                        let responder = eventWindow.firstResponder
+                        let isEditingOverlayTextField = (responder is NSTextView) && !(responder is SwiftEditNSTextView)
+                        return SwiftEditShortcutDispatcher.dispatch(event: event, model: activeModel, isEditingOverlayTextField: isEditingOverlayTextField)
+                    }
+                    return consumed ? nil : event
+                }
+            }
+        }
+        .onDisappear {
+            if let monitor = keyDownMonitor {
+                NSEvent.removeMonitor(monitor)
+                keyDownMonitor = nil
+            }
         }
         .onChange(of: systemColorScheme) { _, newScheme in
             if model.appearanceMode == .auto {
@@ -2256,6 +2534,12 @@ public struct SwiftEditRootView: View {
                 palette: model.palette
             ) {
                 model.isAboutSheetPresented = false
+                model.requestEditorFocus()
+            }
+        }
+        .sheet(isPresented: $model.isUpdateDialogPresented) {
+            UpdateCheckSheetView(model: model, palette: model.palette) {
+                model.dismissUpdateDialog()
                 model.requestEditorFocus()
             }
         }
@@ -2311,6 +2595,7 @@ public struct SwiftEditRootView: View {
         } message: {
             Text(model.pendingTrashItemURL?.lastPathComponent ?? "")
         }
+        .environment(\.appTypography, AppTypographyContext(typography: model.typography, generation: model.typographyGeneration))
     }
 
     /// Root-level overlay: `.zIndex(99)` outside-click shield positioned strictly below `topBarHeight` so the header logo trigger stays clickable to toggle, beneath the `.zIndex(100)` sticky submenu (`BUG-006`, `UI-012`).
@@ -2346,12 +2631,13 @@ public struct SwiftEditRootView: View {
             Button(action: { model.headerSubmenu.clickToggle() }) {
                 HStack(spacing: 6) {
                     SwiftEditBrandLogoView(size: CGFloat(SwiftEditBrandLogoGeometry.topBarLogoSize))
-                    Text("PH.SwiftEdit")
-                        .font(.headline.weight(.semibold))
+                    Text("SwiftEdit")
+                        .appFont(.headline, weight: .semibold)
                         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
                     Image(systemName: model.headerSubmenu.isOpen ? "chevron.up" : "chevron.down")
-                        .font(.caption2.weight(.semibold))
+                        .appFont(.caption2, weight: .semibold)
                         .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+                        .accessibilityHidden(true)
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
@@ -2361,10 +2647,10 @@ public struct SwiftEditRootView: View {
             }
             .buttonStyle(.plain)
             .fixedSize()
-            .help("PH.SwiftEdit commands menu")
-            .accessibilityLabel("PH.SwiftEdit commands menu")
+            .help("SwiftEdit commands menu")
+            .accessibilityLabel("SwiftEdit commands menu")
             .accessibilityValue(model.headerSubmenu.isOpen ? "Expanded" : "Collapsed")
-            .accessibilityHint("Toggles the PH.SwiftEdit command menu")
+            .accessibilityHint("Toggles the SwiftEdit command menu")
 
             Spacer(minLength: 8)
 
@@ -2417,7 +2703,7 @@ public struct SwiftEditRootView: View {
         let isSelected = model.appearanceMode == mode
         return Button(action: { model.appearanceMode = mode }) {
             Text(title)
-                .font(.caption.weight(isSelected ? .semibold : .regular))
+                .appFont(.caption, weight: isSelected ? .semibold : .regular)
                 .foregroundStyle(isSelected ? model.palette.activeControlForeground.swiftUIColor : model.palette.secondaryForeground.swiftUIColor)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
@@ -2432,11 +2718,12 @@ public struct SwiftEditRootView: View {
         VStack(spacing: 8) {
             Button(action: { model.toggleSidebarPinCollapse() }) {
                 Image(systemName: "sidebar.left")
-                    .font(.system(size: max(12, CGFloat(model.zoomController.sidebarScaledFontSizePoints))))
+                    .appFont(size: max(12, CGFloat(model.zoomController.sidebarScaledFontSizePoints)))
                     .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
             }
             .buttonStyle(.plain)
             .help("Expand and Pin Left Navigation Panel (Cmd+B)")
+            .accessibilityLabel("Expand left navigation panel")
             .padding(.top, 10)
             Spacer()
         }
@@ -2483,52 +2770,63 @@ public struct SwiftEditRootView: View {
     }
 
     private var tabBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        let metrics = model.chromeMetrics
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 ForEach(model.tabSession.tabs, id: \.id) { tab in
                     let isActive = tab.id == model.tabSession.activeTabID
                     HStack(spacing: 6) {
                         Button(action: { model.togglePin(id: tab.id) }) {
                             Image(systemName: tab.isPinned ? "pin.fill" : "pin")
-                                .font(.caption2)
+                                .appFont(size: metrics.tabBadgeSize)
                                 .foregroundStyle((tab.isPinned ? model.palette.pinnedTabBadge : model.palette.secondaryForeground).swiftUIColor)
+                                .minimumHitTarget(metrics.tabIconTarget)
                         }
                         .buttonStyle(.plain)
                         .help(tab.isPinned ? "Unpin Tab" : "Pin Tab")
+                        .accessibilityLabel(tab.isPinned ? "Unpin tab \(tab.title)" : "Pin tab \(tab.title)")
 
                         Button(action: { model.activateTab(id: tab.id) }) {
                             Text("\(tab.title)\(tab.isDirty ? " •" : "")")
-                                .font(.callout.weight(isActive ? .semibold : .regular))
+                                .appFont(size: metrics.tabFontSize, weight: isActive ? .semibold : .regular)
                                 .foregroundStyle((isActive ? model.palette.chromeForeground : model.palette.secondaryForeground).swiftUIColor)
+                                .lineLimit(1)
+                                .frame(minWidth: metrics.tabMinWidth, maxWidth: metrics.tabMaxWidth, alignment: .leading)
                         }
                         .buttonStyle(.plain)
 
                         Button(action: { model.moveTabLeft(id: tab.id) }) {
                             Image(systemName: "chevron.left")
-                                .font(.system(size: 9, weight: .semibold))
+                                .appFont(size: metrics.tabBadgeSize * 0.9, weight: .semibold)
+                                .minimumHitTarget(metrics.tabIconTarget)
                         }
                         .buttonStyle(.plain)
                         .opacity(isActive ? 0.85 : 0.65)
                         .help("Move Tab Left")
+                        .accessibilityLabel("Move tab \(tab.title) left")
 
                         Button(action: { model.moveTabRight(id: tab.id) }) {
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 9, weight: .semibold))
+                                .appFont(size: metrics.tabBadgeSize * 0.9, weight: .semibold)
+                                .minimumHitTarget(metrics.tabIconTarget)
                         }
                         .buttonStyle(.plain)
                         .opacity(isActive ? 0.85 : 0.65)
                         .help("Move Tab Right")
+                        .accessibilityLabel("Move tab \(tab.title) right")
 
                         Button(action: { model.requestCloseTab(id: tab.id) }) {
                             Image(systemName: "xmark")
-                                .font(.caption2)
+                                .appFont(size: metrics.tabBadgeSize)
+                                .minimumHitTarget(metrics.tabIconTarget)
                         }
                         .buttonStyle(.plain)
                         .help("Close Tab (Cmd+W)")
+                        .accessibilityLabel("Close tab \(tab.title)")
                     }
                     .foregroundStyle((isActive ? model.palette.chromeForeground : model.palette.secondaryForeground).swiftUIColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, metrics.tabHorizontalPadding)
+                    .frame(minHeight: metrics.tabHeight)
                     .background(isActive ? model.palette.tabActiveSurface.swiftUIColor : Color.clear)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
@@ -2592,7 +2890,7 @@ public struct SwiftEditRootView: View {
         }
         if let message = model.statusBannerMessage {
             Text(message)
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
@@ -2602,21 +2900,22 @@ public struct SwiftEditRootView: View {
     }
 
     private var sidebarView: some View {
-        let sidebarFont = CGFloat(model.zoomController.sidebarScaledFontSizePoints)
-        let headerFont = max(10, sidebarFont * 0.88)
+        let metrics = model.chromeMetrics
+        let sidebarFont = metrics.navigatorFontSize
+        let headerFont = metrics.navigatorHeaderFontSize
         let rowSpacing = max(4, CGFloat(6.0 * model.zoomController.zoomScaleFactor))
 
         return VStack(alignment: .leading, spacing: rowSpacing) {
             HStack(spacing: 8) {
                 Text(model.selectedFolderURL?.lastPathComponent ?? "No Folder Open")
-                    .font(.system(size: headerFont, weight: .semibold))
+                    .appFont(size: headerFont, weight: .semibold)
                     .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
                     .lineLimit(1)
                 Spacer()
                 if model.selectedFolderURL != nil {
                     Button(action: { model.navigateToParentFolder() }) {
                         Label("...", systemImage: "arrow.turn.left.up")
-                            .font(.system(size: headerFont, weight: .semibold))
+                            .appFont(size: headerFont, weight: .semibold)
                             .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
                     }
                     .buttonStyle(.plain)
@@ -2625,11 +2924,12 @@ public struct SwiftEditRootView: View {
                 }
                 Button(action: { model.toggleSidebarPinCollapse() }) {
                     Image(systemName: model.isLeftSidebarPinned ? "pin.fill" : "pin.slash")
-                        .font(.system(size: headerFont, weight: .semibold))
+                        .appFont(size: headerFont, weight: .semibold)
                         .foregroundStyle(model.palette.chromeAccent.swiftUIColor)
                 }
                 .buttonStyle(.plain)
                 .help("Unpin and Collapse Left Navigation Panel (Cmd+B)")
+                .accessibilityLabel("Collapse left navigation panel")
             }
             .padding(.horizontal, 10)
             .padding(.top, 8)
@@ -2639,36 +2939,49 @@ public struct SwiftEditRootView: View {
                     Button(action: { model.navigateToParentFolder() }) {
                         HStack(spacing: rowSpacing) {
                             Image(systemName: "folder.badge.minus")
-                                .font(.system(size: sidebarFont))
+                                .appFont(size: metrics.navigatorIconSize)
                                 .foregroundStyle(model.palette.chromeAccent.swiftUIColor)
+                                .accessibilityHidden(true)
                             Text("...")
-                                .font(.system(size: sidebarFont, weight: .semibold))
+                                .appFont(size: sidebarFont, weight: .semibold)
                                 .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
                         }
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Parent folder")
                 }
                 ForEach(model.folderEntries, id: \.url) { entry in
                     let binaryColor = model.palette.sidebarBinaryDisabledText.swiftUIColor
                     let iconName = entry.isDirectory
                         ? "folder.fill"
                         : (entry.isBinary ? "doc.fill" : (entry.isHiddenDotfile ? "eye.slash" : "doc.text"))
-                    Button(action: { model.openFolderEntry(entry) }) {
-                        HStack(spacing: rowSpacing) {
-                            Image(systemName: iconName)
-                                .font(.system(size: sidebarFont))
-                                .foregroundStyle(entry.isBinary ? binaryColor : model.palette.chromeAccent.swiftUIColor)
-                            Text(entry.name)
-                                .font(.system(size: sidebarFont))
-                                .foregroundStyle(entry.isBinary ? binaryColor : model.palette.chromeForeground.swiftUIColor)
-                                .italic(entry.isBinary)
-                                .lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                    let isSelected = model.selectedSidebarEntryURL == entry.url.standardizedFileURL
+                    HStack(spacing: rowSpacing) {
+                        Image(systemName: iconName)
+                            .appFont(size: metrics.navigatorIconSize)
+                            .foregroundStyle(entry.isBinary ? binaryColor : model.palette.chromeAccent.swiftUIColor)
+                            .accessibilityHidden(true)
+                        Text(entry.name)
+                            .appFont(size: sidebarFont)
+                            .foregroundStyle(entry.isBinary ? binaryColor : model.palette.chromeForeground.swiftUIColor)
+                            .italic(entry.isBinary)
+                            .lineLimit(1)
                     }
-                    .buttonStyle(.plain)
-                    .help(entry.isBinary ? "Binary file (read-only disabled in sidebar)" : entry.name)
+                    .frame(maxWidth: .infinity, minHeight: metrics.navigatorRowHeight, alignment: .leading)
+                    .padding(.leading, max(0, metrics.navigatorIndent - 12))
+                    .background(isSelected ? model.palette.tabActiveSurface.swiftUIColor : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { model.sidebarDoubleClick(entry) }
+                    .onTapGesture(count: 1) { model.sidebarPrimaryClick(entry) }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel(entry.name)
+                    .accessibilityAction(named: entry.isDirectory ? "Open Folder" : "Open File") {
+                        model.sidebarDoubleClick(entry)
+                    }
+                    .help(entry.isDirectory
+                        ? "Double-click to open folder"
+                        : (entry.isBinary ? "Binary file (read-only disabled in sidebar)" : entry.name))
                     .contextMenu {
                         sidebarEntryContextMenu(for: entry)
                     }
@@ -2695,6 +3008,7 @@ public struct SwiftEditRootView: View {
             Button("Open Folder in Finder") { model.sidebarOpenFolderInFinder(at: currentFolder) }
         }
         Button("Open Terminal") { model.sidebarOpenInTerminal(at: entry.url) }
+        Button("Copy Path to Clipboard") { model.sidebarCopyPathToClipboard(at: entry.url) }
         Divider()
         Button("New File…") { promptCreateFile(in: targetDir) }
             .disabled(targetDir == nil)
@@ -2730,6 +3044,7 @@ public struct SwiftEditRootView: View {
             Divider()
             Button("Open Folder in Finder") { model.sidebarOpenFolderInFinder(at: currentFolder) }
             Button("Open Terminal") { model.sidebarOpenInTerminal(at: currentFolder) }
+            Button("Copy Folder Path to Clipboard") { model.sidebarCopyPathToClipboard(at: currentFolder) }
         }
     }
 
@@ -2804,7 +3119,8 @@ public struct SwiftEditRootView: View {
                             projection: model.activeLineNumberGutter,
                             palette: model.palette,
                             severityByLine: model.gutterSeverityByLine,
-                            viewportMetrics: gutterViewportMetrics
+                            viewportMetrics: gutterViewportMetrics,
+                            width: model.gutterWidth
                         )
                     }
                     TextKit2EditorView(
@@ -2827,7 +3143,10 @@ public struct SwiftEditRootView: View {
                         undoRegistry: model.undoRegistry,
                         editorFocusRequestToken: model.editorFocusRequestToken,
                         onViewportMetricsChange: { gutterViewportMetrics = $0 },
-                        onEscape: { model.handleEscape() }
+                        onEscape: { model.handleEscape() },
+                        typography: model.typography,
+                        typographyGeneration: model.typographyGeneration,
+                        lineIndexProvider: { model.lineIndex(for: $0, revision: $1) }
                     )
                 }
             }
@@ -2851,20 +3170,20 @@ public struct SwiftEditRootView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 4) {
                 Text("Side-by-Side Myers Diff (vs Saved Baseline)")
-                    .font(.caption.weight(.semibold))
+                    .appFont(.caption, weight: .semibold)
                     .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
                 let rows = model.diffCoordinator.rows
                 ForEach(rows.indices, id: \.self) { index in
                     let row = rows[index]
                     HStack(spacing: 8) {
                         Text(row.lhsText ?? "")
-                            .font(.caption.monospaced())
+                            .appFont(.caption, monospaced: true)
                             .foregroundStyle((row.lhsKind == .removed ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 4)
                             .background(row.lhsKind == .removed ? model.palette.diffRemovedBackground.swiftUIColor : Color.clear)
                         Text(row.rhsText ?? "")
-                            .font(.caption.monospaced())
+                            .appFont(.caption, monospaced: true)
                             .foregroundStyle((row.rhsKind == .inserted ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 4)
@@ -2879,14 +3198,38 @@ public struct SwiftEditRootView: View {
 
     private var statusBar: some View {
         let metrics = model.activeStatusBarMetrics
+        let lintCount = model.lintDiagnostics.count
+        let hasErrors = model.lintDiagnostics.contains { $0.severity == .error }
+        let lintForeground: Color = lintCount == 0
+            ? model.palette.statusBarForeground.swiftUIColor
+            : (hasErrors ? model.palette.unbalancedBracketHighlight : model.palette.bidiWarningForeground).swiftUIColor
         return HStack(spacing: 14) {
-            Button(model.activeLintStatus.label) { model.toggleDiagnosticsPopover() }
-                .buttonStyle(.plain)
-                .accessibilityLabel(model.activeLintStatus.label)
-                .accessibilityHint("Opens the Markdown diagnostics popover")
-                .popover(isPresented: Binding(get: { model.isDiagnosticsPopoverPresented }, set: { model.isDiagnosticsPopoverPresented = $0 })) {
-                    MarkdownDiagnosticsPopoverView(model: model)
+            Button(action: { model.toggleDiagnosticsPopover() }) {
+                HStack(spacing: 4) {
+                    if lintCount > 0 {
+                        Image(systemName: hasErrors ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                            .appFont(.caption2, weight: .bold)
+                            .accessibilityHidden(true)
+                    }
+                    Text(model.activeLintStatus.label)
+                        .appFont(.caption, weight: lintCount > 0 ? .bold : .regular, monospaced: true)
                 }
+                .foregroundStyle(lintForeground)
+                .padding(.horizontal, lintCount > 0 ? 8 : 0)
+                .padding(.vertical, lintCount > 0 ? 2 : 0)
+                .background(lintCount > 0 ? lintForeground.opacity(0.18) : Color.clear)
+                .overlay(
+                    Capsule()
+                        .stroke(lintCount > 0 ? lintForeground.opacity(0.75) : Color.clear, lineWidth: 1)
+                )
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(model.activeLintStatus.label)
+            .accessibilityHint("Opens the Markdown diagnostics popover")
+            .popover(isPresented: Binding(get: { model.isDiagnosticsPopoverPresented }, set: { model.isDiagnosticsPopoverPresented = $0 })) {
+                MarkdownDiagnosticsPopoverView(model: model)
+            }
             Text("Brackets: \(model.bracketResult?.unbalancedBrackets.isEmpty == true ? "Balanced" : "Unbalanced (\(model.bracketResult?.unbalancedBrackets.count ?? 0))")")
             Text("Mode: \(model.palette.mode.rawValue.capitalized)")
             Spacer()
@@ -2904,12 +3247,38 @@ public struct SwiftEditRootView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
         }
-        .font(.caption.monospacedDigit())
+        .appFont(.caption, monospaced: true)
         .foregroundStyle(model.palette.statusBarForeground.swiftUIColor)
         .tint(model.palette.statusBarForeground.swiftUIColor)
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
         .background(model.palette.statusBarSurface.swiftUIColor)
+    }
+}
+
+private struct HostingWindowFinder: NSViewRepresentable {
+    let onResolveWindow: (NSWindow?) -> Void
+
+    final class ProbeNSView: NSView {
+        var onResolveWindow: ((NSWindow?) -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            onResolveWindow?(window)
+        }
+    }
+
+    func makeNSView(context: Context) -> ProbeNSView {
+        let view = ProbeNSView()
+        view.onResolveWindow = onResolveWindow
+        return view
+    }
+
+    func updateNSView(_ nsView: ProbeNSView, context: Context) {
+        nsView.onResolveWindow = onResolveWindow
+        if let win = nsView.window {
+            onResolveWindow(win)
+        }
     }
 }
 #endif

@@ -33,7 +33,7 @@ public struct EntitlementViolation: Equatable, Sendable {
 ///
 /// Security invariants:
 /// - `com.apple.security.app-sandbox` MUST be explicitly `true` on both macOS and iOS (`SEC-001`).
-/// - Only user-selected read-write and app-scoped bookmark keys are allowlisted on macOS; any network (`network.client`, `network.server`), `files.all`, `temporary-exception`, or library-validation-relaxation key is rejected fail-closed (`SEC-001`, `SEC-004`, `SEC-008`).
+/// - On macOS, only user-selected read-write, app-scoped bookmark, and outbound `network.client` (strictly for manual GitHub Releases HTTPS check) keys are allowlisted; `network.server`, `files.all`, `temporary-exception`, or library-validation-relaxation keys are rejected fail-closed (`SEC-001`, `SEC-004`, `SEC-008`).
 public enum EntitlementsFitnessValidator {
     public enum TargetPlatform: String, Sendable {
         case macOS
@@ -44,6 +44,7 @@ public enum EntitlementsFitnessValidator {
         "com.apple.security.app-sandbox",
         "com.apple.security.files.user-selected.read-write",
         "com.apple.security.files.bookmarks.app-scope",
+        "com.apple.security.network.client",
     ]
 
     public static let allowedIOSEntitlements: Set<String> = [

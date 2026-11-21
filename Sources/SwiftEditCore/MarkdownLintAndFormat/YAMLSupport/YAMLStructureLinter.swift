@@ -44,7 +44,94 @@ public enum YAMLStructureLinter {
 
     private struct Level {
         let indent: Int
-        var keys: Set<String>
+        let firstHash: UInt64
+        let firstRange: Range<Int>
+        var smallKeys: [(hash: UInt64, range: Range<Int>)]?
+        var table: [UInt64: Range<Int>]?
+        var collisions: [UInt64: [Range<Int>]]?
+
+        init(indent: Int, firstHash: UInt64, firstRange: Range<Int>) {
+            self.indent = indent
+            self.firstHash = firstHash
+            self.firstRange = firstRange
+        }
+
+        mutating func containsOrInsert(hash: UInt64, range: Range<Int>, in units: [UInt16]) -> Bool {
+            if hash == firstHash, slicesEqual(units, firstRange, range) { return true }
+            if var table {
+                if let existing = table[hash] {
+                    if slicesEqual(units, existing, range) { return true }
+                    if var list = collisions?[hash] {
+                        for r in list where slicesEqual(units, r, range) { return true }
+                        list.append(range)
+                        collisions?[hash] = list
+                    } else {
+                        var map = collisions ?? [:]
+                        map[hash] = [range]
+                        collisions = map
+                    }
+                    return false
+                }
+                table[hash] = range
+                self.table = table
+                return false
+            }
+            if let small = smallKeys {
+                for entry in small where entry.hash == hash && slicesEqual(units, entry.range, range) {
+                    return true
+                }
+                if small.count < 8 {
+                    var updated = small
+                    updated.append((hash, range))
+                    smallKeys = updated
+                    return false
+                }
+                var map: [UInt64: Range<Int>] = Dictionary(minimumCapacity: 16)
+                map[firstHash] = firstRange
+                for entry in small {
+                    insertPromoted(hash: entry.hash, range: entry.range, into: &map)
+                }
+                insertPromoted(hash: hash, range: range, into: &map)
+                smallKeys = nil
+                table = map
+                return false
+            }
+            smallKeys = [(hash, range)]
+            return false
+        }
+
+        private mutating func insertPromoted(hash: UInt64, range: Range<Int>, into map: inout [UInt64: Range<Int>]) {
+            if map[hash] == nil {
+                map[hash] = range
+            } else {
+                var col = collisions ?? [:]
+                col[hash, default: []].append(range)
+                collisions = col
+            }
+        }
+    }
+
+    private static func slicesEqual(_ units: [UInt16], _ lhs: Range<Int>, _ rhs: Range<Int>) -> Bool {
+        let len = lhs.count
+        guard len == rhs.count else { return false }
+        var i = lhs.lowerBound
+        var j = rhs.lowerBound
+        let end = lhs.upperBound
+        while i < end {
+            if units[i] != units[j] { return false }
+            i += 1
+            j += 1
+        }
+        return true
+    }
+
+    private static func keyHash(_ units: [UInt16], range: Range<Int>) -> UInt64 {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for i in range {
+            hash ^= UInt64(units[i])
+            hash = hash &* 0x100000001b3
+        }
+        return hash
     }
 
     private static func lintLines(_ index: MarkdownLineIndex, _ lines: Range<Int>) -> [MarkdownLintDiagnostic] {
@@ -54,6 +141,7 @@ public enum YAMLStructureLinter {
         var blockScalarIndent: Int?
         var depthReported = false
         var depthCutoffIndent: Int?
+        let units = index.units
 
         func report(_ rule: MarkdownLintRuleID, _ line: Int, _ message: String, _ range: TextRange) {
             guard out.count < YAMLSupportLimits.maxDiagnostics else { return }
@@ -83,20 +171,19 @@ public enum YAMLStructureLinter {
                 report(.yamlTabIndentation, line, "Indentation uses a tab character; YAML requires spaces", TextRange(location: range.location, length: indent))
                 continue
             }
-            let tokens = YAMLLineTokenizer.tokens(line: slice)
-            guard let first = tokens.first, first.kind != .comment, first.kind != .documentMarker else { continue }
-            let hasDash = first.kind == .listDash
-            guard let keyToken = tokens.first(where: { $0.kind == .key }) else { continue }
-            let column = keyToken.range.location
-            let keyText = normalizedKey(slice, keyToken.range)
-            let keyRange = TextRange(location: range.location + keyToken.range.location, length: keyToken.range.length)
+            let inspected = YAMLLineTokenizer.inspectStructure(line: slice, indent: indent)
+            guard !inspected.isIgnored, let keyRelRange = inspected.keyRange else { continue }
+            let hasDash = inspected.hasDash
+            let column = keyRelRange.location
+            let normRange = normalizedKeyRange(units, sliceStart: slice.startIndex, keyRelRange)
+            let keyRange = TextRange(location: range.location + column, length: keyRelRange.length)
+            let hash = keyHash(units, range: normRange)
 
             while let top = stack.last, top.indent > column || (hasDash && top.indent >= column) { stack.removeLast() }
             if let top = stack.last, top.indent == column {
-                if stack[stack.count - 1].keys.contains(keyText) {
+                if stack[stack.count - 1].containsOrInsert(hash: hash, range: normRange, in: units) {
+                    let keyText = String(decoding: units[normRange], as: UTF16.self)
                     report(.yamlDuplicateKey, line, "Duplicate key '\(keyText)' in the same mapping", keyRange)
-                } else {
-                    stack[stack.count - 1].keys.insert(keyText)
                 }
             } else {
                 let parentIndent = stack.last?.indent ?? 0
@@ -118,20 +205,24 @@ public enum YAMLStructureLinter {
                     depthCutoffIndent = stack.last?.indent
                     continue
                 }
-                stack.append(Level(indent: column, keys: [keyText]))
+                stack.append(Level(indent: column, firstHash: hash, firstRange: normRange))
             }
-            if tokens.last(where: { $0.kind != .comment })?.kind == .blockScalarIndicator { blockScalarIndent = indent }
+            if inspected.endsWithBlockScalar { blockScalarIndent = indent }
         }
         return out
     }
 
-    /// Key text without surrounding quotes, used only for duplicate detection and messages.
-    private static func normalizedKey(_ slice: ArraySlice<UInt16>, _ range: TextRange) -> String {
-        let start = slice.startIndex + range.location
-        var units = Array(slice[start..<(start + range.length)])
-        if units.count >= 2, let f = units.first, f == units.last, f == YAMLLineTokenizer.dquote || f == YAMLLineTokenizer.squote {
-            units = Array(units.dropFirst().dropLast())
+    /// Unquoted key range in `index.units`, used for zero-allocation duplicate detection and error messages.
+    private static func normalizedKeyRange(_ units: [UInt16], sliceStart: Int, _ range: TextRange) -> Range<Int> {
+        var start = sliceStart + range.location
+        var end = start + range.length
+        if end - start >= 2 {
+            let f = units[start]
+            if f == units[end - 1], f == YAMLLineTokenizer.dquote || f == YAMLLineTokenizer.squote {
+                start += 1
+                end -= 1
+            }
         }
-        return String(decoding: units, as: UTF16.self)
+        return start..<end
     }
 }

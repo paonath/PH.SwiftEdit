@@ -36,6 +36,7 @@ enum MarkdownAllConstructsLinter {
 
         var out: [MarkdownLintDiagnostic] = []
         var openFence: (char: UInt8, count: Int)?
+        var scratch = InlineScanScratch()
         var lineIndex = 0
         var pos = 0
         var utf16Cursor = 0
@@ -47,6 +48,7 @@ enum MarkdownAllConstructsLinter {
             let lineStartUTF16 = utf16Cursor
             var sawBracket = false
             var sawParen = false
+            var isASCII = true
 
             while pos < count {
                 let b = buffer[pos]
@@ -54,10 +56,13 @@ enum MarkdownAllConstructsLinter {
                 if b == 0x5B { sawBracket = true } else if b == 0x28 { sawParen = true }
                 if b < 0x80 {
                     utf16Cursor += 1
-                } else if b >= 0xF0 {
-                    utf16Cursor += 2
-                } else if b >= 0xC0 {
-                    utf16Cursor += 1
+                } else {
+                    isASCII = false
+                    if b >= 0xF0 {
+                        utf16Cursor += 2
+                    } else if b >= 0xC0 {
+                        utf16Cursor += 1
+                    }
                 }
                 pos += 1
             }
@@ -80,9 +85,17 @@ enum MarkdownAllConstructsLinter {
                 } else if let opened = fenceOpeningUTF8(lineSlice) {
                     openFence = opened
                 } else if sawBracket && sawParen && lineUTF16Len <= maxLine {
-                    let lineString = String(decoding: lineSlice, as: UTF8.self)
-                    let utf16Line = Array(lineString.utf16)
-                    scanInline(utf16Line[...], base: lineStartUTF16, line: lineIndex, securityOnly: true, into: &out)
+                    scratch.utf16Line.removeAll(keepingCapacity: true)
+                    if isASCII {
+                        scratch.utf16Line.reserveCapacity(lineSlice.count)
+                        for b in lineSlice {
+                            scratch.utf16Line.append(UInt16(b))
+                        }
+                    } else {
+                        let lineString = String(decoding: lineSlice, as: UTF8.self)
+                        scratch.utf16Line.append(contentsOf: lineString.utf16)
+                    }
+                    scanInline(scratch.utf16Line[...], base: lineStartUTF16, line: lineIndex, securityOnly: true, scratch: &scratch, into: &out)
                 }
             }
 
@@ -197,6 +210,7 @@ enum MarkdownAllConstructsLinter {
         var orderedState: [Int: (first: Int, last: Int, onesStyle: Bool, items: Int)] = [:]
         var indentStack: [Int] = []
         var prevBlank = false
+        var scratch = InlineScanScratch()
         var line = masked
         while line < count {
             if line % 256 == 0, deadlineExceeded() { return nil }
@@ -208,7 +222,7 @@ enum MarkdownAllConstructsLinter {
                     continue
                 }
                 if range.length <= maxLine, slice.contains(0x28), slice.contains(0x5B) {
-                    scanInline(slice, base: range.location, line: line, securityOnly: true, into: &out)
+                    scanInline(slice, base: range.location, line: line, securityOnly: true, scratch: &scratch, into: &out)
                 }
                 line += 1
                 continue
@@ -335,7 +349,7 @@ enum MarkdownAllConstructsLinter {
                         if line + 1 < count, !blank(line + 1) { add(.blanksAroundHeadings, line, "Headings should be surrounded by blank lines", range, fix: insertBlank(at: line + 1)) }
                     }
                     resetListState()
-                    scanInline(slice, base: range.location, line: line, into: &out)
+                    scanInline(slice, base: range.location, line: line, scratch: &scratch, into: &out)
                     line += 1
                     continue
                 }
@@ -350,7 +364,7 @@ enum MarkdownAllConstructsLinter {
                     add(.multipleSpacesAfterBlockquote, line, "Multiple spaces after blockquote symbol", range,
                         fix: TextEdit(range: TextRange(location: range.location + (idx + 1 - slice.startIndex), length: spaces), replacement: " "))
                 }
-                scanInline(slice, base: range.location, line: line, into: &out)
+                scanInline(slice, base: range.location, line: line, scratch: &scratch, into: &out)
                 line += 1
                 continue
             }
@@ -424,14 +438,14 @@ enum MarkdownAllConstructsLinter {
                             fix: TextEdit(range: TextRange(location: markerPos, length: digits), replacement: String(expected)))
                     }
                 }
-                scanInline(slice, base: range.location, line: line, into: &out)
+                scanInline(slice, base: range.location, line: line, scratch: &scratch, into: &out)
                 line += 1
                 continue
             }
 
             // Paragraph / continuation.
             if inList, indent >= 2 {
-                scanInline(slice, base: range.location, line: line, into: &out)
+                scanInline(slice, base: range.location, line: line, scratch: &scratch, into: &out)
                 line += 1
                 continue
             }
@@ -439,7 +453,7 @@ enum MarkdownAllConstructsLinter {
                 add(.blanksAroundLists, line, "Lists should be surrounded by blank lines", range, fix: insertBlank(at: line))
             }
             resetListState()
-            scanInline(slice, base: range.location, line: line, into: &out)
+            scanInline(slice, base: range.location, line: line, scratch: &scratch, into: &out)
             line += 1
         }
         return (out, masked)
@@ -447,7 +461,23 @@ enum MarkdownAllConstructsLinter {
 
     // MARK: Inline links and images (hardened, strictly O(L))
 
-    private static func scanInline(_ slice: ArraySlice<UInt16>, base: Int, line: Int, securityOnly: Bool = false, into out: inout [MarkdownLintDiagnostic]) {
+    /// Reusable per-lint pass buffers to avoid thousands of per-line `[Int]` / `[UInt16]` heap allocations.
+    private struct InlineScanScratch {
+        var matchBracket: [Int] = []
+        var matchParen: [Int] = []
+        var bracketStack: [Int] = []
+        var parenStack: [Int] = []
+        var utf16Line: [UInt16] = []
+    }
+
+    private static func scanInline(
+        _ slice: ArraySlice<UInt16>,
+        base: Int,
+        line: Int,
+        securityOnly: Bool = false,
+        scratch: inout InlineScanScratch,
+        into out: inout [MarkdownLintDiagnostic]
+    ) {
         let start = slice.startIndex
         let end = slice.endIndex
         let length = end - start
@@ -467,22 +497,28 @@ enum MarkdownAllConstructsLinter {
         guard hasBracket && hasParen else { return }
 
         // Precompute balanced `[` -> `]` and `(` -> `)` matches in a single O(L) stack pass so adversarial `[[[[...` / `((((...` never goes O(L²).
-        var matchBracket = Array(repeating: -1, count: length)
-        var matchParen = Array(repeating: -1, count: length)
-        var bracketStack: [Int] = []
-        var parenStack: [Int] = []
+        if scratch.matchBracket.count < length {
+            let extra = length - scratch.matchBracket.count
+            scratch.matchBracket.append(contentsOf: repeatElement(-1, count: extra))
+            scratch.matchParen.append(contentsOf: repeatElement(-1, count: extra))
+        }
+        scratch.bracketStack.removeAll(keepingCapacity: true)
+        scratch.parenStack.removeAll(keepingCapacity: true)
+
         var idx = start
         while idx < end {
             let rel = idx - start
             let u = slice[idx]
             if u == 0x5B {
-                bracketStack.append(rel)
-            } else if u == 0x5D, let openRel = bracketStack.popLast() {
-                matchBracket[openRel] = rel
+                scratch.matchBracket[rel] = -1
+                scratch.bracketStack.append(rel)
+            } else if u == 0x5D, let openRel = scratch.bracketStack.popLast() {
+                scratch.matchBracket[openRel] = rel
             } else if u == 0x28 {
-                parenStack.append(rel)
-            } else if u == 0x29, let openRel = parenStack.popLast() {
-                matchParen[openRel] = rel
+                scratch.matchParen[rel] = -1
+                scratch.parenStack.append(rel)
+            } else if u == 0x29, let openRel = scratch.parenStack.popLast() {
+                scratch.matchParen[openRel] = rel
             }
             idx += 1
         }
@@ -496,32 +532,35 @@ enum MarkdownAllConstructsLinter {
             let isImage = slice[i] == 0x21 && i + 1 < end && slice[i + 1] == 0x5B
             if slice[i] == 0x5B || isImage {
                 let open = isImage ? i + 1 : i
-                let closeRel = matchBracket[open - start]
+                let closeRel = scratch.matchBracket[open - start]
                 if closeRel >= 0 {
                     let close = start + closeRel
                     if close + 1 < end, slice[close + 1] == 0x28 {
-                        let pRel = matchParen[close + 1 - start]
+                        let pRel = scratch.matchParen[close + 1 - start]
                         if pRel >= 0 {
                             let p = start + pRel
                             let spanStart = isImage ? i : open
                             let range = TextRange(location: base + (spanStart - start), length: p - spanStart + 1)
-                            let raw = String(decoding: slice[(close + 2)..<p], as: UTF16.self)
-                            let dest = destination(raw)
-                            if !securityOnly, isImage {
-                                let alt = String(decoding: slice[(open + 1)..<close], as: UTF16.self).trimmingCharacters(in: .whitespaces)
-                                if alt.isEmpty {
-                                    out.append(MarkdownLintDiagnostic(rule: .missingImageAltText, line: line + 1, message: "Images should have alternate text", range: range))
+
+                            if !securityOnly, isImage, isImageAltEmpty(slice, from: open + 1, to: close) {
+                                out.append(MarkdownLintDiagnostic(rule: .missingImageAltText, line: line + 1, message: "Images should have alternate text", range: range))
+                            }
+
+                            if let fastEmpty = inspectCleanASCIIDestination(slice, from: close + 2, to: p, isImage: isImage, line: line, range: range, into: &out) {
+                                _ = fastEmpty
+                            } else {
+                                let raw = String(decoding: slice[(close + 2)..<p], as: UTF16.self)
+                                let dest = destination(raw)
+                                if !isImage, dest.isEmpty {
+                                    out.append(MarkdownLintDiagnostic(rule: .emptyLinkTarget, line: line + 1, message: "Link target is empty", range: range))
                                 }
-                            }
-                            if !isImage, dest.isEmpty {
-                                out.append(MarkdownLintDiagnostic(rule: .emptyLinkTarget, line: line + 1, message: "Link target is empty", range: range))
-                            }
-                            let normalized = normalize(dest)
-                            if hasUnsafeScheme(normalized) {
-                                out.append(MarkdownLintDiagnostic(rule: .unsafeLinkScheme, line: line + 1, message: "Unsafe link scheme", range: range))
-                            }
-                            if isImage, hasUnsafeImagePath(normalized) {
-                                out.append(MarkdownLintDiagnostic(rule: .unsafeImagePath, line: line + 1, message: "Unsafe image path", range: range))
+                                let normalized = normalize(dest)
+                                if hasUnsafeScheme(normalized) {
+                                    out.append(MarkdownLintDiagnostic(rule: .unsafeLinkScheme, line: line + 1, message: "Unsafe link scheme", range: range))
+                                }
+                                if isImage, hasUnsafeImagePath(normalized) {
+                                    out.append(MarkdownLintDiagnostic(rule: .unsafeImagePath, line: line + 1, message: "Unsafe image path", range: range))
+                                }
                             }
                             i = p + 1
                             continue
@@ -531,6 +570,161 @@ enum MarkdownAllConstructsLinter {
             }
             i += 1
         }
+    }
+
+    /// Checks whether image alt text is empty without allocating when content is ASCII.
+    private static func isImageAltEmpty(_ slice: ArraySlice<UInt16>, from start: Int, to end: Int) -> Bool {
+        var idx = start
+        var allSpacesOrTabs = true
+        while idx < end {
+            let u = slice[idx]
+            if u >= 0x21 && u < 0x7F { return false }
+            if u != 0x20 && u != 0x09 {
+                allSpacesOrTabs = false
+                break
+            }
+            idx += 1
+        }
+        if allSpacesOrTabs { return true }
+        return String(decoding: slice[start..<end], as: UTF16.self).trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Evaluates clean ASCII link/image destinations directly on `UInt16` indices with zero `String` allocations.
+    /// Returns `nil` to fall back to full Unicode/entity/percent normalization whenever `%`, `&`, control chars, or non-ASCII units appear.
+    private static func inspectCleanASCIIDestination(
+        _ slice: ArraySlice<UInt16>,
+        from rawStart: Int,
+        to rawEnd: Int,
+        isImage: Bool,
+        line: Int,
+        range: TextRange,
+        into out: inout [MarkdownLintDiagnostic]
+    ) -> Void? {
+        var j = rawStart
+        while j < rawEnd {
+            let u = slice[j]
+            guard (u >= 0x20 && u < 0x7F) || u == 0x09 || u == 0x0A || u == 0x0D else { return nil }
+            j += 1
+        }
+
+        var dStart = rawStart
+        var dEnd = rawEnd
+        while dStart < dEnd {
+            let u = slice[dStart]
+            if u == 0x20 || u == 0x09 || u == 0x0A || u == 0x0D { dStart += 1 } else { break }
+        }
+        while dEnd > dStart {
+            let u = slice[dEnd - 1]
+            if u == 0x20 || u == 0x09 || u == 0x0A || u == 0x0D { dEnd -= 1 } else { break }
+        }
+
+        if dStart < dEnd, slice[dStart] == 0x3C {
+            var k = dStart + 1
+            while k < dEnd, slice[k] != 0x3E { k += 1 }
+            if k < dEnd {
+                dStart += 1
+                dEnd = k
+            }
+        } else {
+            var k = dStart
+            while k < dEnd {
+                let u = slice[k]
+                if u == 0x20 || u == 0x09 { dEnd = k; break }
+                k += 1
+            }
+        }
+
+        // Reject `%`, `&`, or control chars inside the destination span so normalization runs on the full path.
+        var c = dStart
+        while c < dEnd {
+            let u = slice[c]
+            guard u >= 0x20 && u < 0x7F && u != 0x25 && u != 0x26 else { return nil }
+            c += 1
+        }
+
+        if dStart == dEnd {
+            if !isImage {
+                out.append(MarkdownLintDiagnostic(rule: .emptyLinkTarget, line: line + 1, message: "Link target is empty", range: range))
+            }
+            return ()
+        }
+
+        if hasUnsafeSchemeASCII(slice, from: dStart, to: dEnd) {
+            out.append(MarkdownLintDiagnostic(rule: .unsafeLinkScheme, line: line + 1, message: "Unsafe link scheme", range: range))
+        }
+        if isImage, hasUnsafeImagePathASCII(slice, from: dStart, to: dEnd) {
+            out.append(MarkdownLintDiagnostic(rule: .unsafeImagePath, line: line + 1, message: "Unsafe image path", range: range))
+        }
+        return ()
+    }
+
+    @inline(__always)
+    private static func asciiLower(_ u: UInt16) -> UInt16 {
+        (u >= 0x41 && u <= 0x5A) ? (u | 0x20) : u
+    }
+
+    private static func sliceEqualsASCII(_ slice: ArraySlice<UInt16>, from start: Int, to end: Int, lowerBytes: StaticString) -> Bool {
+        let len = end - start
+        guard len == lowerBytes.utf8CodeUnitCount else { return false }
+        return lowerBytes.withUTF8Buffer { buf in
+            for idx in 0..<len {
+                if asciiLower(slice[start + idx]) != UInt16(buf[idx]) { return false }
+            }
+            return true
+        }
+    }
+
+    private static func hasUnsafeSchemeASCII(_ slice: ArraySlice<UInt16>, from start: Int, to end: Int) -> Bool {
+        if end - start >= 2, slice[start] == 0x2F, slice[start + 1] == 0x2F { return true }
+        var idx = start
+        while idx < end {
+            let u = slice[idx]
+            if u == 0x3A {
+                guard idx > start else { return false }
+                let isAllowed = sliceEqualsASCII(slice, from: start, to: idx, lowerBytes: "https")
+                    || sliceEqualsASCII(slice, from: start, to: idx, lowerBytes: "http")
+                    || sliceEqualsASCII(slice, from: start, to: idx, lowerBytes: "mailto")
+                return !isAllowed
+            }
+            if u == 0x2F || u == 0x3F || u == 0x23 { return false }
+            let lower = asciiLower(u)
+            let isSchemeChar = (lower >= 0x61 && lower <= 0x7A) || (u >= 0x30 && u <= 0x39) || u == 0x2B || u == 0x2E || u == 0x2D
+            guard isSchemeChar else { return false }
+            idx += 1
+        }
+        return false
+    }
+
+    private static func hasUnsafeImagePathASCII(_ slice: ArraySlice<UInt16>, from start: Int, to end: Int) -> Bool {
+        var pathEnd = start
+        while pathEnd < end {
+            let u = slice[pathEnd]
+            if u == 0x3F || u == 0x23 { break }
+            pathEnd += 1
+        }
+        let pathLen = pathEnd - start
+        if pathLen >= 4, sliceEqualsASCII(slice, from: pathEnd - 4, to: pathEnd, lowerBytes: ".svg") { return true }
+        if pathLen >= 5, sliceEqualsASCII(slice, from: pathEnd - 5, to: pathEnd, lowerBytes: ".svgz") { return true }
+        // Remote schemes (contains `://` or starts with `mailto:`) are classified by hasUnsafeScheme, not path traversal.
+        if pathLen >= 3 {
+            var k = start
+            let limit = pathEnd - 2
+            while k < limit {
+                if slice[k] == 0x3A && slice[k + 1] == 0x2F && slice[k + 2] == 0x2F { return false }
+                k += 1
+            }
+        }
+        if pathLen >= 7, sliceEqualsASCII(slice, from: start, to: start + 7, lowerBytes: "mailto:") { return false }
+        if pathLen > 0, slice[start] == 0x2F { return true }
+        if pathLen == 2 && slice[start] == 0x2E && slice[start + 1] == 0x2E { return true }
+        if pathLen >= 3 && slice[start] == 0x2E && slice[start + 1] == 0x2E && (slice[start + 2] == 0x2F || slice[start + 2] == 0x5C) { return true }
+        var k = start
+        while k < pathEnd {
+            if slice[k] == 0x5C { return true }
+            if k + 3 < pathEnd && slice[k] == 0x2F && slice[k + 1] == 0x2E && slice[k + 2] == 0x2E && slice[k + 3] == 0x2F { return true }
+            k += 1
+        }
+        return false
     }
 
     private static func destination(_ raw: String) -> String {

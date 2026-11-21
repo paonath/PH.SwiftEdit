@@ -1,0 +1,66 @@
+name: tdd-spec-driven
+version: 1
+description: TDD-first, security-by-design workflow (myspec suite)
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: Why, what changes, capabilities, impact, security impact, metadata
+    template: proposal.md
+    instruction: |
+      Write Why / What Changes / Capabilities / Impact plus ## Metadata,
+      ## Security Impact and ## Prerequisites. Keep it to 1-2 pages.
+    requires: []
+
+  - id: threat-model
+    generates: threat-model.md
+    description: STRIDE table (6 categories) and abuse cases
+    template: threat-model.md
+    instruction: Document threat model with 6-category STRIDE table and abuse cases.
+    requires:
+      - proposal
+
+  - id: specs
+    generates: "specs/**/*.md"
+    description: Delta specs with Given/When/Then scenarios and P/N paths
+    template: spec.md
+    instruction: One delta per capability using SHALL/MUST and Given/When/Then.
+    requires:
+      - proposal
+
+  - id: design
+    generates: design.md
+    description: Decisions, glossary, risks, conflicts, migration plan
+    template: design.md
+    instruction: Document technical design and architectural trade-offs.
+    requires:
+      - proposal
+      - threat-model
+
+  - id: test-plan
+    generates: test-plan.md
+    description: Path inventory, test strategy, seams, AI-readiness table
+    template: test-plan.md
+    instruction: Detail Path Coverage Matrix and test automation commands.
+    requires:
+      - specs
+      - threat-model
+
+  - id: tasks
+    generates: tasks.md
+    description: RED/GREEN/REFACTOR triads and post-REFACTOR DOC tasks
+    template: tasks.md
+    instruction: Structure implementation checklist into TDD triads followed by mandatory in-code documentation tasks for code.
+    requires:
+      - specs
+      - design
+      - test-plan
+
+apply:
+  requires:
+    - tasks
+    - threat-model
+    - test-plan
+  tracks: tasks.md
+  instruction: |
+    Implement tasks following the RED-GREEN-REFACTOR cycle followed by post-REFACTOR
+    in-code documentation. Never write production code before the corresponding RED task is verified.

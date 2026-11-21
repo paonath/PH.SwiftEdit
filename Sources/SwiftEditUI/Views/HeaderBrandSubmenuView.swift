@@ -187,13 +187,14 @@ public struct HeaderBrandSubmenuView: View {
                     HStack(spacing: 10) {
                         Image(systemName: item.symbolName)
                             .frame(width: 18)
+                            .accessibilityHidden(true)
                             .foregroundStyle(item.isEnabled ? palette.chromeAccent.swiftUIColor : palette.secondaryForeground.swiftUIColor)
                         Text(item.title)
                             .foregroundStyle(item.isEnabled ? palette.chromeForeground.swiftUIColor : palette.secondaryForeground.swiftUIColor)
                         Spacer(minLength: 12)
                         if let badge = item.shortcutBadge {
                             Text(badge)
-                                .font(.caption.monospaced().weight(.semibold))
+                                .appFont(.caption, weight: .semibold, monospaced: true)
                                 .foregroundStyle(palette.chromeForeground.swiftUIColor)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -262,7 +263,7 @@ public struct HeaderBrandSubmenuView: View {
             onDismiss?()
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("PH.SwiftEdit command menu")
+        .accessibilityLabel("SwiftEdit command menu")
     }
 }
 #endif

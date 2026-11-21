@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # build-app.sh
-# Synchronizes Info.plist via stamp-info-plist.sh and performs a full macOS
-# application build of PH.SwiftEdit via xcodebuild.
+# Synchronizes Info.plist via stamp-info-plist.sh, builds a macOS Release
+# (default) bundle of PH.SwiftEdit (producing SwiftEdit.app), and stages it
+# inside local build/<FULL_VERSION>/SwiftEdit.app (gitignored).
 #
 # Usage:
 #   ./Scripts/build-app.sh [--configuration <Debug|Release>] [--clean] [--derived-data <path>] [--dry-run] [--help]
 #
 # Exit Codes:
-#   0 - Info.plist stamped and application build succeeded
+#   0 - Info.plist stamped, application built, and staged into build/<FULL_VERSION>/
 #   1 - Invalid arguments, missing files/tools, or build failure
 # ==============================================================================
 set -euo pipefail
@@ -27,6 +28,21 @@ Options:
 EOF
 }
 
+resolve_full_version() {
+    local version_json="$1"
+    [[ -f "$version_json" ]] || {
+        printf 'Error: version.json not found at %s\n' "$version_json" >&2
+        exit 1
+    }
+    local full_version
+    full_version="$(/usr/bin/plutil -extract version raw -o - "$version_json" | tr -d '[:space:]')"
+    if [[ -z "$full_version" || "$full_version" == *".."* || "$full_version" == *"/"* ]]; then
+        printf 'Error: invalid version "%s" in %s\n' "$full_version" "$version_json" >&2
+        exit 1
+    fi
+    printf '%s' "$full_version"
+}
+
 main() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +50,7 @@ main() {
     repo_root="$(cd "${script_dir}/.." && pwd)"
 
     local readonly_stamp_script="${script_dir}/stamp-info-plist.sh"
+    local readonly_version_json="${repo_root}/version.json"
     local readonly_xcodeproj="${repo_root}/XcodeApp/PH.SwiftEdit.xcodeproj"
     local readonly_scheme="PH.SwiftEdit"
     local readonly_destination="platform=macOS"
@@ -90,7 +107,11 @@ main() {
         exit 1
     }
 
-    printf '==> Step 1/2: Stamping Info.plist...\n'
+    local full_version
+    full_version="$(resolve_full_version "$readonly_version_json")"
+    local stage_dir="${repo_root}/build/${full_version}"
+
+    printf '==> Step 1/3: Stamping Info.plist (version %s)...\n' "$full_version"
     if [[ "$dry_run" == "true" ]]; then
         "$readonly_stamp_script" --dry-run
     else
@@ -113,11 +134,12 @@ main() {
     fi
     xcodebuild_args+=(build)
 
-    printf '==> Step 2/2: Building %s (%s)...\n' "$readonly_scheme" "$configuration"
+    printf '==> Step 2/3: Building %s (%s -> SwiftEdit.app)...\n' "$readonly_scheme" "$configuration"
     if [[ "$dry_run" == "true" ]]; then
         printf '[dry-run] xcodebuild'
         printf ' %q' "${xcodebuild_args[@]}"
         printf '\n'
+        printf '[dry-run] Stage %s app into %s/SwiftEdit.app\n' "$configuration" "$stage_dir"
         return 0
     fi
 
@@ -129,9 +151,18 @@ main() {
     local product_name=""
     target_dir="$(printf '%s\n' "$build_settings" | awk -F ' = ' '/^[[:space:]]*TARGET_BUILD_DIR = / { print $2; exit }')"
     product_name="$(printf '%s\n' "$build_settings" | awk -F ' = ' '/^[[:space:]]*FULL_PRODUCT_NAME = / { print $2; exit }')"
-    if [[ -n "$target_dir" && -n "$product_name" ]]; then
-        printf '==> Build complete: %s/%s\n' "$target_dir" "$product_name"
-    fi
+
+    [[ -n "$target_dir" && -n "$product_name" && -d "${target_dir}/${product_name}" ]] || {
+        printf 'Error: built product not found at %s/%s\n' "$target_dir" "$product_name" >&2
+        exit 1
+    }
+
+    printf '==> Step 3/3: Staging %s into %s/%s...\n' "$product_name" "$stage_dir" "$product_name"
+    local staged_app="${stage_dir}/${product_name}"
+    mkdir -p "$stage_dir"
+    rm -rf "$staged_app"
+    ditto "${target_dir}/${product_name}" "$staged_app"
+    printf '==> Build complete (%s): %s\n' "$configuration" "$staged_app"
 }
 
 main "$@"

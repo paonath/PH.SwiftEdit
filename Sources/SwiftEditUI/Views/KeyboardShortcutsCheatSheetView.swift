@@ -37,7 +37,7 @@ public enum KeyboardShortcutsCheatSheetCatalog {
             KeyboardShortcutDescriptor(title: "Save", shortcut: "Cmd+S", summary: "Atomically save preserving UTF-8 and LF/CRLF/CR"),
             KeyboardShortcutDescriptor(title: "Save As", shortcut: "Cmd+Shift+S", summary: "Save the active document to a new path"),
             KeyboardShortcutDescriptor(title: "Close Document", shortcut: "Cmd+W", summary: "Close the active tab (prompts if unsaved)"),
-            KeyboardShortcutDescriptor(title: "Quit PH.SwiftEdit", shortcut: "Cmd+Q", summary: "Quit application (prompts if any tab has unsaved edits)"),
+            KeyboardShortcutDescriptor(title: "Quit SwiftEdit", shortcut: "Cmd+Q", summary: "Quit application (prompts if any tab has unsaved edits)"),
         ]),
         KeyboardShortcutSection(category: "Edit", items: [
             KeyboardShortcutDescriptor(title: "Undo", shortcut: "Cmd+Z", summary: "Undo the previous text edit"),
@@ -70,14 +70,15 @@ public enum KeyboardShortcutsCheatSheetCatalog {
             KeyboardShortcutDescriptor(title: "Toggle Markdown Preview", shortcut: "Cmd+P", summary: "Show or hide the native Markdown preview (off by default)"),
             KeyboardShortcutDescriptor(title: "Toggle File Compare Diff", shortcut: "Header Menu", summary: "Toggle side-by-side Myers diff against saved baseline"),
             KeyboardShortcutDescriptor(title: "Toggle Markdown Diagnostics", shortcut: "Shift+Cmd+M", summary: "Open the Markdown lint diagnostics popover with Jump-to-Range and Fix All"),
-            KeyboardShortcutDescriptor(title: "Document Navigator", shortcut: "Option+\\", summary: "Heading palette for the current Markdown tab (Esc or Option+\\ closes)"),
+            KeyboardShortcutDescriptor(title: "Document Navigator", shortcut: "Option+\\", summary: "Heading/key palette for the current Markdown or YAML tab (Esc or Option+\\ closes)"),
             KeyboardShortcutDescriptor(title: "Distraction-Free", shortcut: "Option+1", summary: "Full-screen editor only; Esc or Option+1 restores the layout"),
             KeyboardShortcutDescriptor(title: "Keyboard Shortcuts CheatSheet", shortcut: "Cmd+/", summary: "Open graphical keyboard shortcuts reference"),
         ]),
         KeyboardShortcutSection(category: "Sidebar", items: [
             KeyboardShortcutDescriptor(title: "Parent Folder", shortcut: "...", summary: "Ascend to parent directory when user permissions allow"),
+            KeyboardShortcutDescriptor(title: "Open Sidebar Folder", shortcut: "Double-Click", summary: "Single-click selects a folder; double-click opens it (Finder-style)"),
             KeyboardShortcutDescriptor(title: "Pin / Collapse Sidebar", shortcut: "Pin / Cmd+B", summary: "Collapse or pin the percentage-resized left navigation panel"),
-            KeyboardShortcutDescriptor(title: "Sidebar Context Actions", shortcut: "Right-Click", summary: "New File/Folder prompt (rows & empty space), Reveal/Open in Finder, Open Terminal/iTerm2, Cut/Copy/Paste/Rename/Trash"),
+            KeyboardShortcutDescriptor(title: "Sidebar Context Actions", shortcut: "Right-Click", summary: "New File/Folder prompt (rows & empty space), Reveal/Open in Finder, Open Terminal/iTerm2, Copy Path to Clipboard, Cut/Copy/Paste/Rename/Trash"),
             KeyboardShortcutDescriptor(title: "Reorder Tabs", shortcut: "Drag / Context", summary: "Drag tabs left or right or use tab Move Left / Move Right actions"),
         ]),
     ]
@@ -98,7 +99,7 @@ public struct KeyboardShortcutsCheatSheetView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Keyboard Shortcuts CheatSheet")
-                    .font(.title3.weight(.semibold))
+                    .appFont(.title3, weight: .semibold)
                 Spacer()
                 Button("Close") { onClose() }
                     .keyboardShortcut(.cancelAction)
@@ -108,12 +109,12 @@ public struct KeyboardShortcutsCheatSheetView: View {
                     ForEach(KeyboardShortcutsCheatSheetCatalog.allSections, id: \.category) { section in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(section.category)
-                                .font(.headline)
+                                .appFont(.headline)
                                 .foregroundStyle(palette.secondaryForeground.swiftUIColor)
                             ForEach(section.items, id: \.title) { item in
                                 HStack(spacing: 12) {
                                     Text(item.shortcut)
-                                        .font(.callout.monospaced().weight(.semibold))
+                                        .appFont(.callout, weight: .semibold, monospaced: true)
                                         .foregroundStyle(palette.chromeForeground.swiftUIColor)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 3)
@@ -125,11 +126,11 @@ public struct KeyboardShortcutsCheatSheetView: View {
                                         .clipShape(RoundedRectangle(cornerRadius: 4))
                                         .frame(width: 175, alignment: .leading)
                                     Text(item.title)
-                                        .font(.callout.weight(.medium))
+                                        .appFont(.callout, weight: .medium)
                                         .foregroundStyle(palette.chromeForeground.swiftUIColor)
                                         .frame(width: 210, alignment: .leading)
                                     Text(item.summary)
-                                        .font(.caption)
+                                        .appFont(.caption)
                                         .foregroundStyle(palette.secondaryForeground.swiftUIColor)
                                     Spacer()
                                 }

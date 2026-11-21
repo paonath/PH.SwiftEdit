@@ -18,7 +18,7 @@
 		200000020000000200000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		200000030000000300000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		200000040000000400000004 /* PH.SwiftEdit.macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PH.SwiftEdit.macOS.entitlements; sourceTree = "<group>"; };
-		200000050000000500000005 /* PH.SwiftEdit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PH.SwiftEdit.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000050000000500000005 /* SwiftEdit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SwiftEdit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -48,7 +48,7 @@
 		400000020000000200000002 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				200000050000000500000005 /* PH.SwiftEdit.app */,
+				200000050000000500000005 /* SwiftEdit.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -74,8 +74,8 @@
 				500000010000000100000001 /* SwiftEditCore */,
 				500000020000000200000002 /* SwiftEditUI */,
 			);
-			productName = PH.SwiftEdit;
-			productReference = 200000050000000500000005 /* PH.SwiftEdit.app */;
+			productName = SwiftEdit;
+			productReference = 200000050000000500000005 /* SwiftEdit.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -188,7 +188,7 @@
 				INFOPLIST_FILE = Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = it.ph.SwiftEdit;
-				PRODUCT_NAME = PH.SwiftEdit;
+				PRODUCT_NAME = SwiftEdit;
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
 			};
@@ -207,7 +207,7 @@
 				INFOPLIST_FILE = Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = it.ph.SwiftEdit;
-				PRODUCT_NAME = PH.SwiftEdit;
+				PRODUCT_NAME = SwiftEdit;
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
 			};

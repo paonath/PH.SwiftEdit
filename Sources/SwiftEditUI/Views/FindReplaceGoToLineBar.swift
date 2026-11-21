@@ -92,7 +92,7 @@ public struct FindReplaceGoToLineBar: View {
                 HStack(spacing: 8) {
                     if state.mode == .goToLine {
                         Text("Go to Line:")
-                            .font(.caption.weight(.semibold))
+                            .appFont(.caption, weight: .semibold)
                         TextField("Line number (1...)", text: $state.goToLineText)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 140)
@@ -113,7 +113,7 @@ public struct FindReplaceGoToLineBar: View {
                         Button("▶") { onFindNext() }
                             .disabled(state.matches.isEmpty)
                         Text("\(state.matches.count) match(es)")
-                            .font(.caption.monospacedDigit())
+                            .appFont(.caption, monospaced: true)
                         if state.mode == .findAndReplace {
                             TextField("Replace…", text: $state.replacement)
                                 .textFieldStyle(.roundedBorder)

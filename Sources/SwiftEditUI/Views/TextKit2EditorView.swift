@@ -174,6 +174,11 @@ struct TextKit2EditorView: NSViewRepresentable {
     var editorFocusRequestToken: Int = 0
     var onViewportMetricsChange: ((GutterViewportMetrics) -> Void)? = nil
     var onEscape: () -> Bool = { false }
+    /// Font resolver and its change counter (`REQ-008`); a new generation restyles the canvas and GFM/YAML faces.
+    var typography: AppTypography = AppTypography.fallback
+    var typographyGeneration: Int = 0
+    /// Shared per-revision line index owned by the workbench (`PERF-017-B3`).
+    var lineIndexProvider: ((DocumentID, BufferRevision) -> MarkdownLineIndex?)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -219,6 +224,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         scrollView.documentView = textView
         scrollView.contentView.postsBoundsChangedNotifications = true
         context.coordinator.onViewportMetricsChange = onViewportMetricsChange
+        context.coordinator.lineIndexProvider = lineIndexProvider
         context.coordinator.observeScrollBounds(of: scrollView, textView: textView)
         installGFMValidator(on: textView, coordinator: context.coordinator)
         return scrollView
@@ -244,11 +250,12 @@ struct TextKit2EditorView: NSViewRepresentable {
         coordinator.onListIndent = onListIndent
         coordinator.onTableTab = onTableTab
         coordinator.onViewportMetricsChange = onViewportMetricsChange
+        coordinator.lineIndexProvider = lineIndexProvider
         coordinator.undoRegistry = undoRegistry
         coordinator.activeBufferRevision = bufferRevision
         coordinator.syntaxLanguage = documentLanguage
         coordinator.gfmPalette = palette
-        coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints)
+        coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints, typography: typography, generation: typographyGeneration)
 
         let stylingChanged = applyStylingIfNeeded(to: textView, in: scrollView, coordinator: coordinator, force: false)
 
@@ -306,7 +313,7 @@ struct TextKit2EditorView: NSViewRepresentable {
     private func installGFMValidator(on textView: SwiftEditNSTextView, coordinator: Coordinator) {
         coordinator.syntaxLanguage = documentLanguage
         coordinator.gfmPalette = palette
-        coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints)
+        coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints, typography: typography, generation: typographyGeneration)
         textView.textLayoutManager?.renderingAttributesValidator = { [weak coordinator, weak textView] layoutManager, fragment in
             guard let coordinator, let textView, coordinator.syntaxLanguage != .plainText,
                   let contentManager = layoutManager.textContentManager else { return }
@@ -347,13 +354,15 @@ struct TextKit2EditorView: NSViewRepresentable {
         if !force,
            coordinator.lastStyledPalette == palette,
            coordinator.lastStyledFontSize == fontSizePoints,
+           coordinator.lastStyledTypographyGeneration == typographyGeneration,
            coordinator.lastStyledIsEditable == isEditable {
             return false
         }
         coordinator.lastStyledPalette = palette
         coordinator.lastStyledFontSize = fontSizePoints
+        coordinator.lastStyledTypographyGeneration = typographyGeneration
         coordinator.lastStyledIsEditable = isEditable
-        coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints)
+        coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints, typography: typography, generation: typographyGeneration)
 
         let editorFont = coordinator.cachedRegularFont
         let canvasBg = palette.editorCanvasBackground.nsColor
@@ -506,21 +515,29 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
         }
 
-        // 3b. Lint dotted underlines (`>= 3.0:1` tokens): draw warnings then errors without allocating/sorting.
+        // 3b. Prominent lint underlines + tinted range background (`>= 3.0:1` tokens): draw warnings then errors without allocating/sorting.
         if !lintDiagnostics.isEmpty {
-            let warnStyle = NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.single.rawValue
+            let warnStyle = NSUnderlineStyle.thick.rawValue | NSUnderlineStyle.patternDot.rawValue
             let warnColor = palette.bidiWarningForeground.nsColor
-            let errStyle = NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.thick.rawValue
+            let warnBackground = warnColor.withAlphaComponent(0.18)
+            let errStyle = NSUnderlineStyle.thick.rawValue
             let errColor = palette.unbalancedBracketHighlight.nsColor
+            let errBackground = errColor.withAlphaComponent(0.24)
             for diagnostic in lintDiagnostics where diagnostic.severity == .warning {
-                guard let range = diagnostic.range, let nsRange = makeTextRange(location: range.location, length: min(range.length, 1_024)) else { continue }
+                guard let range = diagnostic.range else { continue }
+                let spanLength = range.length > 0 ? min(range.length, 1_024) : 1
+                guard let nsRange = makeTextRange(location: range.location, length: spanLength) else { continue }
                 layoutManager.addRenderingAttribute(.underlineStyle, value: warnStyle, for: nsRange)
                 layoutManager.addRenderingAttribute(.underlineColor, value: warnColor, for: nsRange)
+                layoutManager.addRenderingAttribute(.backgroundColor, value: warnBackground, for: nsRange)
             }
             for diagnostic in lintDiagnostics where diagnostic.severity == .error {
-                guard let range = diagnostic.range, let nsRange = makeTextRange(location: range.location, length: min(range.length, 1_024)) else { continue }
+                guard let range = diagnostic.range else { continue }
+                let spanLength = range.length > 0 ? min(range.length, 1_024) : 1
+                guard let nsRange = makeTextRange(location: range.location, length: spanLength) else { continue }
                 layoutManager.addRenderingAttribute(.underlineStyle, value: errStyle, for: nsRange)
                 layoutManager.addRenderingAttribute(.underlineColor, value: errColor, for: nsRange)
+                layoutManager.addRenderingAttribute(.backgroundColor, value: errBackground, for: nsRange)
             }
         }
 
@@ -600,6 +617,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         var cachedItalicFont: NSFont { cachedFonts.italic }
         var lastStyledPalette: PurpleThemePalette?
         var lastStyledFontSize: Double?
+        var lastStyledTypographyGeneration: Int?
         var lastStyledIsEditable: Bool?
         var lastSyncedBufferRevision: BufferRevision?
         var hasPendingLocalEdit = false
@@ -620,10 +638,14 @@ struct TextKit2EditorView: NSViewRepresentable {
         private var cachedIndexRevision: BufferRevision?
         private var cachedIndexLength = -1
 
-        func updateGFMFontsIfNeeded(fontSizePoints: Double) {
-            guard gfmFontSize != fontSizePoints else { return }
+        var gfmTypographyGeneration = -1
+
+        /// Rebuilds editor faces only when the zoomed size or the typography generation changed.
+        func updateGFMFontsIfNeeded(fontSizePoints: Double, typography: AppTypography, generation: Int) {
+            guard gfmFontSize != fontSizePoints || gfmTypographyGeneration != generation else { return }
             gfmFontSize = fontSizePoints
-            cachedFonts = EditorRenderingFonts(fontSizePoints: fontSizePoints)
+            gfmTypographyGeneration = generation
+            cachedFonts = EditorRenderingFonts(fontSizePoints: fontSizePoints, typography: typography)
         }
 
         func markSynced(documentID: DocumentID, revision: BufferRevision) {
@@ -662,6 +684,11 @@ struct TextKit2EditorView: NSViewRepresentable {
                 scrollBoundsObserver = nil
             }
         }
+
+        /// Upper bound on gutter rows sampled per pass (`F-017-01`): before the first viewport layout, TextKit 2 reports zero-height
+        /// fragment frames, so a "past the visible rect" stop condition never fires and the whole document (20k lines → 20k SwiftUI
+        /// rows, 1.1 GB) was enumerated. 512 rows covers a 4K-tall window at 50 % zoom.
+        static let maxGutterLineMetrics = 512
 
         func emitViewportMetrics(for scrollView: NSScrollView, textView: NSTextView) {
             guard let onViewportMetricsChange else { return }
@@ -775,7 +802,7 @@ struct TextKit2EditorView: NSViewRepresentable {
                     metrics.append(GutterLineMetric(lineNumber: currentLine, minY: minY, height: frame.height))
                 }
                 currentLine += 1
-                if frame.minY > visibleRect.maxY + 64 {
+                if frame.minY > visibleRect.maxY + 64 || metrics.count >= maxGutterLineMetrics {
                     return false
                 }
                 return true
@@ -855,9 +882,17 @@ struct TextKit2EditorView: NSViewRepresentable {
             return textView.string
         }
 
-        /// Validator line index built from native text instead of re-bridging `textView.string` on every revision.
+        var lineIndexProvider: ((DocumentID, BufferRevision) -> MarkdownLineIndex?)?
+
+        /// Validator line index: the workbench's shared per-revision index when it matches the storage, otherwise one
+        /// built from native text instead of re-bridging `textView.string` on every revision.
         func renderingLineIndex(for textView: NSTextView, documentID: DocumentID?, revision: BufferRevision?) -> MarkdownLineIndex {
-            lineIndex(textProvider: { currentNativeText(of: textView) }, expectedLength: textView.textStorage?.length ?? 0, documentID: documentID, revision: revision)
+            let length = textView.textStorage?.length ?? 0
+            if let documentID, let revision, !hasPendingLocalEdit,
+               let shared = lineIndexProvider?(documentID, revision), shared.units.count == length {
+                return shared
+            }
+            return lineIndex(textProvider: { currentNativeText(of: textView) }, expectedLength: length, documentID: documentID, revision: revision)
         }
 
         /// `true` when the editor already shows `text`; compares native storage (memcmp) instead of a bridged `O(N)` walk.
@@ -978,11 +1013,20 @@ struct EditorRenderingFonts {
     /// YAML keys use a lighter (not ultra-light) weight to read as secondary while staying legible at `50%` zoom (`REQ-010`).
     let yamlKey: NSFont
 
+    /// Editor faces resolved through `AppTypography` (`REQ-008`); the YAML key face uses a lighter weight (`REQ-010`).
+    @MainActor
+    init(fontSizePoints: Double, typography: AppTypography) {
+        let size = CGFloat(fontSizePoints)
+        regular = typography.nsFont(.editor, size: size)
+        bold = typography.nsFont(.editor, size: size, weight: .bold)
+        italic = typography.nsFont(.editor, size: size, italic: true)
+        yamlKey = typography.nsFont(.editor, size: size, weight: .light)
+    }
+
+    /// Default-choice faces (monospaced system font).
+    @MainActor
     init(fontSizePoints: Double) {
-        regular = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .regular)
-        bold = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .bold)
-        italic = NSFontManager.shared.convert(regular, toHaveTrait: .italicFontMask)
-        yamlKey = NSFont.monospacedSystemFont(ofSize: fontSizePoints, weight: .light)
+        self.init(fontSizePoints: fontSizePoints, typography: AppTypography.fallback)
     }
 }
 
@@ -1001,7 +1045,7 @@ enum EditorRenderingAttributes {
         case .inlineCode, .codeBlock:
             return [(.backgroundColor, palette.backtickInlineBackground.nsColor)]
         case .link, .image:
-            return [(.underlineStyle, NSUnderlineStyle.single.rawValue), (.foregroundColor, palette.primaryAccent.nsColor)]
+            return [(.underlineStyle, NSUnderlineStyle.single.rawValue), (.foregroundColor, palette.linkForeground.nsColor)]
         case .inlineHTML:
             return [(.foregroundColor, palette.inertHTMLWarningForeground.nsColor)]
         case .task, .blockquote, .tableRow, .thematicBreak, .yamlPunctuation, .yamlComment:

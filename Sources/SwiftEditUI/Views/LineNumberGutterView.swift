@@ -180,13 +180,17 @@ public struct LineNumberGutterView: View {
     /// Worst lint severity per 1-based line; rendered as an `O(1)` badge dot with tooltip and VoiceOver text.
     public let severityByLine: [Int: MarkdownLintSeverity]
     public var viewportMetrics: GutterViewportMetrics?
+    /// Zoom- and font-driven width (`ZoomedChromeMetrics.gutterWidth`).
+    public var width: CGFloat
 
     public init(
         projection: LineNumberGutterProjection,
         palette: PurpleThemePalette,
         severityByLine: [Int: MarkdownLintSeverity] = [:],
-        viewportMetrics: GutterViewportMetrics? = nil
+        viewportMetrics: GutterViewportMetrics? = nil,
+        width: CGFloat = 52
     ) {
+        self.width = width
         self.projection = projection
         self.palette = palette
         self.severityByLine = severityByLine
@@ -219,7 +223,7 @@ public struct LineNumberGutterView: View {
                 }
             }
         }
-        .frame(minWidth: 52, maxWidth: 68)
+        .frame(width: width)
         .background(palette.gutterSurface.swiftUIColor)
         .purpleHairlineBorder(palette: palette, edge: .trailing)
         .accessibilityElement(children: .contain)
@@ -229,19 +233,32 @@ public struct LineNumberGutterView: View {
     @ViewBuilder
     private func lineRow(lineNumber: Int) -> some View {
         let isActive = lineNumber == projection.activeLine
+        let severity = severityByLine[lineNumber]
         let token = isActive ? palette.gutterActiveForeground : palette.gutterForeground
-        HStack(spacing: 3) {
-            if let severity = severityByLine[lineNumber] {
+        let severityColor = severity.map { ($0 == .error ? palette.unbalancedBracketHighlight : palette.bidiWarningForeground).swiftUIColor }
+        HStack(spacing: 4) {
+            if let severityColor, let severity {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(severityColor)
+                    .frame(width: 3, height: max(12, projection.fontSizePoints * 0.95))
+                    .accessibilityHidden(true)
                 Circle()
-                    .fill((severity == .error ? palette.unbalancedBracketHighlight : palette.bidiWarningForeground).swiftUIColor)
-                    .frame(width: 6, height: 6)
+                    .fill(severityColor)
+                    .frame(width: 8, height: 8)
                     .help(severity == .error ? "Markdown lint error on this line" : "Markdown lint warning on this line")
                     .accessibilityLabel(severity == .error ? "Lint error" : "Lint warning")
             }
             Text("\(lineNumber)")
-                .font(.system(size: projection.fontSizePoints, weight: isActive ? .semibold : .regular, design: .monospaced))
+                .appFont(size: projection.fontSizePoints, weight: (isActive || severity != nil) ? .semibold : .regular, monospaced: true, role: .editor)
                 .foregroundStyle(token.swiftUIColor)
         }
+        .padding(.horizontal, severity == nil ? 0 : 2)
+        .background(
+            severityColor.map { color in
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(color.opacity(severity == .error ? 0.16 : 0.12))
+            }
+        )
         .frame(minWidth: 36, alignment: .trailing)
     }
 }

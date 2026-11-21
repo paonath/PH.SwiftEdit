@@ -82,7 +82,7 @@ struct PropertiesPanelView: View {
                 state.isCollapsed.toggle()
             } label: {
                 Label("Properties (\(rows.count))", systemImage: state.isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.caption.weight(.semibold))
+                    .appFont(.caption, weight: .semibold)
                     .foregroundStyle(palette.secondaryForeground.swiftUIColor)
             }
             .buttonStyle(.plain)
@@ -92,7 +92,7 @@ struct PropertiesPanelView: View {
             if !state.isCollapsed {
                 if propertiesModel?.isReadOnly == true {
                     Text("Frontmatter is read-only: unterminated, malformed or unsupported YAML.")
-                        .font(.caption)
+                        .appFont(.caption)
                         .foregroundStyle(palette.secondaryForeground.swiftUIColor)
                 }
                 ForEach(rows) { row in rowView(row, palette: palette) }
@@ -110,7 +110,7 @@ struct PropertiesPanelView: View {
 
     private func keyText(_ key: String, palette: PurpleThemePalette) -> some View {
         Text(verbatim: key)
-            .font(.system(size: 12, weight: .light, design: .monospaced))
+            .appFont(size: 12, weight: .light, monospaced: true)
             .foregroundStyle(palette.yamlKeyForeground.swiftUIColor)
             .frame(width: 140, alignment: .leading)
             .lineLimit(1)
@@ -126,7 +126,7 @@ struct PropertiesPanelView: View {
                     set: { drafts[row.key] = $0 }
                 ))
                 .textFieldStyle(.plain)
-                .font(.system(size: 12, design: .monospaced))
+                .appFont(size: 12, monospaced: true)
                 .foregroundStyle(palette.editorCanvasText.swiftUIColor)
                 .onSubmit { commit(row) }
                 .onExitCommand { drafts[row.key] = nil }
@@ -139,7 +139,7 @@ struct PropertiesPanelView: View {
                 .accessibilityLabel("Remove \(row.key)")
             } else {
                 Text(verbatim: row.displayValue)
-                    .font(.system(size: 12, design: .monospaced))
+                    .appFont(size: 12, monospaced: true)
                     .foregroundStyle(palette.editorCanvasText.swiftUIColor)
                 Image(systemName: "lock")
                     .foregroundStyle(palette.secondaryForeground.swiftUIColor)
@@ -155,13 +155,13 @@ struct PropertiesPanelView: View {
         HStack(spacing: 8) {
             TextField("new key", text: $newKey)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12, weight: .light, design: .monospaced))
+                .appFont(size: 12, weight: .light, monospaced: true)
                 .foregroundStyle(palette.yamlKeyForeground.swiftUIColor)
                 .frame(width: 140)
                 .accessibilityLabel("New property key")
             TextField("value", text: $newValue)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12, design: .monospaced))
+                .appFont(size: 12, monospaced: true)
                 .onSubmit(addProperty)
                 .accessibilityLabel("New property value")
             Button("Add", action: addProperty)

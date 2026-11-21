@@ -8,14 +8,34 @@ import Foundation
 public enum YAMLOutlineEngine {
     public static func outline(index: MarkdownLineIndex) -> [MarkdownHeading] {
         var result: [MarkdownHeading] = []
-        for line in 0..<index.lineCount {
+        let units = index.units
+        let unitCount = units.count
+        let starts = index.lineStarts
+        let lineCount = starts.count
+        for line in 0..<lineCount {
             guard result.count < YAMLSupportLimits.maxOutlineEntries else { break }
-            let slice = index.lineSlice(line)
-            guard let first = slice.first, first != YAMLLineTokenizer.space, first != YAMLLineTokenizer.tab else { continue }
-            guard let key = YAMLLineTokenizer.tokens(line: slice).first, key.kind == .key, key.range.location == 0 else { continue }
-            let units = slice[slice.startIndex..<(slice.startIndex + key.range.length)]
-            let title = String(decoding: units, as: UTF16.self)
-            result.append(MarkdownHeading(level: 1, title: title, utf16Offset: index.lineStarts[line], kind: .yamlKey))
+            let start = starts[line]
+            guard start < unitCount else { continue }
+            let first = units[start]
+            guard first != YAMLLineTokenizer.space,
+                  first != YAMLLineTokenizer.tab,
+                  first != YAMLLineTokenizer.hash else { continue }
+            let rawEnd = line + 1 < lineCount ? starts[line + 1] - 1 : unitCount
+            var end = max(start, rawEnd)
+            if end > start, units[end - 1] == YAMLLineTokenizer.cr { end -= 1 }
+            guard end - start <= YAMLSupportLimits.maxLineUTF16 else { continue }
+            if end - start >= 3, (first == YAMLLineTokenizer.dash || first == YAMLLineTokenizer.dot),
+               units[start + 1] == first, units[start + 2] == first,
+               end - start == 3 || YAMLLineTokenizer.isBlank(units[start + 3]) {
+                continue
+            }
+            if first == YAMLLineTokenizer.dash, start + 1 == end || YAMLLineTokenizer.isBlank(units[start + 1]) {
+                continue
+            }
+            let slice = units[start..<end]
+            guard let keyEnd = YAMLLineTokenizer.keyEnd(slice, from: start, end: end) else { continue }
+            let title = String(decoding: units[start..<keyEnd.keyUpper], as: UTF16.self)
+            result.append(MarkdownHeading(level: 1, title: title, utf16Offset: start, kind: .yamlKey))
         }
         return result
     }

@@ -28,19 +28,37 @@ public enum MarkdownHeadingOutlineEngine {
     public static let maxHeadings = 5000
 
     public static func outline(for text: String) -> [MarkdownHeading] {
-        let index = MarkdownLineIndex(text: text)
-        let skipFrontLines = YAMLFrontmatterScanner.maskedLineCount(in: index)
+        outline(index: MarkdownLineIndex(text: text))
+    }
+
+    /// Variant reusing a revision-cached `MarkdownLineIndex` (`PERF-017-B3`).
+    public static func outline(index: MarkdownLineIndex) -> [MarkdownHeading] {
+        let skipFrontLines = index.frontmatterLineCount
         var fenceCursor = 0
         var result: [MarkdownHeading] = []
+        let units = index.units
+        let unitCount = units.count
+        let starts = index.lineStarts
+        let lineCount = starts.count
+        let fences = index.fences
         var line = skipFrontLines
-        while line < index.lineCount, result.count < maxHeadings {
+        while line < lineCount, result.count < maxHeadings {
             // Fences are ordered; skip whole fenced ranges.
-            while fenceCursor < index.fences.count, index.fences[fenceCursor].close < line { fenceCursor += 1 }
-            if fenceCursor < index.fences.count, index.fences[fenceCursor].open <= line {
-                line = index.fences[fenceCursor].close + 1
+            while fenceCursor < fences.count, fences[fenceCursor].close < line { fenceCursor += 1 }
+            if fenceCursor < fences.count, fences[fenceCursor].open <= line {
+                line = fences[fenceCursor].close + 1
                 continue
             }
-            if let heading = parse(index.lineSlice(line), offset: index.lineStarts[line]) { result.append(heading) }
+            let start = starts[line]
+            if start < unitCount {
+                let first = units[start]
+                if first == 0x23 || first == 0x20 {
+                    let end = line + 1 < lineCount ? starts[line + 1] - 1 : unitCount
+                    if let heading = parse(units[start..<max(start, end)], offset: start) {
+                        result.append(heading)
+                    }
+                }
+            }
             line += 1
         }
         return result
@@ -76,7 +94,10 @@ public enum MarkdownHeadingOutlineEngine {
         // Trim leading/trailing ASCII space/tab before decoding to String.
         while i < end, slice[i] == 0x20 || slice[i] == 0x09 { i += 1 }
         while end > i, slice[end - 1] == 0x20 || slice[end - 1] == 0x09 { end -= 1 }
-        let title = String(decoding: slice[i..<end], as: UTF16.self).trimmingCharacters(in: .whitespaces)
+        let rawTitle = String(decoding: slice[i..<end], as: UTF16.self)
+        let title = (i < end && (slice[i] >= 0x80 || slice[end - 1] >= 0x80))
+            ? rawTitle.trimmingCharacters(in: .whitespaces)
+            : rawTitle
         return MarkdownHeading(level: level, title: title, utf16Offset: offset)
     }
 }

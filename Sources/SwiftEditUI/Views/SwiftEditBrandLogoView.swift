@@ -95,6 +95,6 @@ public struct SwiftEditBrandLogoView: View {
             )
         }
         .frame(width: size, height: size)
-        .accessibilityLabel("PH.SwiftEdit Brand Logo")
+        .accessibilityLabel("SwiftEdit Brand Logo")
     }
 }

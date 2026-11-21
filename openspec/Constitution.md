@@ -1,8 +1,8 @@
 ---
 project_name: "PH.SwiftEdit"
-version: "1.3.0"
+version: "1.5.0"
 ratified: "2026-11-17"
-last_amended: "2026-11-18"
+last_amended: "2026-11-21"
 primary_stack: "Swift 6.4+ / macOS 26+ & iOS 26+ Readiness (SwiftPM + SwiftUI + TextKit 2)"
 spec_root: "openspec"
 single_reference_lock: true
@@ -20,7 +20,7 @@ single_reference_lock: true
 | `04-data-persistence/` | `DATA` | `active` | `constitution/04-data-persistence/index.md` | `swift-macos-expert`, `cyber-security-expert` | Zero DB, explicit `Cmd+S` (`LF`/`CRLF`/`CR`), `10` MRU bookmarks, `SessionRecovery` + GC, binary ban (`DATA-001..008`) |
 | `05-api-contracts/` | `API` | `not-applicable` | `constitution/05-api-contracts/index.md` | `spec-sdlc-expert`, `swift-macos-expert`, `cyber-security-expert` | Dormant macOS/iOS IPC guardrails (`AppIntents`/`XPC`/CLI require `MINOR` amendment) (`API-001..008`) |
 | `06-testing-fitness/` | `TEST` | `active` | `constitution/06-testing-fitness/index.md` | `swift-macos-expert`, `test-quality-auditor`, `spec-sdlc-expert` | `[RED]->[GREEN]->[REFACTOR]` via `swift test` (`Swift Testing`), static SwiftPM & `AppIcon` fitness, thin `XCUITest` (`TEST-001..008`) |
-| `07-security-privacy/` | `SEC` | `active` | `constitution/07-security-privacy/index.md` | `cyber-security-expert` | App Sandbox, symlink confinement, zero-socket/zero-subprocess, directory-only `Finder`/`Terminal`/`iTerm2`, `SessionRecovery` (`SEC-001..012`) |
+| `07-security-privacy/` | `SEC` | `active` | `constitution/07-security-privacy/index.md` | `cyber-security-expert` | Sandbox + macOS `network.client` (manual GitHub update check), symlink confinement, directory-only terminals, `SessionRecovery` (`SEC-001..012`) |
 | `08-sdd-governance/` | `SDD` | `active` | `constitution/08-sdd-governance/index.md` | `spec-sdlc-expert`, `qa-agent` | 6-artifact `[<PREFIX>-###]` traceability, structural-first tasks, SemVer amendments, `--converge` (`SDD-001..010`) |
 
 ## Sync Impact Report
@@ -31,3 +31,5 @@ single_reference_lock: true
 | `1.1.0` | `2026-11-17` | `AR-001..014, BC-001..012, UI-001..012, DATA-001..008, TEST-003..008, SEC-001..012 (Rework 1.1)` | `index.yml synced` |
 | `1.2.0` | `2026-11-17` | `AR-001, UI-001, UI-002, TEST-007, SDD-003 (Concept E2 Brand Logo & macOS/iOS AppIcon.appiconset integration)` | `index.yml synced` |
 | `1.3.0` | `2026-11-18` | `UI-001, DATA-004, SEC-004 (Collapsed sidebar, right-col tabs, left LineNumberGutterView, LF/CRLF/CR + 10 MRU, directory-only NSWorkspace Finder/Terminal/iTerm2)` | `index.yml synced` |
+| `1.4.0` | `2026-11-21` | `UI-002 (Monospaced editor typography becomes the default; user-selectable system font or bundled OpenDyslexic for editor and interface)` | `index.yml synced` |
+| `1.5.0` | `2026-11-21` | `SEC-001, SEC-004 (Approved macOS network.client entitlement strictly for user-initiated GitHub Releases HTTPS check; expanded allowlisted macOS terminals)` | `index.yml synced` |

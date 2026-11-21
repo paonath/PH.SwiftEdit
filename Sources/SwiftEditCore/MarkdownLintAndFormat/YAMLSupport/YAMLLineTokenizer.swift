@@ -20,6 +20,14 @@ public struct YAMLToken: Equatable, Sendable {
 /// Lines longer than `YAMLSupportLimits.maxLineUTF16` return no tokens. Unterminated quotes extend to end of line instead
 /// of failing, so malformed input degrades to plain styling and never throws.
 public enum YAMLLineTokenizer {
+    /// Allocation-free structural view of a YAML line for `YAMLStructureLinter`.
+    struct StructuralLine {
+        let isIgnored: Bool
+        let hasDash: Bool
+        let keyRange: TextRange?
+        let endsWithBlockScalar: Bool
+    }
+
     static let space: UInt16 = 0x20, tab: UInt16 = 0x09, hash: UInt16 = 0x23, colon: UInt16 = 0x3A
     static let dash: UInt16 = 0x2D, dot: UInt16 = 0x2E, dquote: UInt16 = 0x22, squote: UInt16 = 0x27
     static let backslash: UInt16 = 0x5C, amp: UInt16 = 0x26, star: UInt16 = 0x2A, bang: UInt16 = 0x21
@@ -28,6 +36,51 @@ public enum YAMLLineTokenizer {
 
     /// `true` for YAML inline whitespace (space or tab).
     @inline(__always) static func isBlank(_ u: UInt16) -> Bool { u == space || u == tab }
+
+    @inline(__always) static func isFlowOrDirectiveIndicator(_ u: UInt16) -> Bool {
+        switch u {
+        case lbracket, lbrace, amp, star, bang, pipe, gt, hash, 0x25, 0x40, 0x60, 0x3F: return true
+        default: return false
+        }
+    }
+
+    /// Allocation-free structural inspection matching `tokens(line:)` semantics for `YAMLStructureLinter`.
+    static func inspectStructure(line: ArraySlice<UInt16>, indent: Int) -> StructuralLine {
+        guard line.count <= YAMLSupportLimits.maxLineUTF16 else {
+            return StructuralLine(isIgnored: true, hasDash: false, keyRange: nil, endsWithBlockScalar: false)
+        }
+        let base = line.startIndex
+        var end = line.endIndex
+        if end > base, line[end - 1] == cr { end -= 1 }
+        if end - base >= 3, (line[base] == dash || line[base] == dot),
+           line[base + 1] == line[base], line[base + 2] == line[base],
+           end - base == 3 || isBlank(line[base + 3]) {
+            return StructuralLine(isIgnored: true, hasDash: false, keyRange: nil, endsWithBlockScalar: false)
+        }
+        var i = base + indent
+        while i < end, isBlank(line[i]) { i += 1 }
+        var hasDash = false
+        while i < end, line[i] == dash, i + 1 == end || isBlank(line[i + 1]) {
+            hasDash = true
+            i += 1
+            while i < end, isBlank(line[i]) { i += 1 }
+        }
+        guard i < end, line[i] != hash else {
+            return StructuralLine(isIgnored: true, hasDash: hasDash, keyRange: nil, endsWithBlockScalar: false)
+        }
+        guard let keyResult = keyEnd(line, from: i, end: end) else {
+            return StructuralLine(isIgnored: false, hasDash: hasDash, keyRange: nil, endsWithBlockScalar: false)
+        }
+        let keyRange = TextRange(location: i - base, length: keyResult.keyUpper - i)
+        var v = keyResult.colon + 1
+        while v < end, isBlank(line[v]) { v += 1 }
+        while v < end, line[v] == amp || line[v] == bang {
+            while v < end, !isBlank(line[v]) { v += 1 }
+            while v < end, isBlank(line[v]) { v += 1 }
+        }
+        let endsWithBlockScalar = v < end && (line[v] == pipe || line[v] == gt)
+        return StructuralLine(isIgnored: false, hasDash: hasDash, keyRange: keyRange, endsWithBlockScalar: endsWithBlockScalar)
+    }
 
     /// Convenience overload for tests and single lines.
     public static func tokens(line: String) -> [YAMLToken] { tokens(line: Array(line.utf16)[...]) }
@@ -85,8 +138,7 @@ public enum YAMLLineTokenizer {
             while k < end, isBlank(line[k]) { k += 1 }
             return k < end && colonTerminates(k) ? (close, k) : nil
         }
-        let indicators: Set<UInt16> = [lbracket, lbrace, amp, star, bang, pipe, gt, hash, 0x25, 0x40, 0x60, 0x3F]
-        guard !indicators.contains(first) else { return nil }
+        guard !isFlowOrDirectiveIndicator(first) else { return nil }
         var k = i
         while k < end {
             if line[k] == hash, k > i, isBlank(line[k - 1]) { return nil }

@@ -17,22 +17,32 @@ public struct DocumentTextIndex: Sendable, Equatable {
     public init(text: String) {
         var starts: [Int] = []
         var crlf: [Bool] = []
+        var hasCRLF = false
         var utf16 = 0
         var scalars = 0
         var native = text
         native.withUTF8 { buf in
-            starts.reserveCapacity(buf.count / 40 + 1)
-            crlf.reserveCapacity(buf.count / 40 + 1)
-            var i = 0
             let count = buf.count
+            starts.reserveCapacity(count / 40 + 1)
+            guard let base = buf.baseAddress else { return }
+            var i = 0
             while i < count {
-                let b = buf[i]
+                let b = base[i]
                 if b == 0x0A {
-                    starts.append(utf16); crlf.append(false)
+                    starts.append(utf16)
+                    if hasCRLF { crlf.append(false) }
                     utf16 += 1; scalars += 1; i += 1
                 } else if b == 0x0D {
-                    let pair = i + 1 < count && buf[i + 1] == 0x0A
-                    starts.append(utf16); crlf.append(pair)
+                    let pair = i + 1 < count && base[i + 1] == 0x0A
+                    if pair && !hasCRLF {
+                        hasCRLF = true
+                        crlf.reserveCapacity(count / 40 + 1)
+                        if !starts.isEmpty {
+                            crlf.append(contentsOf: repeatElement(false, count: starts.count))
+                        }
+                    }
+                    starts.append(utf16)
+                    if hasCRLF { crlf.append(pair) }
                     let step = pair ? 2 : 1
                     utf16 += step; scalars += step; i += step
                 } else if b < 0x80 {
@@ -69,7 +79,7 @@ public struct DocumentTextIndex: Sendable, Equatable {
     public func gutterActiveLine(caret: Int) -> Int {
         let c = min(max(0, caret), utf16Count)
         var k = breaksBefore(c)
-        if k > 0, isCRLF[k - 1], breakStarts[k - 1] + 1 >= c { k -= 1 }
+        if k > 0, !isCRLF.isEmpty, isCRLF[k - 1], breakStarts[k - 1] + 1 >= c { k -= 1 }
         return k + 1
     }
 
@@ -79,7 +89,7 @@ public struct DocumentTextIndex: Sendable, Equatable {
         let k = breaksBefore(caret)
         guard k > 0 else { return (1, caret + 1) }
         let b = breakStarts[k - 1]
-        let lineStart = isCRLF[k - 1] && b + 1 < caret ? b + 2 : b + 1
+        let lineStart = (!isCRLF.isEmpty && isCRLF[k - 1] && b + 1 < caret) ? b + 2 : b + 1
         return (k + 1, caret - lineStart + 1)
     }
 }

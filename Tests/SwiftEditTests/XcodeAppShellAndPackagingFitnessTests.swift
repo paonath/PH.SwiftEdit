@@ -69,9 +69,9 @@ struct XcodeAppShellAndPackagingFitnessTests {
         }
     }
 
-    @Test("N6 [Security]: EntitlementsFitnessValidator rejects missing app-sandbox and forbidden network, files.all, temporary-exception, and library-validation keys")
+    @Test("N6 [Security]: EntitlementsFitnessValidator rejects missing app-sandbox and forbidden network.server, files.all, temporary-exception, and library-validation keys on macOS and network.client on iOS")
     func n6SecurityEntitlementsValidatorRejectsUnsandboxedNetworkAndFilesAllKeys() throws {
-        // GIVEN an over-privileged entitlements plist violating SEC-001, SEC-004, and SEC-008
+        // GIVEN an over-privileged macOS entitlements plist and an iOS plist adding network.client
         let rogueDict: [String: Any] = [
             "com.apple.security.app-sandbox": false,
             "com.apple.security.network.client": true,
@@ -82,17 +82,18 @@ struct XcodeAppShellAndPackagingFitnessTests {
         ]
         let roguePlistData = try PropertyListSerialization.data(fromPropertyList: rogueDict, format: .xml, options: 0)
 
-        // WHEN validating the plist
-        let violations = try EntitlementsFitnessValidator.validate(plistData: roguePlistData, platform: .macOS)
+        // WHEN validating on macOS (allows network.client for GitHub Releases check) and iOS (strictly app-sandbox only)
+        let macViolations = try EntitlementsFitnessValidator.validate(plistData: roguePlistData, platform: .macOS)
+        let iosViolations = try EntitlementsFitnessValidator.validate(plistData: roguePlistData, platform: .iOS)
 
-        // THEN all six security violations are reported in deterministic key order
-        #expect(violations.map(\.key) == [
+        // THEN all five macOS security violations and six iOS violations are reported deterministically
+        #expect(macViolations.map(\.key) == [
             "com.apple.security.app-sandbox",
             "com.apple.security.cs.disable-library-validation",
             "com.apple.security.files.all",
-            "com.apple.security.network.client",
             "com.apple.security.network.server",
             "com.apple.security.temporary-exception.files.absolute-path.read-write",
         ])
+        #expect(iosViolations.contains { $0.key == "com.apple.security.network.client" })
     }
 }

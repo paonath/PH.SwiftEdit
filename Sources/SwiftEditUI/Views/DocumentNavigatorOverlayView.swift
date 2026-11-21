@@ -25,7 +25,7 @@ struct DocumentNavigatorOverlayView: View {
                     set: { model.navigatorState?.setQuery($0) }
                 ))
                 .textFieldStyle(.plain)
-                .font(.system(size: 20))
+                .appFont(size: 20)
                 .padding(14)
                 .focused($queryFocused)
                 .onSubmit { model.confirmDocumentNavigator() }
@@ -66,12 +66,12 @@ struct DocumentNavigatorOverlayView: View {
     private func rowView(_ heading: MarkdownHeading, selected: Bool) -> some View {
         HStack(spacing: 10) {
             Text(verbatim: heading.badge)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .appFont(size: 11, weight: .medium, monospaced: true)
                 .foregroundStyle(.secondary)
                 .opacity(0.6)
                 .frame(width: 30, alignment: .leading)
             Text(verbatim: heading.title.isEmpty ? "(empty)" : String(heading.title.prefix(200)))
-                .font(.system(size: Self.fontSize(forLevel: heading.level), weight: heading.level <= 2 ? .semibold : .regular))
+                .appFont(size: Self.fontSize(forLevel: heading.level), weight: heading.level <= 2 ? .semibold : .regular)
                 .lineLimit(1)
                 .padding(.leading, CGFloat(heading.level - 1) * Self.indentPerLevel)
             Spacer(minLength: 0)

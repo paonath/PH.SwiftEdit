@@ -36,6 +36,10 @@ let package = Package(
             dependencies: [
                 "SwiftEditCore",
             ],
+            resources: [
+                // OpenDyslexic (SIL OFL 1.1, unmodified upstream files, SHA-256 pinned in OpenDyslexicBundle).
+                .copy("Resources/Fonts"),
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
                 .unsafeFlags(["-Xfrontend", "-strict-concurrency=complete"], .when(configuration: .debug)),

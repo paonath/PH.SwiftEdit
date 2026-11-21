@@ -37,5 +37,12 @@ struct SwiftEditApp: App {
             SwiftEditCommands()
         }
         #endif
+
+        #if os(macOS)
+        Settings {
+            // Cmd+, : interface and editor font pickers bound to the active workbench (`REQ-007`).
+            SwiftEditSettingsView()
+        }
+        #endif
     }
 }

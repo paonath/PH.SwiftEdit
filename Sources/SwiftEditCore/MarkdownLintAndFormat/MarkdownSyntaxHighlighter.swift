@@ -41,38 +41,186 @@ public struct MarkdownLineIndex: Sendable {
     public private(set) var frontmatterLineCount: Int = 0
 
     public init(text: String) {
-        let units = Array(text.utf16)
-        let unitCount = units.count
-        var starts: [Int] = []
-        starts.reserveCapacity(max(16, unitCount / 40))
-        var found: [(Int, Int)] = []
-        var open: (line: Int, char: UInt16, count: Int)?
+        if let built = Self.buildFromContiguousUTF8(text) {
+            self.units = built.units
+            self.lineStarts = built.starts
+            self.fences = built.fences
+        } else {
+            let units = Array(text.utf16)
+            let unitCount = units.count
+            var starts: [Int] = []
+            starts.reserveCapacity(max(16, unitCount / 40))
+            var found: [(Int, Int)] = []
+            var open: (line: Int, char: UInt16, count: Int)?
 
-        var lineStart = 0
-        var lineIndex = 0
-        var i = 0
-        while i <= unitCount {
-            if i == unitCount || units[i] == 0x0A {
-                starts.append(lineStart)
-                let slice = units[lineStart..<i]
-                if let o = open {
-                    if Self.isFenceLine(slice, char: o.char, minCount: o.count, closing: true) {
-                        found.append((o.line, lineIndex))
-                        open = nil
+            var lineStart = 0
+            var lineIndex = 0
+            var i = 0
+            while i <= unitCount {
+                if i == unitCount || units[i] == 0x0A {
+                    starts.append(lineStart)
+                    let slice = units[lineStart..<i]
+                    if let o = open {
+                        if Self.isFenceLine(slice, char: o.char, minCount: o.count, closing: true) {
+                            found.append((o.line, lineIndex))
+                            open = nil
+                        }
+                    } else if let f = Self.fenceOpening(slice) {
+                        open = (lineIndex, f.char, f.count)
                     }
-                } else if let f = Self.fenceOpening(slice) {
-                    open = (lineIndex, f.char, f.count)
+                    lineIndex += 1
+                    lineStart = i + 1
                 }
-                lineIndex += 1
-                lineStart = i + 1
+                i += 1
             }
-            i += 1
+            if let o = open { found.append((o.line, starts.count - 1)) }
+            self.units = units
+            self.lineStarts = starts
+            self.fences = found
         }
-        if let o = open { found.append((o.line, starts.count - 1)) }
-        self.units = units
-        self.lineStarts = starts
-        self.fences = found
         self.frontmatterLineCount = YAMLFrontmatterScanner.maskedLineCount(in: self)
+    }
+
+    private static func buildFromContiguousUTF8(_ text: String) -> (units: [UInt16], starts: [Int], fences: [(Int, Int)])? {
+        text.utf8.withContiguousStorageIfAvailable { utf8Buf -> (units: [UInt16], starts: [Int], fences: [(Int, Int)])? in
+            let byteCount = utf8Buf.count
+            guard let src = utf8Buf.baseAddress else {
+                return ([], [0], [])
+            }
+            var starts: [Int] = []
+            starts.reserveCapacity(max(16, byteCount / 40))
+            var found: [(Int, Int)] = []
+            var malformed = false
+
+            let units = Array<UInt16>(unsafeUninitializedCapacity: byteCount) { dstBuf, initializedCount in
+                guard let dst = dstBuf.baseAddress else {
+                    initializedCount = 0
+                    starts.append(0)
+                    return
+                }
+                var open: (line: Int, char: UInt16, count: Int)?
+                var lineStart = 0
+                var lineIndex = 0
+                var leadingSpaces = 0
+                var sawNonSpace = false
+                var firstNonSpace: UInt16 = 0
+                var u = 0
+                var i = 0
+
+                while i < byteCount {
+                    let b = src[i]
+                    if b < 0x80 {
+                        dst[u] = UInt16(b)
+                        if b == 0x0A {
+                            starts.append(lineStart)
+                            if sawNonSpace && leadingSpaces < 4 {
+                                if let o = open {
+                                    if firstNonSpace == o.char && Self.isFenceLinePtr(dst, from: lineStart, to: u, char: o.char, minCount: o.count) {
+                                        found.append((o.line, lineIndex))
+                                        open = nil
+                                    }
+                                } else if (firstNonSpace == 0x60 || firstNonSpace == 0x7E),
+                                          let f = Self.fenceOpeningPtr(dst, from: lineStart, to: u) {
+                                    open = (lineIndex, f.char, f.count)
+                                }
+                            }
+                            lineIndex += 1
+                            lineStart = u + 1
+                            leadingSpaces = 0
+                            sawNonSpace = false
+                            firstNonSpace = 0
+                        } else if !sawNonSpace {
+                            if b == 0x20 {
+                                leadingSpaces += 1
+                            } else {
+                                sawNonSpace = true
+                                firstNonSpace = UInt16(b)
+                            }
+                        }
+                        u += 1
+                        i += 1
+                    } else if b < 0xE0 {
+                        guard b >= 0xC2, i + 1 < byteCount else { malformed = true; initializedCount = u; return }
+                        let cp = (UInt16(b & 0x1F) << 6) | UInt16(src[i + 1] & 0x3F)
+                        dst[u] = cp
+                        if !sawNonSpace { sawNonSpace = true; firstNonSpace = cp }
+                        u += 1
+                        i += 2
+                    } else if b < 0xF0 {
+                        guard i + 2 < byteCount else { malformed = true; initializedCount = u; return }
+                        let cp = (UInt16(b & 0x0F) << 12) | (UInt16(src[i + 1] & 0x3F) << 6) | UInt16(src[i + 2] & 0x3F)
+                        dst[u] = cp
+                        if !sawNonSpace { sawNonSpace = true; firstNonSpace = cp }
+                        u += 1
+                        i += 3
+                    } else {
+                        guard b <= 0xF4, i + 3 < byteCount else { malformed = true; initializedCount = u; return }
+                        let scalar = (UInt32(b & 0x07) << 18) | (UInt32(src[i + 1] & 0x3F) << 12) | (UInt32(src[i + 2] & 0x3F) << 6) | UInt32(src[i + 3] & 0x3F)
+                        let adjusted = scalar - 0x10000
+                        let high = UInt16(0xD800 + (adjusted >> 10))
+                        let low = UInt16(0xDC00 + (adjusted & 0x3FF))
+                        dst[u] = high
+                        dst[u + 1] = low
+                        if !sawNonSpace { sawNonSpace = true; firstNonSpace = high }
+                        u += 2
+                        i += 4
+                    }
+                }
+
+                // Flush final line (matches `while i <= unitCount` at `i == unitCount`).
+                starts.append(lineStart)
+                if sawNonSpace && leadingSpaces < 4 {
+                    if let o = open {
+                        if firstNonSpace == o.char && Self.isFenceLinePtr(dst, from: lineStart, to: u, char: o.char, minCount: o.count) {
+                            found.append((o.line, lineIndex))
+                            open = nil
+                        }
+                    } else if (firstNonSpace == 0x60 || firstNonSpace == 0x7E),
+                              let f = Self.fenceOpeningPtr(dst, from: lineStart, to: u) {
+                        open = (lineIndex, f.char, f.count)
+                    }
+                }
+                if let o = open { found.append((o.line, starts.count - 1)) }
+                initializedCount = u
+            }
+
+            if malformed { return nil }
+            return (units, starts, found)
+        } ?? nil
+    }
+
+    private static func fenceOpeningPtr(_ buf: UnsafePointer<UInt16>, from start: Int, to end: Int) -> (char: UInt16, count: Int)? {
+        var idx = start
+        var spaces = 0
+        while idx < end, buf[idx] == 0x20, spaces < 4 { idx += 1; spaces += 1 }
+        guard spaces < 4, idx < end, buf[idx] == 0x60 || buf[idx] == 0x7E else { return nil }
+        let ch = buf[idx]
+        var count = 0
+        while idx < end, buf[idx] == ch { idx += 1; count += 1 }
+        guard count >= 3 else { return nil }
+        if ch == 0x60 {
+            var scan = idx
+            while scan < end {
+                if buf[scan] == 0x60 { return nil }
+                scan += 1
+            }
+        }
+        return (ch, count)
+    }
+
+    private static func isFenceLinePtr(_ buf: UnsafePointer<UInt16>, from start: Int, to end: Int, char: UInt16, minCount: Int) -> Bool {
+        var idx = start
+        var spaces = 0
+        while idx < end, buf[idx] == 0x20, spaces < 4 { idx += 1; spaces += 1 }
+        guard spaces < 4 else { return false }
+        var count = 0
+        while idx < end, buf[idx] == char { idx += 1; count += 1 }
+        guard count >= minCount else { return false }
+        while idx < end {
+            if buf[idx] != 0x20 { return false }
+            idx += 1
+        }
+        return true
     }
 
     public var lineCount: Int { lineStarts.count }

@@ -6,9 +6,9 @@ import SwiftUI
 import AppKit
 #endif
 
-/// Immutable `About PH.SwiftEdit` metadata descriptor resolving `nbgv` bundle versions and guarding external repository and license links (`AR-014`, `SEC-004`, `UI-008`).
+/// Immutable `About SwiftEdit` metadata descriptor resolving `nbgv` bundle versions and guarding external repository and license links (`AR-014`, `SEC-004`, `UI-008`).
 public struct AboutSheetDescriptor: Equatable, Sendable {
-    public static let officialAppName = "PH.SwiftEdit"
+    public static let officialAppName = "SwiftEdit"
     public static let officialRepositoryURL = "https://github.com/paoloinnocenti/PH.SwiftEdit"
     public static let officialLicenseName = "MIT License"
     public static let officialLicenseURL = "https://github.com/paoloinnocenti/PH.SwiftEdit/blob/main/LICENSE"
@@ -102,13 +102,13 @@ public struct AboutSheetView: View {
             SwiftEditBrandLogoView(size: CGFloat(SwiftEditBrandLogoGeometry.aboutDialogLogoSize))
                 .shadow(color: palette.chromeAccent.swiftUIColor.opacity(0.35), radius: 10)
             Text(descriptor.appName)
-                .font(.title2.weight(.bold))
+                .appFont(.title2, weight: .bold)
                 .foregroundStyle(palette.chromeForeground.swiftUIColor)
             Text("Version \(descriptor.fullVersion) (\(descriptor.shortVersion))")
-                .font(.callout.monospaced())
+                .appFont(.callout, monospaced: true)
                 .foregroundStyle(palette.secondaryForeground.swiftUIColor)
             Text("Minimalist Sandboxed macOS Text & Markdown Editor")
-                .font(.caption)
+                .appFont(.caption)
                 .foregroundStyle(palette.secondaryForeground.swiftUIColor)
             HStack(spacing: 10) {
                 Button("Repository (GitHub)") {

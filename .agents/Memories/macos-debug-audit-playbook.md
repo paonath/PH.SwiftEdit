@@ -7,8 +7,8 @@
 - Status: active
 - Supersedes: -
 - CreatedAt: 2026-11-20
-- LastValidatedAt: 2026-11-20
-- ValidationEvidence: docs/qa/debug-audit-report-2026-11-20.md, docs/qa/debug-verification-report-2026-11-20.md
+- LastValidatedAt: 2026-11-21
+- ValidationEvidence: docs/qa/debug-audit-report-2026-11-20.md, docs/qa/debug-verification-report-2026-11-20.md, docs/qa/debug-audit-report-017-baseline.md, docs/qa/debug-verification-report-017.md, docs/qa/perf-analysis-017.md
 
 ## Source Context
 
@@ -243,3 +243,18 @@ defaults delete qa.harness.prefs 2>/dev/null || true
 defaults delete qa.harness.recents 2>/dev/null || true
 git status -sb
 ```
+
+## Update 2026-11-21 (change 017): Reduced Mode, Human Metrics and Accessibility Layer
+
+- **AX grant pitfall**: granting Accessibility to the agent host in System Settings → Privacy & Security → Accessibility did not flip `AXIsProcessTrusted()` for binaries spawned by the Claude desktop session (the responsible process is the desktop app; a relaunch may be needed). Check with a compiled `axcheck` first; if still `false`, run the **reduced audit** instead of blocking.
+- **Launch metrics without AX**: `.tmp/gui-driver/launchmeasure <App> <doc>` launches via `NSWorkspace.open(_:withApplicationAt:configuration:)` and polls `CGWindowListCopyWindowInfo` for the first layer-0 window of the returned PID (no Accessibility or Screen Recording needed). Follow with `sample <pid> 5`, `footprint`, `vmmap --summary`, `leaks`, `heap -s`.
+- **Headless harness**: `.tmp/qa-harness` SwiftPM executable (`.package(name: "PH.SwiftEdit", path: "../..")`) must be built with `swift build -c release -Xswiftc -enable-testing` to allow `@testable import`. The model starts with an `Untitled` tab, so select tabs by title.
+- **Always relaunch at least twice with the same large document**: the session restore path makes the document active at window creation. That path exposed whole-document gutter enumeration (`F-017-01`: 1.1–1.3 GB, 5.1 s), which the first launch hides.
+- **Human metrics**: KLM (K 0.20 s, P 1.10 s, H 0.40 s, M 1.35 s, chords = 2 K), Fitts ID = log2(D/W+1) from code-derived target sizes, WCAG 2.5.8 24 pt target check, clicks per task.
+- **Accessibility**: contrast of palette token pairs computed through `RGBAColorToken.contrastRatio`, a static scan for icon-only `Button`s lacking `accessibilityLabel`, and counts of Reduce Motion sites and registered shortcuts.
+- **Report contract**: `AuditReportFitness` (`Tests/SwiftEditTests/Audit017/`) requires `## Runs` R1..R3, the six sections, a findings table `| F-017-NN | P0..P3 | … | status |`, and no fixture marker text.
+- **Validated numbers (Change 017, 2026-11-21, `docs/qa/debug-verification-report-017.md`)**:
+  - `swift test --parallel` 3×: `279 tests in 85 suites` passed in `5.24 s / 4.06 s / 4.24 s` wall clock (`3.12–3.16 s` runner).
+  - Real Debug `.app` 20k-line doc relaunch (`launchmeasure`, 3×): `608 / 564 / 555 ms` (down from `1433 / 5113 / 5068 ms`, −88.9%); `phys_footprint`: `104 / 104 / 104 MB` (down from `106 / 1115 / 1113 MB`, −90.7%); peak `vmmap`: `328.3–328.5M` (down from `1.3G`); idle CPU `0.0 %`, main-thread event wait `4217/4218 (99.98 %)`, `0` leaks, `0` crash reports.
+  - `QAHarness` release 3× medians: `preview_projection_20k` `0.034 ms` (from `7.261 ms`, −99.5%), `font_catalog_enumeration` p95 `0.024 ms` (from `29.784 ms`, −99.9%), `navigator_open_close_20k` `0.439 ms` (from `2.795 ms`, −84.3%), `keystroke_20k_md_model_and_render` `2.772 ms`, `caret_move_20k_md` `0.008 ms`.
+  - Accessibility & Human Metrics: `black.link/canvas` `7.72:1` (from `3.69:1`), `0` icon-only buttons without `accessibilityLabel` (from `11`), all tab strip buttons `≥ 24 × 24 pt` (Fitts ID `4.75` bits, down from `6.1` bits), `0` open P0–P2 findings.

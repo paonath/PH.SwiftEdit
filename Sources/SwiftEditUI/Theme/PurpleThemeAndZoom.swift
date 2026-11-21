@@ -292,6 +292,8 @@ public struct PurpleThemePalette: Equatable, Sendable {
     public let diffRemovedBackground: RGBAColorToken
     /// YAML key foreground (`#6B7280` Light 4.83:1, `#9CA3AF` Black 8.6:1); values keep `editorCanvasText` (`REQ-010`, `UI-009`).
     public let yamlKeyForeground: RGBAColorToken
+    /// Editor link/image text (`#7C3AED` Light 5.7:1, `#A78BFA` Black 7.0:1); `primaryAccent` on black was 3.69:1 (`F-017-02`).
+    public let linkForeground: RGBAColorToken
 
     /// Returns the deterministic depth-indexed color for a matched nested bracket pair (`AR-012`).
     public func nestedBracketColor(forDepth depth: Int) -> RGBAColorToken {
@@ -394,7 +396,8 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 selectionBackground: RGBAColorToken(hex: "#DDD6FE"),
                 diffInsertedBackground: RGBAColorToken(hex: "#DCFCE7"),
                 diffRemovedBackground: RGBAColorToken(hex: "#FEE2E2"),
-                yamlKeyForeground: RGBAColorToken(hex: "#6B7280")
+                yamlKeyForeground: RGBAColorToken(hex: "#6B7280"),
+                linkForeground: RGBAColorToken(hex: "#7C3AED")
             )
         case .black:
             return PurpleThemePalette(
@@ -451,11 +454,28 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 selectionBackground: RGBAColorToken(hex: "#3B0764"),
                 diffInsertedBackground: RGBAColorToken(hex: "#052E16"),
                 diffRemovedBackground: RGBAColorToken(hex: "#450A0A"),
-                yamlKeyForeground: RGBAColorToken(hex: "#9CA3AF")
+                yamlKeyForeground: RGBAColorToken(hex: "#9CA3AF"),
+                linkForeground: RGBAColorToken(hex: "#A78BFA")
             )
         }
     }
 }
+
+/// Minimum pointer target size (WCAG 2.2 SC 2.5.8).
+public enum ChromeHitTarget {
+    /// WCAG 2.2 SC 2.5.8 minimum target size in points (`F-017-03`).
+    public static let minimumPoints: CGFloat = 24
+}
+
+#if os(macOS)
+public extension View {
+    /// Expands the hit area of glyph-sized controls to at least `ChromeHitTarget.minimumPoints` without changing the glyph.
+    func minimumHitTarget(_ size: CGFloat = ChromeHitTarget.minimumPoints) -> some View {
+        let side = max(ChromeHitTarget.minimumPoints, size)
+        return frame(minWidth: side, minHeight: side).contentShape(Rectangle())
+    }
+}
+#endif
 
 /// Stateless value-type controller scaling editor and left sidebar font sizes across `50%..300%` (`Cmd++`, `Cmd+-`, `Cmd+0`, pinch, pane focus) without mutating document text (`UI-004`).
 public struct EditorZoomController: Equatable, Sendable {
@@ -699,7 +719,7 @@ public extension View {
         verticalPadding: CGFloat
     ) -> some View {
         self
-            .font(.caption.weight(.semibold))
+            .appFont(.caption, weight: .semibold)
             .foregroundStyle(foreground.swiftUIColor)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)

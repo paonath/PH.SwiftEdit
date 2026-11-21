@@ -33,20 +33,30 @@ public struct TabDescriptor: Equatable, Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, fileURL, isPinned, isDirty, caretLocation, revision
+        case id, title, fileURL, isPinned, isDirty, caretLocation, revision, language
+    }
+
+    public mutating func setDisplayTitlePreservingLanguage(_ newTitle: String) {
+        let preserved = language
+        title = newTitle
+        language = preserved
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedTitle = try c.decode(String.self, forKey: .title)
         self.init(
             id: try c.decode(DocumentID.self, forKey: .id),
-            title: try c.decode(String.self, forKey: .title),
+            title: decodedTitle,
             fileURL: try c.decodeIfPresent(URL.self, forKey: .fileURL),
             isPinned: try c.decode(Bool.self, forKey: .isPinned),
             isDirty: try c.decode(Bool.self, forKey: .isDirty),
             caretLocation: try c.decode(Int.self, forKey: .caretLocation),
             revision: try c.decode(BufferRevision.self, forKey: .revision)
         )
+        if let decodedLanguage = try c.decodeIfPresent(DocumentLanguage.self, forKey: .language) {
+            self.language = decodedLanguage
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -58,6 +68,7 @@ public struct TabDescriptor: Equatable, Codable, Sendable {
         try c.encode(isDirty, forKey: .isDirty)
         try c.encode(caretLocation, forKey: .caretLocation)
         try c.encode(revision, forKey: .revision)
+        try c.encode(language, forKey: .language)
     }
 }
 
@@ -208,6 +219,15 @@ public struct WorkspaceTabSession: Equatable, Sendable {
         if let revision {
             tabs[index].revision = revision
         }
+    }
+
+    /// Updates only the display title of an unsaved (`fileURL == nil`) tab without altering its resolved `DocumentLanguage` (`BC-008`).
+    public mutating func updateUntitledDisplayTitle(id: DocumentID, title: String) throws {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else {
+            throw DomainError.tabNotFound(id)
+        }
+        guard tabs[index].fileURL == nil else { return }
+        tabs[index].setDisplayTitlePreservingLanguage(title)
     }
 
     /// Closes and returns the tab matching `id`, selecting the left neighbor (or first remaining tab) when the active tab closes.

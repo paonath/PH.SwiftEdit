@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import SwiftEditCore
 
-/// Verifies `openspec/Constitution.md` (`v1.3.0`), Bare-Bones token budgets (`SDD-004`), `SDD-007` security floors, and `UI-001`/`DATA-004`/`SEC-004` (`CWE-78` directory-only Terminal confinement) invariants.
+/// Verifies `openspec/Constitution.md` (`v1.4.0`, `UI-002` amendment on top of the `v1.3.0` invariants), Bare-Bones token budgets (`SDD-004`), `SDD-007` security floors, and `UI-001`/`DATA-004`/`SEC-004` (`CWE-78` directory-only Terminal confinement) invariants.
 @Suite("ConstitutionFitnessTests")
 struct ConstitutionFitnessTests {
 
@@ -14,28 +14,28 @@ struct ConstitutionFitnessTests {
             .appendingPathComponent("openspec")
     }
 
-    @Test("P1: openspec/Constitution.md v1.3.0 and area mini-indexes satisfy SemVer, Single-Reference Lock, line caps, and Sync Impact Report")
-    func p1ConstitutionRootV130AndMiniIndexesPassFitness() throws {
+    @Test("P3: openspec/Constitution.md v1.5.0 with SEC-001/SEC-004 amendment and area mini-indexes satisfy SemVer, Single-Reference Lock, line caps, and Sync Impact Report")
+    func p3ConstitutionRootV140AndMiniIndexesPassFitness() throws {
         // GIVEN the live repository openspec/ directory
         let openspecRoot = Self.openspecRootURL
 
         // WHEN validating the constitutional root manifest and area mini-indexes
         let summary = try ConstitutionGovernanceValidator.validateConstitutionRoot(at: openspecRoot)
 
-        // THEN version is 1.3.0, Single-Reference Lock is enabled, and zero governance violations exist
-        #expect(summary.version == "1.3.0")
+        // THEN version is 1.5.0, Single-Reference Lock is enabled, and zero governance violations exist
+        #expect(summary.version == "1.5.0")
         #expect(summary.singleReferenceLock == true)
         #expect(summary.violations.isEmpty)
     }
 
-    @Test("N1: validateConstitutionManifest rejects stale v1.2.0 version, missing 1.3.0 Sync Impact row, and Bare-Bones line-cap overflows")
-    func n1StaleVersionMissingSyncRowOrLineCapOverflowFailsValidation() {
-        // GIVEN a stale v1.2.0 Constitution.md exceeding 45 lines and a mini-index exceeding 25 lines
+    @Test("N5: validateConstitutionManifest rejects stale v1.3.0 version, missing 1.4.0 UI-002 / 1.5.0 SEC Sync Impact rows, and Bare-Bones line-cap overflows")
+    func n5StaleVersionMissingUI002RowOrLineCapOverflowFailsValidation() {
+        // GIVEN a stale v1.3.0 Constitution.md without the 1.4.0 UI-002 row, exceeding 45 lines, and a mini-index exceeding 25 lines
         let paddedTrailingLines = Array(repeating: "", count: 40).joined(separator: "\n")
         let staleManifest = """
         ---
         project_name: "PH.SwiftEdit"
-        version: "1.2.0"
+        version: "1.3.0"
         single_reference_lock: true
         ---
         # Constitution: PH.SwiftEdit
@@ -48,7 +48,7 @@ struct ConstitutionFitnessTests {
         ## Sync Impact Report
         | Version | Date | Touched Rules | Sync Status |
         | :--- | :--- | :--- | :--- |
-        | `1.2.0` | `2026-11-17` | `UI-001` | `index.yml synced` |
+        | `1.3.0` | `2026-11-18` | `UI-001, DATA-004, SEC-004` | `index.yml synced` |
         \(paddedTrailingLines)
         """
         let oversizedMiniIndex = Array(repeating: "# line", count: 27).joined(separator: "\n")
@@ -59,10 +59,12 @@ struct ConstitutionFitnessTests {
             miniIndexes: ["03-ui-ux/index.md": oversizedMiniIndex]
         )
 
-        // THEN violations flag stale version (SDD-006), missing 1.3.0 sync row (SDD-006), and line-cap overflows (SDD-004)
-        #expect(summary.version == "1.2.0")
-        #expect(summary.violations.count >= 4)
-        #expect(summary.violations.contains { $0.ruleID == "SDD-006" && $0.reason.contains("1.3.0") })
+        // THEN violations flag stale version (SDD-006), missing 1.4.0/1.5.0 sync rows (SDD-006), and line-cap overflows (SDD-004)
+        #expect(summary.version == "1.3.0")
+        #expect(summary.violations.count >= 5)
+        #expect(summary.violations.contains { $0.ruleID == "SDD-006" && $0.reason.contains("Expected version 1.5.0") })
+        #expect(summary.violations.contains { $0.ruleID == "SDD-006" && $0.reason.contains("1.4.0 Sync Impact Report row citing UI-002") })
+        #expect(summary.violations.contains { $0.ruleID == "SDD-006" && $0.reason.contains("1.5.0 Sync Impact Report row citing SEC-001") })
         #expect(summary.violations.contains { $0.ruleID == "SDD-004" && $0.filePath == "Constitution.md" })
         #expect(summary.violations.contains { $0.ruleID == "SDD-004" && $0.filePath == "03-ui-ux/index.md" })
     }

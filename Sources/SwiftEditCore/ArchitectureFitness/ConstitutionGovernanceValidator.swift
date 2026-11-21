@@ -36,9 +36,10 @@ public struct ConstitutionValidationSummary: Sendable, Equatable {
     }
 }
 
-/// Pure `Foundation` static governance fitness analyzer enforcing `Constitution.md` `v1.3.0`, Bare-Bones token budgets, and active security floors (`AR-002`, `TEST-006`).
+/// Pure `Foundation` static governance fitness analyzer enforcing `Constitution.md` `v1.5.0`, Bare-Bones token budgets, and active security floors (`AR-002`, `TEST-006`).
 public enum ConstitutionGovernanceValidator {
-    private static let expectedConstitutionVersion = "1.3.0"
+    /// `1.5.0` amends `SEC-001` & `SEC-004` (MINOR): allow macOS `network.client` for manual GitHub Releases HTTPS check and expand allowlisted macOS terminals.
+    private static let expectedConstitutionVersion = "1.5.0"
     private static let maxConstitutionLines = 45
     private static let maxMiniIndexLines = 25
     private static let maxMicroFileLines = 40
@@ -278,6 +279,28 @@ public enum ConstitutionGovernanceValidator {
                 filePath: "Constitution.md",
                 ruleID: "SDD-006",
                 reason: "Missing 1.3.0 Sync Impact Report row citing UI-001, DATA-004, and SEC-004"
+            ))
+        }
+
+        let hasV140SyncRow = lines.contains { line in
+            line.contains("| `1.4.0` |") && line.contains("UI-002")
+        }
+        if !hasV140SyncRow {
+            violations.append(ConstitutionGovernanceViolation(
+                filePath: "Constitution.md",
+                ruleID: "SDD-006",
+                reason: "Missing 1.4.0 Sync Impact Report row citing UI-002"
+            ))
+        }
+
+        let hasV150SyncRow = lines.contains { line in
+            line.contains("| `1.5.0` |") && line.contains("SEC-001") && line.contains("SEC-004")
+        }
+        if !hasV150SyncRow {
+            violations.append(ConstitutionGovernanceViolation(
+                filePath: "Constitution.md",
+                ruleID: "SDD-006",
+                reason: "Missing 1.5.0 Sync Impact Report row citing SEC-001 and SEC-004"
             ))
         }
 

@@ -28,8 +28,12 @@ public struct SwiftEditCommands: Commands {
 
     public var body: some Commands {
         CommandGroup(replacing: .appInfo) {
-            Button("About PH.SwiftEdit") {
+            Button("About SwiftEdit") {
                 model?.isAboutSheetPresented = true
+            }
+            .disabled(model == nil)
+            Button("Check for Updates…") {
+                model?.checkForUpdates()
             }
             .disabled(model == nil)
         }
@@ -128,7 +132,7 @@ public struct SwiftEditCommands: Commands {
         CommandMenu("Navigate") {
             Button("Document Navigator") { model?.toggleDocumentNavigator() }
                 .keyboardShortcut("\\", modifiers: .option)
-                .disabled(model?.isMarkdownMenuEnabled != true && model?.navigatorState == nil)
+                .disabled(model?.isNavigatorEnabled != true && model?.navigatorState == nil)
             Button(model?.isDistractionFree == true ? "Exit Distraction-Free" : "Distraction-Free") { model?.toggleDistractionFree() }
                 .keyboardShortcut("1", modifiers: .option)
                 .disabled(model == nil)
@@ -170,7 +174,7 @@ public struct SwiftEditCommands: Commands {
             .keyboardShortcut("/", modifiers: .command)
             .disabled(model == nil)
             Divider()
-            Button("About PH.SwiftEdit") {
+            Button("About SwiftEdit") {
                 model?.isAboutSheetPresented = true
             }
             .disabled(model == nil)

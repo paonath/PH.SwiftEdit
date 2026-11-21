@@ -54,7 +54,7 @@ struct MarkdownNativePreviewView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     Text("Native Preview (Zero-WebKit)")
-                        .font(.caption.weight(.semibold))
+                        .appFont(.caption, weight: .semibold)
                         .foregroundStyle(palette.secondaryForeground.swiftUIColor)
                     let allBlocks = document?.blocks ?? []
                     let ordinals = document?.orderedOrdinals ?? []
@@ -112,7 +112,7 @@ struct MarkdownNativePreviewView: View {
     ) -> some View {
         switch block {
         case .heading(let level, let text, _):
-            Text(inline(text)).font(level <= 1 ? .title.bold() : (level == 2 ? .title2.bold() : .title3.bold())).foregroundStyle(palette.chromeForeground.swiftUIColor)
+            Text(inline(text)).appFont(level <= 1 ? .title : (level == 2 ? .title2 : .title3), weight: .bold).foregroundStyle(palette.chromeForeground.swiftUIColor)
         case .paragraph(let text, _):
             VStack(alignment: .leading, spacing: 6) {
                 Text(inline(text)).foregroundStyle(palette.chromeForeground.swiftUIColor)
@@ -143,14 +143,14 @@ struct MarkdownNativePreviewView: View {
             }
             .foregroundStyle(palette.chromeForeground.swiftUIColor)
         case .code(let text, _):
-            Text(text).font(.body.monospaced()).padding(8)
+            Text(text).appFont(.body, monospaced: true).padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(palette.backtickMultilineBackground.swiftUIColor)
                 .foregroundStyle(palette.backtickForeground.swiftUIColor)
         case .thematicBreak:
             Divider()
         case .inertHTML(let text, _):
-            Text(text).font(.body.monospaced()).padding(6)
+            Text(text).appFont(.body, monospaced: true).padding(6)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .foregroundStyle(palette.inertHTMLWarningForeground.swiftUIColor)
                 .background(palette.inertHTMLWarningBackground.swiftUIColor)
@@ -167,7 +167,7 @@ struct MarkdownNativePreviewView: View {
                 PreviewThumbnailTileView(gate: gate, reference: entry.reference, documentIndex: entry.documentIndex, palette: palette)
             } else {
                 Label("Image blocked or offline", systemImage: "photo.badge.exclamationmark")
-                    .font(.caption).foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                    .appFont(.caption).foregroundStyle(palette.secondaryForeground.swiftUIColor)
             }
         }
     }
@@ -198,7 +198,7 @@ private struct PreviewThumbnailTileView: View {
                     .accessibilityLabel("Image \(reference)")
             } else if isBlocked {
                 Label("Image blocked or offline", systemImage: "photo.badge.exclamationmark")
-                    .font(.caption).foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                    .appFont(.caption).foregroundStyle(palette.secondaryForeground.swiftUIColor)
             } else {
                 ProgressView().controlSize(.small)
             }

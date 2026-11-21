@@ -14,7 +14,7 @@ struct MarkdownDiagnosticsPopoverView: View {
         let diagnostics = model.lintDiagnostics
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(model.activeLintStatus.label).font(.headline)
+                Text(model.activeLintStatus.label).appFont(.headline)
                 Spacer()
                 Button("Fix All") { model.applyFixAll() }
                     .disabled(!diagnostics.contains { $0.quickFix != nil })
@@ -29,6 +29,7 @@ struct MarkdownDiagnosticsPopoverView: View {
                         ForEach(Array(diagnostics.prefix(MarkdownLintAndFormatEngine.maxDiagnostics).enumerated()), id: \.offset) { _, diagnostic in
                             HStack(spacing: 6) {
                                 Image(systemName: diagnostic.severity == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                                    .accessibilityLabel(diagnostic.severity == .error ? "Error" : "Warning")
                                     .foregroundStyle((diagnostic.severity == .error ? model.palette.unbalancedBracketHighlight : model.palette.bidiWarningForeground).swiftUIColor)
                                 Button("Ln \(diagnostic.line): \(diagnostic.message)") { model.jumpToDiagnostic(diagnostic) }
                                     .buttonStyle(.plain)

@@ -16,14 +16,82 @@ public struct SidebarFileClipboard: Equatable, Sendable {
     }
 }
 
-/// Verified directory-only terminal launch descriptor produced by `DesktopWorkspaceValidator` (`SEC-004`).
-public struct TerminalLaunchResolution: Equatable, Sendable {
+/// Allowlisted macOS terminal application metadata discovered on the host (`SEC-004`).
+public struct KnownTerminalApp: Identifiable, Equatable, Sendable {
+    public let bundleIdentifier: String
+    public let displayName: String
+    public var id: String { bundleIdentifier }
+
+    public init(bundleIdentifier: String, displayName: String) {
+        self.bundleIdentifier = bundleIdentifier
+        self.displayName = displayName
+    }
+}
+
+/// Catalog of allowlisted macOS terminal applications for directory-only `NSWorkspace` launches (`CWE-78`, `SEC-004`).
+public enum TerminalCatalog {
     public static let iTerm2BundleIdentifier = "com.googlecode.iterm2"
     public static let appleTerminalBundleIdentifier = "com.apple.Terminal"
-    public static let allowedTerminalBundleIdentifiers: Set<String> = [
-        iTerm2BundleIdentifier,
-        appleTerminalBundleIdentifier,
+
+    public static let knownTerminals: [KnownTerminalApp] = [
+        KnownTerminalApp(bundleIdentifier: iTerm2BundleIdentifier, displayName: "iTerm2"),
+        KnownTerminalApp(bundleIdentifier: appleTerminalBundleIdentifier, displayName: "Terminal"),
+        KnownTerminalApp(bundleIdentifier: "dev.warp.Warp-Stable", displayName: "Warp"),
+        KnownTerminalApp(bundleIdentifier: "com.mitchellh.ghostty", displayName: "Ghostty"),
+        KnownTerminalApp(bundleIdentifier: "com.github.wez.wezterm", displayName: "WezTerm"),
+        KnownTerminalApp(bundleIdentifier: "org.alacritty", displayName: "Alacritty"),
+        KnownTerminalApp(bundleIdentifier: "net.kovidgoyal.kitty", displayName: "Kitty"),
+        KnownTerminalApp(bundleIdentifier: "co.zeit.hyper", displayName: "Hyper"),
     ]
+
+    public static let allowedBundleIdentifiers: Set<String> = Set(knownTerminals.map(\.bundleIdentifier))
+
+    /// Default macOS host probe returning `true` when `NSWorkspace` finds an installed app matching `bundleIdentifier`.
+    @MainActor
+    public static func isApplicationInstalled(bundleIdentifier: String) -> Bool {
+        #if os(macOS)
+        guard allowedBundleIdentifiers.contains(bundleIdentifier) else { return false }
+        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) != nil
+        #else
+        return false
+        #endif
+    }
+
+    /// Discovers installed allowlisted terminals using `isInstalled` (unit-testable headless seam).
+    public static func installedTerminals(
+        isInstalled: (String) -> Bool
+    ) -> [KnownTerminalApp] {
+        knownTerminals.filter { isInstalled($0.bundleIdentifier) }
+    }
+
+    /// Discovers installed allowlisted terminals on the running macOS system.
+    @MainActor
+    public static func installedTerminals() -> [KnownTerminalApp] {
+        installedTerminals { isApplicationInstalled(bundleIdentifier: $0) }
+    }
+
+    /// Resolves the target terminal bundle ID from `preferredBundleID` (`nil` = Auto, preferring `iTerm2` if installed) and installed bundle IDs.
+    public static func resolveBundleID(
+        preferredBundleID: String?,
+        installedBundleIDs: Set<String>
+    ) -> String {
+        if let preferredBundleID,
+           allowedBundleIdentifiers.contains(preferredBundleID),
+           installedBundleIDs.contains(preferredBundleID) {
+            return preferredBundleID
+        }
+        if installedBundleIDs.contains(iTerm2BundleIdentifier) {
+            return iTerm2BundleIdentifier
+        }
+        return appleTerminalBundleIdentifier
+    }
+}
+
+/// Verified directory-only terminal launch descriptor produced by `DesktopWorkspaceValidator` (`SEC-004`).
+public struct TerminalLaunchResolution: Equatable, Sendable {
+    public static let iTerm2BundleIdentifier = TerminalCatalog.iTerm2BundleIdentifier
+    public static let appleTerminalBundleIdentifier = TerminalCatalog.appleTerminalBundleIdentifier
+    public static let allowedTerminalBundleIdentifiers: Set<String> = TerminalCatalog.allowedBundleIdentifiers
 
     public let directoryURL: URL
     public let bundleIdentifier: String
@@ -156,9 +224,11 @@ public protocol DesktopWorkspaceIntegrating {
 @MainActor
 public struct MacOSWorkspaceAdapter: DesktopWorkspaceIntegrating {
     public var preferredTerminal: PreferredTerminalApp
+    public var preferredTerminalBundleID: String?
 
-    public init(preferredTerminal: PreferredTerminalApp = .auto) {
+    public init(preferredTerminal: PreferredTerminalApp = .auto, preferredTerminalBundleID: String? = nil) {
         self.preferredTerminal = preferredTerminal
+        self.preferredTerminalBundleID = preferredTerminalBundleID
     }
 
     /// Reveals `itemURL` in Finder after verifying workspace symlink confinement (`SEC-003`, `SEC-004`).
@@ -179,7 +249,7 @@ public struct MacOSWorkspaceAdapter: DesktopWorkspaceIntegrating {
         #endif
     }
 
-    /// Launches `com.apple.Terminal` (`.auto`/`.terminal`) or `com.googlecode.iterm2` (when opted into `.iTerm2` & installed) at the verified directory URL via `NSWorkspace` with zero subprocesses (`CWE-78`, `SEC-004`, `BUG-017`).
+    /// Launches the selected allowlisted terminal (defaulting `.auto` to `iTerm2` if installed, else `Terminal.app`) at the verified directory URL via `NSWorkspace` with zero subprocesses (`CWE-78`, `SEC-004`).
     @discardableResult
     public func openInTerminal(
         targetURL: URL,
@@ -187,13 +257,26 @@ public struct MacOSWorkspaceAdapter: DesktopWorkspaceIntegrating {
         explicitBundleIdentifier: String? = nil
     ) throws -> TerminalLaunchResolution {
         #if os(macOS)
-        let iTermURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: TerminalLaunchResolution.iTerm2BundleIdentifier)
+        let installedBundleIDs = Set(TerminalCatalog.installedTerminals().map(\.bundleIdentifier))
+        let isITerm2Installed = installedBundleIDs.contains(TerminalLaunchResolution.iTerm2BundleIdentifier)
+        let effectiveExplicitBundleID: String?
+        if let explicitBundleIdentifier {
+            effectiveExplicitBundleID = explicitBundleIdentifier
+        } else if preferredTerminal == .auto {
+            effectiveExplicitBundleID = TerminalCatalog.resolveBundleID(
+                preferredBundleID: preferredTerminalBundleID,
+                installedBundleIDs: installedBundleIDs
+            )
+        } else {
+            effectiveExplicitBundleID = nil
+        }
+
         let resolution = try DesktopWorkspaceValidator.resolveTerminalLaunch(
             targetURL: targetURL,
             withinScope: scopeURL,
-            explicitBundleIdentifier: explicitBundleIdentifier,
+            explicitBundleIdentifier: effectiveExplicitBundleID,
             preferredTerminal: preferredTerminal,
-            isITerm2Installed: iTermURL != nil
+            isITerm2Installed: isITerm2Installed
         )
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: resolution.bundleIdentifier) else {
             throw DomainError.ioFailure("Terminal application unavailable: \(resolution.bundleIdentifier)")
