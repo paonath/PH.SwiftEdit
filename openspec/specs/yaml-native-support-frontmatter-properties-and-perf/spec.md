@@ -1,9 +1,9 @@
-# Spec Delta: yaml-native-support-frontmatter-properties-and-perf
+# Capability: yaml-native-support-frontmatter-properties-and-perf
 
 ## Purpose
 Delivers native `.yml`/`.yaml` editing (viewport key/value highlighting, structural lint, top-level outline, 2-space smart indentation) and integrated Markdown YAML frontmatter support (inline key/value styling plus a structured Properties panel), followed by a measured whole-codebase analysis and three benchmark-gated performance refactor passes.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: REQ-001 Single-Resolution Document Language Classification
 WHEN a tab is opened, renamed, or saved under a new name, the `DocumentLanguage` resolver SHALL classify it once from the final path extension as `.markdown` (untitled, `md`, `markdown`, `mdown`, `mkd`), `.yaml` (`yml`, `yaml`, case-insensitive) or `.plainText`, cache the value on the tab, and force `.plainText` for binary or degraded snapshots [BC-001][AR-009][SEC-012].
@@ -57,7 +57,7 @@ WHEN a visible text range of a non-degraded `.yaml` snapshot, or the frontmatter
 - **THEN** every call returns zero YAML spans and the Markdown line-2 block is treated as GFM thematic breaks rather than frontmatter
 
 ### Requirement: REQ-004 Structural YAML Linter With Bounded Output
-WHEN a `.yaml` snapshot or a Markdown frontmatter block is linted, the `YAMLStructureLinter` SHALL report `YML001` tab indentation, `YML002` duplicate key within one mapping, `YML003` inconsistent indentation step and `YML004` unterminated frontmatter as `MarkdownLintDiagnostic` values without embedding YAML values in messages, capped at `1000` diagnostics and `32` nesting levels [BC-004][SEC-006][SEC-012].
+WHEN a `.yaml` snapshot or a Markdown frontmatter block is linted, the `YAMLStructureLinter` SHALL report `YML001` tab indentation, `YML002` duplicate key, `YML003` inconsistent indentation step, `YML004` unterminated frontmatter and `YML005` nesting beyond `32` levels as `MarkdownLintDiagnostic` values without YAML values in messages, capped at `1000` diagnostics [BC-004][SEC-006][SEC-012].
 
 #### Scenario: P4 Four Structural Rules Reported on Their Lines
 - **Path**: P4
@@ -71,7 +71,7 @@ WHEN a `.yaml` snapshot or a Markdown frontmatter block is linted, the `YAMLStru
 - **Trait**: security
 - **GIVEN** a valid `.yml` file, a file with `5000` duplicate keys, and a file nested `40` levels deep with a secret value `token: s3cr3t`
 - **WHEN** the linter runs for each
-- **THEN** the valid file yields zero diagnostics, the duplicate file yields exactly `1000` diagnostics, nesting beyond `32` stops descent with one bounded diagnostic, and no diagnostic message contains `s3cr3t`
+- **THEN** the valid file yields zero diagnostics, the duplicate file yields exactly `1000` diagnostics, nesting beyond `32` stops descent with exactly one `YML005` diagnostic, and no diagnostic message contains `s3cr3t`
 
 ### Requirement: REQ-005 Top-Level YAML Key Outline in the Document Navigator
 WHEN the Document Navigator opens on a `.yaml` tab, the `YAMLOutlineEngine` SHALL list top-level mapping keys with their UTF-16 offsets in document order, capped at `5000` entries, and the Navigator SHALL jump to the selected key using the existing confirm and clamp behavior [BC-004][UI-010][SEC-012].
@@ -108,7 +108,7 @@ WHEN `Enter` or `Tab` is pressed in a `.yaml` tab or inside Markdown frontmatter
 - **THEN** the first two yield `.notApplicable`, the empty marker is removed leaving the indentation, and the quoted colon line receives only the current indentation
 
 ### Requirement: REQ-007 Fail-Closed Frontmatter Property Parsing
-WHEN a `.markdown` snapshot contains a line-1 frontmatter block, the `FrontmatterPropertyParser` SHALL return up to `500` top-level entries classified as editable `scalar` or `list` (block `- x` or flow `[a, b]`) or read-only `nestedMap`, `blockScalar`, `aliased` or `tagged`, and SHALL mark the whole model read-only when the block is malformed or unterminated [BC-004][SEC-012].
+WHEN a `.markdown` snapshot contains a line-1 frontmatter block, the `FrontmatterPropertyParser` SHALL return up to `500` top-level entries (a defense-in-depth bound below the `200`-line frontmatter scan) classified as editable `scalar` or `list` (block `- x` or flow `[a, b]`) or read-only `nestedMap`, `blockScalar`, `aliased` or `tagged`, and SHALL mark the whole model read-only when the block is malformed or unterminated [BC-004][SEC-012].
 
 #### Scenario: P7 Scalars and Simple Lists Parsed as Editable Entries
 - **Path**: P7
@@ -198,9 +198,3 @@ WHEN REQ-001 through REQ-010 are implemented with a green suite, the performance
 - **GIVEN** a shared per-revision text index cached at revision `9` for a `1000`-unit buffer
 - **WHEN** a same-length replacement produces revision `10`
 - **THEN** every consumer receives an index built for revision `10` and no span or diagnostic derived from revision `9` is rendered
-
-## MODIFIED Requirements
-
-## REMOVED Requirements
-
-## RENAMED Requirements

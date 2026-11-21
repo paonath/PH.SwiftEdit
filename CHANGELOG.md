@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - 2026-11-21 UTC
+Branch: feature/FirstStub | Commit: 25538fd
+
+### Added
+- Added native `.yml`/`.yaml` editing: `DocumentLanguage` (`Markdown`/`YAML`/`Plain Text`) resolved once per tab and shown in the status bar, zero-regex `YAMLLineTokenizer`, viewport-only `YAMLSyntaxHighlighter` with grey lighter-weight keys (`yamlKeyForeground` `#6B7280`/`#9CA3AF`, `>= 4.5:1`) and full-color values, `YAMLStructureLinter` (`YML001`..`YML005`), top-level key outline in the Document Navigator (`KEY` badge), and two-space YAML Smart Enter/Tab (`openspec/specs/yaml-native-support-frontmatter-properties-and-perf/spec.md`, archived at `openspec/changes/archive/2026-11-21-016-yaml-native-support-frontmatter-properties-and-perf/`).
+- Added integrated Markdown YAML frontmatter support: inline key/value styling and a collapsible `Properties` panel (`PropertiesPanelView`) that edits, renames, adds and removes top-level scalars and simple lists through `FrontmatterPropertyParser`/`FrontmatterPropertyWriter` as one minimal `TextEdit` and a single undo step.
+- Added `docs/qa/perf-analysis-016.md` ranking measured bottlenecks, plus `PerfBench016` benchmarks and `PerfGolden016` golden behavioral fingerprints.
+
+### Changed
+- Frontmatter lines in Markdown now receive YAML spans instead of GFM spans, and YAML tabs report an Active lint status from the structural linter instead of `Lint: Off` (`openspec/specs/textkit2-gfm-editor-and-native-preview/spec.md` REQ-001, `openspec/specs/comprehensive-markdown-linter-and-diagnostics-ui/spec.md` REQ-003).
+- Normalized TextKit's `NSString`-bridged buffer to native UTF-8 at the editor boundary (`NativeTextNormalizer`), cutting the 1 MB keystroke path from 48.3 ms to 4.6 ms (`PERF-B1`).
+- Answered gutter and status-bar caret queries from a per-revision `DocumentTextIndex` (`DocumentTextIndexCache`, keyed by `(DocumentID, BufferRevision)`) and bounded frontmatter linting to a prefix index (11.9 ms → 0.0003 ms per 5 caret moves, 2.47 ms → 0.05 ms) (`PERF-B2`).
+- Built the TextKit 2 validator line index and model-sync checks from a native text mirror instead of re-bridging `textView.string` (8.8 ms → 2.5 ms) (`PERF-B3`).
+
+### Security
+- YAML engines never expand anchors/aliases or resolve tags (`CWE-776`), cap lines (`4096` UTF-16), frontmatter (`200` lines), depth (`32`), diagnostics (`1000`), outline (`5000`) and properties (`500`), and never include YAML values in diagnostic messages.
+- `FrontmatterPropertyWriter` rejects keys with control characters, newlines, structural indicators or duplicates, escapes risky values as double-quoted scalars (`CWE-74`), and refuses writes against a stale `BufferRevision`; binary and degraded buffers get no YAML work and no Properties panel.
+
 ## [Unreleased] - 2026-11-20 UTC
 Branch: feature/FirstStub | Commit: a3bfc35
 

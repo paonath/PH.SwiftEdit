@@ -10,7 +10,7 @@ Every unit under test MUST list at least 1 positive path (P#) and at least 1 neg
 | `YAMLLineTokenizer` | P2: key/quoted string with `#`/`:`/comment/list dash/URL/flow list tokens | N2 (security): `4097`-unit line skipped, unterminated quote, 10-level alias bomb linear and unexpanded |
 | `YAMLSyntaxHighlighter` | P3: viewport-only spans in `.yml`; frontmatter key/value spans in `.md` with GFM body intact | N3: `.txt`, binary, degraded, line-2 `---` block yield zero YAML spans |
 | `MarkdownSyntaxHighlighter` (modified REQ-001) | P10: frontmatter lines YAML-only spans, body GFM spans | N12: non-line-1 or unterminated frontmatter keeps GFM `thematicBreak` |
-| `YAMLStructureLinter` | P4: `YML001..YML004` on exact lines | N4 (security): valid file clean, `1000` cap, depth `32` cap, values never in messages |
+| `YAMLStructureLinter` | P4: `YML001..YML004` on exact lines | N4 (security): valid file clean, `1000` cap, depth `32` cap reported once as `YML005`, values never in messages |
 | `ActiveLintStatus` (modified REQ-003) | P7: YAML tab `.active(count: 2)` | N8: `.swift` and binary `.yml` → `.off`, popover dismissed |
 | `YAMLOutlineEngine` + Navigator | P5: top-level keys listed, jump to line 5 | N5: nested, comment, list item, block-scalar body excluded; stale offset clamped |
 | `YAMLSmartIndentEngine` | P6: `key:` → +2, list continuation, `Tab` → 2 spaces | N6: `.txt`/MD body `.notApplicable`, empty marker exit, quoted colon no indent |

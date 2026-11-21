@@ -1,7 +1,7 @@
 # Capability: comprehensive-markdown-linter-and-diagnostics-ui
 
 ## Purpose
-Moves full AST linting off `@MainActor` with debounced `BufferRevision` cancellation while preserving a bounded linear URI and image safety fast-path so P99 typing stays at or below `16 ms` up to `20,000` lines without silencing `.unsafeLinkScheme` or `.unsafeImagePath` XSS detection (`PERF-006`).
+Extends lint status classification so YAML tabs report an Active status driven by the structural YAML linter instead of Lint Off, while plain-text tabs stay Off, degraded buffers stay Paused, and security errors are never suppressed.
 
 ## Requirements
 
@@ -68,7 +68,7 @@ WHEN the user requests a Quick-Fix or Fix All with an `expectedRevision`, the `M
 - **THEN** each reports `quickFix == nil` and Fix All leaves those lines byte-identical
 
 ### Requirement: REQ-003 Lint Status Classification and Active-Line Suppression
-WHEN classifying document lint state or filtering active-line diagnostics, the workbench lint policy SHALL report Off for non-Markdown tabs, Paused for degraded buffers, Active retaining security error counts during background recomputation (`ActiveLintStatus`), and hide only non-security caret-line warnings via `ActiveLineLintSuppressionPolicy` [BC-004][DATA-003].
+WHEN classifying document lint state or filtering active-line diagnostics, the workbench lint policy SHALL report Off for plain-text tabs, Paused for degraded buffers, Active for Markdown tabs (26-rule linter plus frontmatter `YML001..YML005`) and YAML tabs (`YAMLStructureLinter`) retaining security error counts during background recomputation (`ActiveLintStatus`), and hide only non-security caret-line warnings via `ActiveLineLintSuppressionPolicy` [BC-004][DATA-003].
 
 #### Scenario: P3 Off Paused and Active Statuses
 - **Path**: P3
@@ -90,6 +90,20 @@ WHEN classifying document lint state or filtering active-line diagnostics, the w
 - **GIVEN** a Markdown tab containing an active `.unsafeLinkScheme` diagnostic while async `26`-rule AST linting is pending for the new revision
 - **WHEN** `ActiveLintStatus.classify` runs before the debounced AST worker completes
 - **THEN** status remains `.active(count >= 1)` reflecting security fast-path errors rather than flashing `.active(count: 0)`
+
+#### Scenario: P7 YAML Tabs Report Active Status From the Structural Linter
+- **Path**: P7
+- **Trait**: positive
+- **GIVEN** a `config.yml` tab with a duplicate top-level key and a tab-indented line
+- **WHEN** `ActiveLintStatus.classify(language:snapshot:diagnosticCount:)` runs after `YAMLStructureLinter` completes
+- **THEN** the result is `.active(count: 2)` and the status bar shows the existing Active label `⚠ Lint: 2`
+
+#### Scenario: N8 Plain Text and Binary YAML Tabs Remain Off
+- **Path**: N8
+- **Trait**: negative
+- **GIVEN** a `Main.swift` tab and a binary `data.yml` tab containing `0x00`
+- **WHEN** `ActiveLintStatus.classify` runs for each
+- **THEN** both results are `.off`, no YAML linter runs, and the diagnostics popover is dismissed
 
 ### Requirement: REQ-004 Triple Diagnostics Surfacing and Shift+Cmd+M Popover
 WHEN diagnostics exist for an Active Markdown tab, the `SwiftEditUI` SHALL render dotted underlines, gutter severity badges and the status-bar `ActiveLintStatus`, SHALL toggle the diagnostics popover with `⇧⌘M` offering Jump-to-Range, Quick-Fix and Fix All in one Undo step, and SHALL stay inert on binary and non-Markdown tabs [UI-005][UI-007][UI-012][DATA-003].

@@ -8,7 +8,7 @@ Extends lint status classification so YAML tabs report an Active status driven b
 ## MODIFIED Requirements
 
 ### Requirement: REQ-003 Lint Status Classification and Active-Line Suppression
-WHEN classifying document lint state or filtering active-line diagnostics, the workbench lint policy SHALL report Off for plain-text tabs, Paused for degraded buffers, Active for Markdown tabs (26-rule linter plus frontmatter `YML001..YML004`) and YAML tabs (`YAMLStructureLinter`) retaining security error counts during background recomputation (`ActiveLintStatus`), and hide only non-security caret-line warnings via `ActiveLineLintSuppressionPolicy` [BC-004][DATA-003].
+WHEN classifying document lint state or filtering active-line diagnostics, the workbench lint policy SHALL report Off for plain-text tabs, Paused for degraded buffers, Active for Markdown tabs (26-rule linter plus frontmatter `YML001..YML005`) and YAML tabs (`YAMLStructureLinter`) retaining security error counts during background recomputation (`ActiveLintStatus`), and hide only non-security caret-line warnings via `ActiveLineLintSuppressionPolicy` [BC-004][DATA-003].
 
 Security-Waiver: additive only — the Off state is narrowed from "non-Markdown" to "plain-text" so YAML tabs gain diagnostics; Paused, security-count retention (`P6`) and security non-suppression (`N5`) are preserved unchanged and binary tabs remain Off.
 
@@ -17,7 +17,7 @@ Security-Waiver: additive only — the Off state is narrowed from "non-Markdown"
 - **Trait**: positive
 - **GIVEN** a `config.yml` tab with a duplicate top-level key and a tab-indented line
 - **WHEN** `ActiveLintStatus.classify(language:snapshot:diagnosticCount:)` runs after `YAMLStructureLinter` completes
-- **THEN** the result is `.active(count: 2)` and the status bar shows `Lint: 2 issues`
+- **THEN** the result is `.active(count: 2)` and the status bar shows the existing Active label `⚠ Lint: 2`
 
 #### Scenario: N8 Plain Text and Binary YAML Tabs Remain Off
 - **Path**: N8
