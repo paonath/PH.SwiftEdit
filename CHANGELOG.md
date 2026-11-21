@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-21 UTC
+Branch: feature/FirstStub | Commit: 448182f
+
+### Added
+- Added dynamic untitled tab titles (`TabTitleDeriver`, `WorkspaceTabSession.updateUntitledDisplayTitle`) deriving up to 4 space-separated words in `O(1)` time while stripping leading Markdown markers, preserving `DocumentLanguage`, and locking to filename on save (`openspec/specs/swiftedit-branding-settings-lint-updates-build/spec.md`).
+- Redesigned `Settings` (`Cmd+,`, `SwiftEditSettingsView`) with sidebar sections (`Fonts`, `Terminal`, `Updates`), dynamic discovery across 8 allowlisted macOS terminals (`TerminalCatalog` with `Auto` preferring `iTerm2` when installed), and persisted `preferredTerminalBundleID` driving `sidebarOpenInTerminal`.
+- Added manual `Check for Updates…` (`GitHubReleaseUpdateChecker`, `UpdateCheckSheetView`) in the main menu and Settings to compare against GitHub Releases (`paonath/PH.SwiftEdit`) and propose verified downloads when a newer version exists.
+- Added unified `SwiftEditShortcutDispatcher` with local `NSEvent` `.keyDown` monitor (including `Option+\` Document Navigator across ANSI/ISO layouts), Finder-style sidebar double-click folder opening, `Copy Path to Clipboard` for all files (including binary) and folders, GitHub CI/Release workflows (`.github/workflows/test.yml`, `.github/workflows/release.yml`), and `Scripts/install-from-github.sh`.
+
+### Changed
+- Set application display, bundle, and executable name to `SwiftEdit` (`SwiftEdit.app`) across `XcodeApp/Info.plist`, `PH.SwiftEdit.xcodeproj`, menus, and release packaging while retaining repository and bundle identifier (`PH.SwiftEdit` / `it.ph.SwiftEdit`).
+- Upgraded Markdown/YAML lint visibility with thick underlines and tinted range backgrounds in `TextKit2EditorView`, 3 pt leading accent bars and 8 pt severity dots in `LineNumberGutterView`, and a bordered severity pill in the status bar.
+- Configured `Scripts/build-app.sh` to stage `Release` builds into gitignored `build/<FULL_VERSION>/SwiftEdit.app`, and completed 3 consecutive optimization passes across `MarkdownAllConstructsLinter`, `YAMLLineTokenizer`/`YAMLStructureLinter`, and `MarkdownLineIndex`/`DocumentTextIndex` (`PerfExtreme3CyclesTests`).
+
+### Security
+- Amended Constitution (`v1.5.0`, `SEC-001`, `SEC-004`) to allow macOS `com.apple.security.network.client` strictly for user-initiated `Check for Updates…` ephemeral HTTPS `GET` requests to `api.github.com`, enforcing `https://` GitHub host allowlisting (`verifiedGitHubHTTPSURL`) while keeping editing, preview, and iOS strictly offline.
+
+## [Unreleased] - 2026-11-21 UTC
 Branch: feature/FirstStub | Commit: d353ded
 
 ### Added
