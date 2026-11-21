@@ -1,0 +1,120 @@
+# MySpec AI-Oriented Specification Index
+# Order: PREPEND (newest created/implemented at top, oldest at bottom)
+# Planning skills MUST always read documents in `always_read` and consult `specs` first.
+always_read:
+  - "openspec/Constitution.md"
+specs:
+  - id: "018-swiftedit-branding-settings-lint-updates-build"
+    status: "implemented"
+    date: "2026-11-21"
+    capabilities: ["swiftedit-branding-settings-lint-updates-build"]
+    path: "openspec/specs/swiftedit-branding-settings-lint-updates-build/spec.md"
+    summary: "SwiftEdit Branding, Dynamic Untitled Tab Titles, Prominent Lint, Sidebar Settings, GitHub Update Check & build/<ver>/"
+  - id: "017-deep-debug-zoom-fonts-opendyslexic-and-perf"
+    status: "implemented"
+    date: "2026-11-21"
+    capabilities: ["editor-ux-highlighting-sidebar-pin-tabs-and-about", "deep-debug-zoom-fonts-opendyslexic-and-perf", "constitution-v1-3-governance-and-fitness", "swifteditui-purple-zed-layout-textkit2-and-appicons"]
+    path: "openspec/changes/archive/2026-11-21-017-deep-debug-zoom-fonts-opendyslexic-and-perf"
+    summary: "3x Deep Debug Audit, Zoomed Tabs/Sidebar/Gutter, System & OpenDyslexic App Fonts and Extreme Performance Passes"
+  - id: "016-yaml-native-support-frontmatter-properties-and-perf"
+    status: "implemented"
+    date: "2026-11-21"
+    capabilities: ["textkit2-gfm-editor-and-native-preview", "comprehensive-markdown-linter-and-diagnostics-ui", "yaml-native-support-frontmatter-properties-and-perf"]
+    path: "openspec/changes/archive/2026-11-21-016-yaml-native-support-frontmatter-properties-and-perf"
+    summary: "Native YAML Files, Frontmatter Key/Value Properties & Post-Implementation 3-Pass Performance Refactor"
+  - id: "015-debug-hardening-usability-and-automated-qa"
+    status: "implemented"
+    date: "2026-11-20"
+    capabilities: ["notepadpp-tabs-session-recovery-and-dotfiles", "editor-ux-highlighting-sidebar-pin-tabs-and-about", "document-core-and-spm-scaffold", "ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions", "textkit2-gfm-editor-and-native-preview", "comprehensive-markdown-linter-and-diagnostics-ui", "debug-hardening-usability-and-automated-qa", "markdown-lint-format-bracket-and-diff", "translucent-header-brand-submenu"]
+    path: "openspec/changes/archive/2026-11-20-015-debug-hardening-usability-and-automated-qa"
+    summary: "Debug Hardening, Click-Only Accessible Usability & Automated 3x QA Verification"
+  - id: "014-markdown-document-navigator-and-distraction-free"
+    status: "draft"
+    date: "2026-11-20"
+    capabilities: ["markdown-document-navigator-and-distraction-free"]
+    path: "openspec/changes/014-markdown-document-navigator-and-distraction-free"
+    summary: "Alfred-style Markdown heading navigator (Option+Backslash) and full-screen distraction-free mode (Option+1)"
+  - id: "013-comprehensive-markdown-linter-and-diagnostics-ui"
+    status: "implemented"
+    date: "2026-11-20"
+    capabilities: ["comprehensive-markdown-linter-and-diagnostics-ui", "markdown-lint-format-bracket-and-diff"]
+    path: "openspec/changes/archive/2026-11-20-013-comprehensive-markdown-linter-and-diagnostics-ui"
+    summary: "26-Rule All-Construct Markdown Linter, Idempotent Quick-Fix and Fix All, Triple Diagnostics UI and Shift+Cmd+M Popover"
+  - id: "012-textkit2-gfm-editor-and-native-preview"
+    status: "implemented"
+    date: "2026-11-20"
+    capabilities: ["textkit2-gfm-editor-and-native-preview"]
+    path: "openspec/changes/archive/2026-11-20-012-textkit2-gfm-editor-and-native-preview"
+    summary: "Two-Speed GFM TextKit 2 Editor, Markdown CommandMenu, GFM Table Tab and Cmd+P Zero-WebKit Native Preview"
+  - id: "011-adaptive-markdown-lists-tab-indentation"
+    status: "implemented"
+    date: "2026-11-20"
+    capabilities: ["editor-ux-highlighting-sidebar-pin-tabs-and-about", "adaptive-markdown-lists-tab-indentation", "markdown-lint-format-bracket-and-diff"]
+    path: "openspec/changes/archive/2026-11-20-011-adaptive-markdown-lists-tab-indentation"
+    summary: "Linter-Governed Adaptive Markdown List Indentation (Tab / Shift+Tab / Return)"
+  - id: "010-translucent-header-brand-submenu"
+    status: "implemented"
+    date: "2026-11-20"
+    capabilities: ["editor-ux-highlighting-sidebar-pin-tabs-and-about", "ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions", "translucent-header-brand-submenu"]
+    path: "openspec/changes/archive/2026-11-20-010-translucent-header-brand-submenu"
+    summary: "Root-ZStack Translucent Header Brand Submenu, Descriptive Action Badges, Single-Source SwiftEditCommands & Binary Qua..."
+  - id: "009-full-app-semantic-theming-and-window-sync"
+    status: "implemented"
+    date: "2026-11-19"
+    capabilities: ["editor-ux-highlighting-sidebar-pin-tabs-and-about", "full-app-semantic-theming-and-window-sync", "swifteditui-purple-zed-layout-textkit2-and-appicons"]
+    path: "openspec/changes/archive/2026-11-19-009-full-app-semantic-theming-and-window-sync"
+    summary: "Full-App Semantic Light/Dark/Auto Theming, macOS Window Chrome Sync & UI Token Fitness"
+  - id: "008-editor-ux-highlighting-sidebar-pin-tabs-and-about"
+    status: "implemented"
+    date: "2026-11-19"
+    capabilities: ["notepadpp-tabs-session-recovery-and-dotfiles", "editor-ux-highlighting-sidebar-pin-tabs-and-about", "ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions", "markdown-lint-format-bracket-and-diff", "swifteditui-purple-zed-layout-textkit2-and-appicons"]
+    path: "openspec/changes/archive/2026-11-19-008-editor-ux-highlighting-sidebar-pin-tabs-and-about"
+    summary: "PH.SwiftEdit Editor UX, Highlighting, Percentage-Resized Collapsible Sidebar, Tab Reordering & Help About Integrations"
+  - id: "007-ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions"
+    status: "implemented"
+    date: "2026-11-19"
+    capabilities: ["ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions", "swifteditui-purple-zed-layout-textkit2-and-appicons"]
+    path: "openspec/changes/archive/2026-11-19-007-ui-minimal-layout-gutter-menus-cheatsheet-and-sidebar-actions"
+    summary: "SwiftEditUI Minimalist Layout, Line Gutter, Classic Menus, CheatSheet, Parent ... Navigator and 11 Sidebar Actions"
+  - id: "006-core-cr-lineending-mru-batch-search-and-sidebar-fs"
+    status: "implemented"
+    date: "2026-11-19"
+    capabilities: ["document-core-and-spm-scaffold", "core-cr-lineending-mru-batch-search-and-sidebar-fs"]
+    path: "openspec/changes/archive/2026-11-19-006-core-cr-lineending-mru-batch-search-and-sidebar-fs"
+    summary: "SwiftEditCore 3-Way LineEnding (CR), Cursor Metrics, 10-Entry MRU, Shallow Batch Open, Literal Search and Confined Si..."
+  - id: "005-constitution-v1-3-lineending-cr-and-workspace-handoff"
+    status: "implemented"
+    date: "2026-11-18"
+    capabilities: ["constitution-v1-3-governance-and-fitness"]
+    path: "openspec/changes/archive/2026-11-18-005-constitution-v1-3-lineending-cr-and-workspace-handoff"
+    summary: "Synchronize Constitution v1.3.0 (UI-001, DATA-004, SEC-004) and Add ConstitutionGovernanceValidator Fitness Suite"
+  - id: "004-swifteditui-purple-zed-layout-textkit2-and-appicons"
+    status: "implemented"
+    date: "2026-11-18"
+    capabilities: ["swifteditui-purple-zed-layout-textkit2-and-appicons"]
+    path: "openspec/changes/archive/2026-11-18-004-swifteditui-purple-zed-layout-textkit2-and-appicons"
+    summary: "Build SwiftEditUI (Concept E2 Purple Chrome, #FFFFFF/#000000 Inverted TextKit 2 Editor, 50%..300% Zoom, Diff View) an..."
+  - id: "003-notepadpp-tabs-session-recovery-and-dotfiles"
+    status: "implemented"
+    date: "2026-11-18"
+    capabilities: ["notepadpp-tabs-session-recovery-and-dotfiles"]
+    path: "openspec/changes/archive/2026-11-18-003-notepadpp-tabs-session-recovery-and-dotfiles"
+    summary: "Implement WorkspaceAndTabSession (Notepad++ Pin, SessionRecovery GC, Dotfiles & EditorPreferences)"
+  - id: "002-markdown-lint-format-bracket-and-diff"
+    status: "implemented"
+    date: "2026-11-18"
+    capabilities: ["markdown-lint-format-bracket-and-diff"]
+    path: "openspec/changes/archive/2026-11-18-002-markdown-lint-format-bracket-and-diff"
+    summary: "Implement MarkdownLintAndFormat (swift-markdown AST) and SearchDiffAndBracketEngine (() {} [] & Myers Diff)"
+  - id: "001-swifteditcore-document-and-binary-guard"
+    status: "implemented"
+    date: "2026-11-17"
+    capabilities: ["document-core-and-spm-scaffold"]
+    path: "openspec/changes/archive/2026-11-17-001-swifteditcore-document-and-binary-guard"
+    summary: "Scaffold Cross-Platform Package.swift and Implement DocumentCore (Cmd+D & Binary Quarantine)"
+  - id: "000-promote-design-and-app-icons-to-docs"
+    status: "implemented"
+    date: "2026-11-17"
+    capabilities: ["design-assets-promotion"]
+    path: "openspec/changes/archive/2026-11-17-000-promote-design-and-app-icons-to-docs"
+    summary: "Promote Concept E2 Brand Icons, AppIcon Sets, Color Schemes, and UI Previews to docs/design/"

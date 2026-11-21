@@ -1,0 +1,42 @@
+# Funzionalità minime di un editor di testo moderno
+
+- Nuovo documento (cmd + N)
+- Apri file (cmd + O)
+- Apri Folder (cmd + shift + O)
+- Apri Tutti i file in Folder (cmd + shift + option + O)
+- Apri recenti (lista in menù, ultimi 10 file, SE PRESENTI, se apri un file e poi ritorni al menu recnti, l'ultimo file non deve essere ripetuto in lista ma solo aggiornata la data di ultima apertura)
+- Salva (cmd + S)
+- Salva con nome (cmd + shift + S)
+- Chiudi documento (con avviso se ci sono modifiche non salvate)
+- Esci dall'applicazione (con avviso se ci sono modifiche non salvate)
+- Annulla (undo, cmd + Z)
+- Ripeti (redo, cmd + Y)
+- Taglia (cmd + X)
+- Copia (cmd + C)
+- Incolla (cmd + V)
+- Seleziona tutto (cmd + A)
+- Selezione del testo con mouse e tastiera
+- Spostamento del cursore con mouse e tastiera (frecce, Home, Fine)
+- Trova nel documento (command + F)
+- Trova e sostituisci (command + H)
+- Vai a una riga specifica (command + G)
+- Scorrimento del documento
+- conteggio righe e colonne (in basso a destra, riga corrente, colonna corrente, numero caratteri)
+- Lettura e scrittura dei file in codifica UTF-8
+- Gestione automatica del fine riga (notazione windows; notazione mac, notazione linux)
+- Help nel menù (comandi, funzionalità)
+- About (con versione del software e link GitHub)
+- CheatSheet con TUTTI i comandi da Tastiera (menù grafico attivabile anche come pressione di pulsante)
+- Nella BARRA DI NAVIGAZIONE LATERALE:
+    - reveal in Finder
+    - Open Terminal (apertura di terminale nella cartella indicata, SE è un file apertura di terminale nella cartella che contiene il file); Terminale di sistema oppure Iterm2 SE presente ed è il default terminal
+    - Apri cartella con Finder
+    - Crea nuova cartella
+    - Rinomina Cartella
+    - Crea nuovo file
+    - Taglia file
+    - Copia file
+    - Incolla file
+    - Elimina file
+    - Rinomina file
+
