@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "016-yaml-native-support-frontmatter-properties-and-perf"
+    status: "draft"
+    date: "2026-11-21"
+    capabilities: ["yaml-native-support-frontmatter-properties-and-perf", "textkit2-gfm-editor-and-native-preview", "comprehensive-markdown-linter-and-diagnostics-ui"]
+    path: "openspec/changes/016-yaml-native-support-frontmatter-properties-and-perf"
+    summary: "Native YAML Files, Frontmatter Key/Value Highlight and Properties Panel, Post-Implementation 3-Pass Perf Refactor"
   - id: "015-debug-hardening-usability-and-automated-qa"
     status: "implemented"
     date: "2026-11-20"
