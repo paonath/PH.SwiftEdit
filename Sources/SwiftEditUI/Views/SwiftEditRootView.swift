@@ -2452,150 +2452,179 @@ public struct SwiftEditRootView: View {
     }
 
     public var body: some View {
+        applyAlerts(to: applySheets(to: applyLifecycleAndObservers(to: baseRootView)))
+            .environment(\.appTypography, AppTypographyContext(typography: model.typography, generation: model.typographyGeneration))
+    }
+
+    private var baseRootView: some View {
         layoutContent
-        .background(HostingWindowFinder { window in model.hostWindow = window })
-        .background(model.palette.chromeSurface.swiftUIColor)
-        .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
-        .preferredColorScheme(model.preferredSwiftUIColorScheme)
-        .onAppear {
-            SwiftEditAppLifecycleBridge.shared.attach(workbench: model)
-            model.windowFullScreenQuery = { NSApp.keyWindow?.styleMask.contains(.fullScreen) ?? false }
-            model.windowFullScreenToggle = { NSApp.keyWindow?.toggleFullScreen(nil) }
-            model.refreshUnmaskedSystemAppearance()
-            model.updateAccessibilityPreferences(
-                reduceTransparency: reduceTransparency,
-                increasedContrast: colorSchemeContrast == .increased
-            )
-            if keyDownMonitor == nil {
-                let activeModel = model
-                keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                    let consumed = MainActor.assumeIsolated { () -> Bool in
-                        guard let eventWindow = event.window, eventWindow.attachedSheet == nil else {
-                            return false
-                        }
-                        if let ownerWindow = activeModel.hostWindow {
-                            guard eventWindow === ownerWindow else { return false }
-                        } else if eventWindow.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" || eventWindow.isSheet {
-                            return false
-                        }
-                        guard !activeModel.isCheatSheetPresented,
-                              !activeModel.isAboutSheetPresented,
-                              !activeModel.isUpdateDialogPresented,
-                              activeModel.pendingDirtyCloseTabID == nil,
-                              activeModel.pendingBatchOpenPlan == nil,
-                              activeModel.pendingTrashItemURL == nil else {
-                            return false
-                        }
-                        let responder = eventWindow.firstResponder
-                        let isEditingOverlayTextField = (responder is NSTextView) && !(responder is SwiftEditNSTextView)
-                        return SwiftEditShortcutDispatcher.dispatch(event: event, model: activeModel, isEditingOverlayTextField: isEditingOverlayTextField)
-                    }
-                    return consumed ? nil : event
+            .background(HostingWindowFinder { window in model.hostWindow = window })
+            .background(model.palette.chromeSurface.swiftUIColor)
+            .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
+            .preferredColorScheme(model.preferredSwiftUIColorScheme)
+            .frame(minWidth: 960, minHeight: 620)
+            .focusedSceneValue(\.workbenchModel, model)
+    }
+
+    @ViewBuilder
+    private func applyLifecycleAndObservers<Content: View>(to content: Content) -> some View {
+        content
+            .onAppear {
+                SwiftEditAppLifecycleBridge.shared.attach(workbench: model)
+                model.windowFullScreenQuery = { NSApp.keyWindow?.styleMask.contains(.fullScreen) ?? false }
+                model.windowFullScreenToggle = { NSApp.keyWindow?.toggleFullScreen(nil) }
+                model.refreshUnmaskedSystemAppearance()
+                model.updateAccessibilityPreferences(
+                    reduceTransparency: reduceTransparency,
+                    increasedContrast: colorSchemeContrast == .increased
+                )
+                attachKeyDownMonitor()
+            }
+            .onDisappear {
+                detachKeyDownMonitor()
+            }
+            .onChange(of: systemColorScheme) { _, newScheme in
+                if model.appearanceMode == .auto {
+                    model.updateSystemColorScheme(prefersDark: newScheme == .dark)
                 }
             }
-        }
-        .onDisappear {
-            if let monitor = keyDownMonitor {
-                NSEvent.removeMonitor(monitor)
-                keyDownMonitor = nil
+            .onChange(of: reduceTransparency) { _, newValue in
+                model.updateAccessibilityPreferences(
+                    reduceTransparency: newValue,
+                    increasedContrast: colorSchemeContrast == .increased
+                )
             }
-        }
-        .onChange(of: systemColorScheme) { _, newScheme in
-            if model.appearanceMode == .auto {
-                model.updateSystemColorScheme(prefersDark: newScheme == .dark)
+            .onChange(of: colorSchemeContrast) { _, newContrast in
+                model.updateAccessibilityPreferences(
+                    reduceTransparency: reduceTransparency,
+                    increasedContrast: newContrast == .increased
+                )
             }
-        }
-        .onChange(of: reduceTransparency) { _, newValue in
-            model.updateAccessibilityPreferences(
-                reduceTransparency: newValue,
-                increasedContrast: colorSchemeContrast == .increased
-            )
-        }
-        .onChange(of: colorSchemeContrast) { _, newContrast in
-            model.updateAccessibilityPreferences(
-                reduceTransparency: reduceTransparency,
-                increasedContrast: newContrast == .increased
-            )
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
-            if model.isDistractionFree { model.windowDidExitFullScreen() }
-        }
-        .frame(minWidth: 960, minHeight: 620)
-        .focusedSceneValue(\.workbenchModel, model)
-        .sheet(isPresented: $model.isCheatSheetPresented) {
-            KeyboardShortcutsCheatSheetView(palette: model.palette) {
-                model.isCheatSheetPresented = false
-                model.requestEditorFocus()
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+                if model.isDistractionFree { model.windowDidExitFullScreen() }
             }
-        }
-        .sheet(isPresented: $model.isAboutSheetPresented) {
-            AboutSheetView(
-                descriptor: AboutSheetDescriptor.resolveFromMainBundle(),
-                palette: model.palette
-            ) {
-                model.isAboutSheetPresented = false
-                model.requestEditorFocus()
+    }
+
+    @ViewBuilder
+    private func applySheets<Content: View>(to content: Content) -> some View {
+        content
+            .sheet(isPresented: $model.isCheatSheetPresented) {
+                KeyboardShortcutsCheatSheetView(palette: model.palette) {
+                    model.isCheatSheetPresented = false
+                    model.requestEditorFocus()
+                }
             }
-        }
-        .sheet(isPresented: $model.isUpdateDialogPresented) {
-            UpdateCheckSheetView(model: model, palette: model.palette) {
-                model.dismissUpdateDialog()
-                model.requestEditorFocus()
+            .sheet(isPresented: $model.isAboutSheetPresented) {
+                AboutSheetView(
+                    descriptor: AboutSheetDescriptor.resolveFromMainBundle(),
+                    palette: model.palette
+                ) {
+                    model.isAboutSheetPresented = false
+                    model.requestEditorFocus()
+                }
             }
-        }
-        .alert(
-            "Unsaved Changes",
-            isPresented: Binding(
-                get: { presentedDirtyAlertTabID != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        presentedDirtyAlertTabID = nil
-                        if let nextID = model.pendingDirtyCloseTabID {
-                            Task { @MainActor in
-                                if model.pendingDirtyCloseTabID == nextID {
-                                    presentedDirtyAlertTabID = nextID
-                                }
+            .sheet(isPresented: $model.isUpdateDialogPresented) {
+                UpdateCheckSheetView(model: model, palette: model.palette) {
+                    model.dismissUpdateDialog()
+                    model.requestEditorFocus()
+                }
+            }
+    }
+
+    @ViewBuilder
+    private func applyAlerts<Content: View>(to content: Content) -> some View {
+        content
+            .alert("Unsaved Changes", isPresented: dirtyCloseAlertPresented) {
+                Button("Save") { model.resolvePendingDirtyClose(.save) }
+                Button("Don't Save", role: .destructive) { model.resolvePendingDirtyClose(.dontSave) }
+                Button("Cancel", role: .cancel) { model.resolvePendingDirtyClose(.cancel) }
+            } message: {
+                let title = model.tabSession.tabs.first(where: { $0.id == presentedDirtyAlertTabID })?.title ?? model.activeTabTitle
+                Text("Do you want to save your changes to \"\(title)\" before closing?")
+            }
+            .onChange(of: model.pendingDirtyCloseTabID) { _, newValue in
+                presentedDirtyAlertTabID = newValue
+            }
+            .alert("Open All Files in Folder?", isPresented: batchOpenAlertPresented) {
+                Button("Open \(model.pendingBatchOpenPlan?.files.count ?? 0) Files") { model.confirmPendingBatchOpen() }
+                Button("Cancel", role: .cancel) { model.cancelPendingBatchOpen() }
+            } message: {
+                Text("This folder contains more than 50 text files (\(model.pendingBatchOpenPlan?.files.count ?? 0) eligible files). Open all?")
+            }
+            .alert("Move Item to Trash?", isPresented: trashItemAlertPresented) {
+                Button("Move to Trash", role: .destructive) { model.confirmPendingTrashItem() }
+                Button("Cancel", role: .cancel) { model.cancelPendingTrashItem() }
+            } message: {
+                Text(model.pendingTrashItemURL?.lastPathComponent ?? "")
+            }
+    }
+
+    private var dirtyCloseAlertPresented: Binding<Bool> {
+        Binding(
+            get: { presentedDirtyAlertTabID != nil },
+            set: { isPresented in
+                if !isPresented {
+                    presentedDirtyAlertTabID = nil
+                    if let nextID = model.pendingDirtyCloseTabID {
+                        Task { @MainActor in
+                            if model.pendingDirtyCloseTabID == nextID {
+                                presentedDirtyAlertTabID = nextID
                             }
                         }
                     }
                 }
-            )
-        ) {
-            Button("Save") { model.resolvePendingDirtyClose(.save) }
-            Button("Don't Save", role: .destructive) { model.resolvePendingDirtyClose(.dontSave) }
-            Button("Cancel", role: .cancel) { model.resolvePendingDirtyClose(.cancel) }
-        } message: {
-            let title = model.tabSession.tabs.first(where: { $0.id == presentedDirtyAlertTabID })?.title ?? model.activeTabTitle
-            Text("Do you want to save your changes to \"\(title)\" before closing?")
+            }
+        )
+    }
+
+    private var batchOpenAlertPresented: Binding<Bool> {
+        Binding(
+            get: { model.pendingBatchOpenPlan != nil },
+            set: { if !$0 { model.cancelPendingBatchOpen() } }
+        )
+    }
+
+    private var trashItemAlertPresented: Binding<Bool> {
+        Binding(
+            get: { model.pendingTrashItemURL != nil },
+            set: { if !$0 { model.cancelPendingTrashItem() } }
+        )
+    }
+
+    private func attachKeyDownMonitor() {
+        guard keyDownMonitor == nil else { return }
+        let activeModel = model
+        keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let consumed = MainActor.assumeIsolated { () -> Bool in
+                guard let eventWindow = event.window, eventWindow.attachedSheet == nil else {
+                    return false
+                }
+                if let ownerWindow = activeModel.hostWindow {
+                    guard eventWindow === ownerWindow else { return false }
+                } else if eventWindow.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" || eventWindow.isSheet {
+                    return false
+                }
+                guard !activeModel.isCheatSheetPresented,
+                      !activeModel.isAboutSheetPresented,
+                      !activeModel.isUpdateDialogPresented,
+                      activeModel.pendingDirtyCloseTabID == nil,
+                      activeModel.pendingBatchOpenPlan == nil,
+                      activeModel.pendingTrashItemURL == nil else {
+                    return false
+                }
+                let responder = eventWindow.firstResponder
+                let isEditingOverlayTextField = (responder is NSTextView) && !(responder is SwiftEditNSTextView)
+                return SwiftEditShortcutDispatcher.dispatch(event: event, model: activeModel, isEditingOverlayTextField: isEditingOverlayTextField)
+            }
+            return consumed ? nil : event
         }
-        .onChange(of: model.pendingDirtyCloseTabID) { _, newValue in
-            presentedDirtyAlertTabID = newValue
+    }
+
+    private func detachKeyDownMonitor() {
+        if let monitor = keyDownMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyDownMonitor = nil
         }
-        .alert(
-            "Open All Files in Folder?",
-            isPresented: Binding(
-                get: { model.pendingBatchOpenPlan != nil },
-                set: { if !$0 { model.cancelPendingBatchOpen() } }
-            )
-        ) {
-            Button("Open \(model.pendingBatchOpenPlan?.files.count ?? 0) Files") { model.confirmPendingBatchOpen() }
-            Button("Cancel", role: .cancel) { model.cancelPendingBatchOpen() }
-        } message: {
-            Text("This folder contains more than 50 text files (\(model.pendingBatchOpenPlan?.files.count ?? 0) eligible files). Open all?")
-        }
-        .alert(
-            "Move Item to Trash?",
-            isPresented: Binding(
-                get: { model.pendingTrashItemURL != nil },
-                set: { if !$0 { model.cancelPendingTrashItem() } }
-            )
-        ) {
-            Button("Move to Trash", role: .destructive) { model.confirmPendingTrashItem() }
-            Button("Cancel", role: .cancel) { model.cancelPendingTrashItem() }
-        } message: {
-            Text(model.pendingTrashItemURL?.lastPathComponent ?? "")
-        }
-        .environment(\.appTypography, AppTypographyContext(typography: model.typography, generation: model.typographyGeneration))
     }
 
     /// Root-level overlay: `.zIndex(99)` outside-click shield positioned strictly below `topBarHeight` so the header logo trigger stays clickable to toggle, beneath the `.zIndex(100)` sticky submenu (`BUG-006`, `UI-012`).
