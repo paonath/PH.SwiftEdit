@@ -23,7 +23,13 @@ enum PerfGolden017 {
     ]
 
     @MainActor
+    private static var cachedCurrent: [String: UInt64]?
+
+    @MainActor
     static func current() -> [String: UInt64] {
+        if let cachedCurrent {
+            return cachedCurrent
+        }
         var groups = PerfGolden016.current()
         let md = DocumentSession(text: PerfGolden016.markdown).snapshot
         let preview = MarkdownPreviewProjector.project(snapshot: md, showPreview: true)
@@ -33,6 +39,7 @@ enum PerfGolden017 {
         groups["typography"] = PerfBench016.fingerprint(faces.map { "\($0.familyName ?? "") \($0.pointSize) \($0.fontDescriptor.symbolicTraits.rawValue)" })
         groups["zoom.metrics"] = PerfBench016.fingerprint([50, 100, 150, 200, 300].map { ZoomedChromeMetrics(zoomPercent: $0).scaledValues })
         groups["navigator.outline.yaml+md"] = PerfBench016.fingerprint([MarkdownHeadingOutlineEngine.outline(for: PerfGolden016.markdown).count, YAMLOutlineEngine.outline(index: MarkdownLineIndex(text: PerfGolden016.yaml)).count])
+        cachedCurrent = groups
         return groups
     }
 }

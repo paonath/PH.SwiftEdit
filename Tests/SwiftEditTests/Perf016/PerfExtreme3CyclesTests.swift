@@ -4,7 +4,6 @@ import Testing
 @testable import SwiftEditUI
 
 @Suite("PerfExtreme3CyclesTests", .serialized)
-@MainActor
 struct PerfExtreme3CyclesTests {
 
     private static var cycleBudgets: (mdLint: Double, mdSec: Double, mdOutline: Double, yamlLint: Double, yamlOutline: Double, mdIndex: Double, docIndex: Double) {
@@ -16,7 +15,7 @@ struct PerfExtreme3CyclesTests {
     }
 
     @Test("Cycle 1-3: Markdown lint/outline, YAML lint/outline, and index construction stay fast and preserve all 016+017 goldens")
-    func allThreeOptimizationCyclesBenchmarkAndGolden() {
+    func allThreeOptimizationCyclesBenchmarkAndGolden() async {
         // GIVEN 20k-line Markdown and YAML fixtures plus pre-computed indices
         let mdSnap = DocumentSession(text: PerfBench016.markdown).snapshot
         let mdIndex = MarkdownLineIndex(text: PerfBench016.markdown)
@@ -52,9 +51,13 @@ struct PerfExtreme3CyclesTests {
             "mdIndex=\(cycle3MdLineIndexMs)ms docIndex=\(cycle3DocTextIndexMs)ms"
         )
 
+        let (golden016, golden017) = await MainActor.run {
+            (PerfGolden016.current(), PerfGolden017.current())
+        }
+
         // THEN all 016 and 017 golden fingerprints match identically and every 20k-line function finishes within budget
-        #expect(PerfGolden016.current() == PerfGolden016.recorded)
-        #expect(PerfGolden017.current() == PerfGolden017.recorded)
+        #expect(golden016 == PerfGolden016.recorded)
+        #expect(golden017 == PerfGolden017.recorded)
         #expect(cycle1MdLintMs < budgets.mdLint)
         #expect(cycle1MdSecurityMs < budgets.mdSec)
         #expect(cycle1MdOutlineMs < budgets.mdOutline)

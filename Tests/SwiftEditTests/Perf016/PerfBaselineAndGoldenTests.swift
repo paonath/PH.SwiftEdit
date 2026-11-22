@@ -4,7 +4,6 @@ import Testing
 @testable import SwiftEditUI
 
 @Suite("PerfBaselineAndGoldenTests")
-@MainActor
 struct PerfBaselineAndGoldenTests {
     private static let repoRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -23,6 +22,7 @@ struct PerfBaselineAndGoldenTests {
         #expect(rankedRows.count >= 3)
     }
 
+    @MainActor
     @Test("N11: golden fingerprints captured before pass 1 still match every observable output")
     func n11GoldenEquivalence() {
         // GIVEN the fingerprints recorded before any performance refactor
