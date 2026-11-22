@@ -172,9 +172,59 @@ struct MarkdownNativePreviewView: View {
         }
     }
 
-    /// Inline Markdown only (bold, italic, code, links); parse failures fall back to the raw text.
+    /// Inline Markdown only (bold, italic, code, links); plain text bypasses the Foundation Markdown parser and parsed runs are cached (`PERF-005`).
     private func inline(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        InlineMarkdownRenderCache.shared.attributedString(for: text)
+    }
+}
+
+/// Bounded `@MainActor` cache for inline Markdown `AttributedString` parsing with a zero-parser fast path for plain text (`PERF-005`).
+@MainActor
+private final class InlineMarkdownRenderCache {
+    static let shared = InlineMarkdownRenderCache()
+
+    private final class Box: NSObject {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+
+    private let cache: NSCache<NSString, Box> = {
+        let c = NSCache<NSString, Box>()
+        c.countLimit = 512
+        return c
+    }()
+
+    func attributedString(for text: String) -> AttributedString {
+        if !Self.containsInlineSyntaxTrigger(text) {
+            return AttributedString(text)
+        }
+        let key = text as NSString
+        if let hit = cache.object(forKey: key) {
+            return hit.value
+        }
+        let parsed = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text)
+        cache.setObject(Box(parsed), forKey: key)
+        return parsed
+    }
+
+    private static func containsInlineSyntaxTrigger(_ text: String) -> Bool {
+        for byte in text.utf8 {
+            switch byte {
+            case 0x2A, // '*'
+                 0x5F, // '_'
+                 0x60, // '`'
+                 0x5B, // '['
+                 0x7E, // '~'
+                 0x5C, // '\'
+                 0x3C, // '<'
+                 0x26: // '&' (HTML entities)
+                return true
+            default:
+                continue
+            }
+        }
+        return false
     }
 }
 
@@ -209,6 +259,8 @@ private struct PreviewThumbnailTileView: View {
                 isBlocked = false
                 return
             }
+            loadedImage = nil
+            isBlocked = false
             let localGate = gate
             let ref = reference
             let slot = documentIndex

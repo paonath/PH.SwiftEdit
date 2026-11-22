@@ -41,9 +41,6 @@ public final class SwiftEditAppLifecycleBridge {
     }
 
     private func openExternalURLs(_ urls: [URL], on workbench: SwiftEditWorkbenchModel) {
-        for url in urls {
-            let standardized = url.standardizedFileURL
-            workbench.openFile(at: standardized, withinScope: standardized.deletingLastPathComponent())
-        }
+        workbench.openDroppedURLs(urls)
     }
 }

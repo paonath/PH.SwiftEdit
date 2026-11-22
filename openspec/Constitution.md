@@ -1,8 +1,8 @@
 ---
 project_name: "PH.SwiftEdit"
-version: "1.5.0"
+version: "1.6.0"
 ratified: "2026-11-17"
-last_amended: "2026-11-21"
+last_amended: "2026-11-22"
 primary_stack: "Swift 6.4+ / macOS 26+ & iOS 26+ Readiness (SwiftPM + SwiftUI + TextKit 2)"
 spec_root: "openspec"
 single_reference_lock: true
@@ -33,3 +33,4 @@ single_reference_lock: true
 | `1.3.0` | `2026-11-18` | `UI-001, DATA-004, SEC-004 (Collapsed sidebar, right-col tabs, left LineNumberGutterView, LF/CRLF/CR + 10 MRU, directory-only NSWorkspace Finder/Terminal/iTerm2)` | `index.yml synced` |
 | `1.4.0` | `2026-11-21` | `UI-002 (Monospaced editor typography becomes the default; user-selectable system font or bundled OpenDyslexic for editor and interface)` | `index.yml synced` |
 | `1.5.0` | `2026-11-21` | `SEC-001, SEC-004 (Approved macOS network.client entitlement strictly for user-initiated GitHub Releases HTTPS check; expanded allowlisted macOS terminals)` | `index.yml synced` |
+| `1.6.0` | `2026-11-22` | `AR-005, SEC-001, SEC-004 (Allow SwiftTerm SPM dependency in SwiftEditUI and unsandboxed Hardened Runtime on macOS direct distribution for embedded PTY terminal)` | `index.yml synced` |

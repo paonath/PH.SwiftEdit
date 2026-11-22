@@ -96,7 +96,7 @@ public struct SwiftEditCommands: Commands {
                 .disabled(model?.safetyBanner.canSave != true)
             Divider()
             Button("Close Document") { model?.requestCloseActiveTab() }
-                .keyboardShortcut("w", modifiers: .command)
+                .keyboardShortcut("w", modifiers: [.command, .shift])
                 .disabled(model == nil)
         }
     }
@@ -143,6 +143,26 @@ public struct SwiftEditCommands: Commands {
             Button("Actual Size (100%)") { model?.zoomController.resetZoom() }
                 .keyboardShortcut("0", modifiers: .command)
                 .disabled(model == nil)
+            Divider()
+            // Live log tail of the active file (`REQ-LOG`): runs in the background, the file stays writable.
+            Button("Log Tail (Direct)") { model?.startLogTail(mode: .direct) }
+                .keyboardShortcut("l", modifiers: .command)
+                .disabled(model == nil)
+            Button("Log Tail (Inverse, Newest First)") { model?.startLogTail(mode: .inverse) }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .disabled(model == nil)
+            Button("Stop Log Tail") { model?.stopLogTail() }
+                .disabled(model?.activeLogTail?.isRunning != true)
+            Divider()
+            Button(model?.isWordWrapEnabled == false ? "Enable Word Wrap" : "Disable Word Wrap") {
+                model?.toggleWordWrap()
+            }
+            .keyboardShortcut("w", modifiers: .command)
+            .disabled(model == nil)
+            Divider()
+            Button("Toggle Terminal Panel") { model?.toggleTerminalPanel() }
+                .keyboardShortcut("j", modifiers: .command)
+                .disabled(model == nil)
         }
     }
 
@@ -183,7 +203,7 @@ public struct SwiftEditCommands: Commands {
                 Divider()
                 Button("Insert Link") { model?.applyMarkdownCommand(.link) }.keyboardShortcut("k", modifiers: .command)
                 Button("Insert Image") { model?.applyMarkdownCommand(.image) }.keyboardShortcut("i", modifiers: [.command, .shift])
-                Button("Toggle Task Checkbox") { model?.applyMarkdownCommand(.taskToggle) }.keyboardShortcut("l", modifiers: [.command, .shift])
+                Button("Toggle Task Checkbox") { model?.applyMarkdownCommand(.taskToggle) }.keyboardShortcut("l", modifiers: [.command, .option])
                 Button("Blockquote") { model?.applyMarkdownCommand(.blockquote) }.keyboardShortcut(".", modifiers: [.command, .shift])
                 Button("Insert Table") { model?.applyMarkdownCommand(.insertTable) }.keyboardShortcut("t", modifiers: [.command, .option])
                 Divider()
@@ -205,6 +225,11 @@ public struct SwiftEditCommands: Commands {
     @CommandsBuilder
     private var helpCommands: some Commands {
         CommandGroup(replacing: .help) {
+            Button("SwiftEdit Help") {
+                model?.isHelpSheetPresented = true
+            }
+            .keyboardShortcut("?", modifiers: [.command, .shift])
+            .disabled(model == nil)
             Button("Keyboard Shortcuts CheatSheet") {
                 model?.isCheatSheetPresented = true
             }

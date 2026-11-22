@@ -53,6 +53,7 @@ public enum KeyboardShortcutsCheatSheetCatalog {
             KeyboardShortcutDescriptor(title: "Italic", shortcut: "Cmd+I", summary: "Toggle italic Markdown emphasis"),
             KeyboardShortcutDescriptor(title: "Inline Code", shortcut: "Cmd+E", summary: "Toggle inline code span"),
             KeyboardShortcutDescriptor(title: "Insert Link", shortcut: "Cmd+K", summary: "Wrap selection as a Markdown link"),
+            KeyboardShortcutDescriptor(title: "Toggle Task Checkbox", shortcut: "Option+Cmd+L", summary: "Toggle a Markdown task item between [ ] and [x]"),
             KeyboardShortcutDescriptor(title: "Markdown Heading (1-6)", shortcut: "Ctrl+Cmd+1..6", summary: "Apply ATX heading level 1 through 6"),
         ]),
         KeyboardShortcutSection(category: "Navigation", items: [
@@ -72,6 +73,9 @@ public enum KeyboardShortcutsCheatSheetCatalog {
             KeyboardShortcutDescriptor(title: "Toggle Markdown Diagnostics", shortcut: "Shift+Cmd+M", summary: "Open the Markdown lint diagnostics popover with Jump-to-Range and Fix All"),
             KeyboardShortcutDescriptor(title: "Document Navigator", shortcut: "Option+\\", summary: "Heading/key palette for the current Markdown or YAML tab (Esc or Option+\\ closes)"),
             KeyboardShortcutDescriptor(title: "Distraction-Free", shortcut: "Option+1", summary: "Full-screen editor only; Esc or Option+1 restores the layout"),
+            KeyboardShortcutDescriptor(title: "Log Tail (Direct)", shortcut: "Cmd+L", summary: "Live tail of the last lines of the active file, newest at the bottom"),
+            KeyboardShortcutDescriptor(title: "Log Tail (Inverse)", shortcut: "Shift+Cmd+L", summary: "Live tail with the newest line at the top"),
+            KeyboardShortcutDescriptor(title: "Terminal Panel", shortcut: "Cmd+J", summary: "Show or hide the bottom panel; each session opens your default terminal in the current folder"),
             KeyboardShortcutDescriptor(title: "Keyboard Shortcuts CheatSheet", shortcut: "Cmd+/", summary: "Open graphical keyboard shortcuts reference"),
         ]),
         KeyboardShortcutSection(category: "Sidebar", items: [

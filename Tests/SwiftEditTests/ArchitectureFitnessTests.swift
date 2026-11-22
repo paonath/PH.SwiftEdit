@@ -46,7 +46,7 @@ struct ArchitectureFitnessTests {
 
         // THEN platforms, targets, external dependencies, UI bridge, and core imports satisfy AR-001..AR-006 & TEST-006
         #expect(summary.platforms == ["macos": "26.0", "ios": "26.0"])
-        #expect(summary.externalDependencies == ["swift-markdown"])
+        #expect(Set(summary.externalDependencies) == Set(["swift-markdown", "swiftterm"]))
         #expect(Set(summary.targetNames) == Set(["SwiftEditCore", "SwiftEditUI", "SwiftEditTests"]))
         #expect(summary.violations.isEmpty)
         #expect(SwiftEditUIBridge.activePlatform == .macOS)

@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-22 UTC
+Branch: feature/logging | Commit: 2d5f011
+
+### Added
+- Replaced external terminal launching in the `Cmd+J` panel with a true embedded VT100/xterm-256color terminal emulator powered by `SwiftTerm` with GPU Metal rendering (`SwiftEditTerminalView`, `EmbeddedTerminalRegistry`), a draggable resize handle (`TerminalPanelView`), and clean `SIGHUP`/`SIGKILL` session teardown (`2d5f011`).
+- Added antique parchment-yellow backtick code highlighting (WCAG AAA in Light and Black modes), higher-contrast purple selection, and multi-level secondary highlighting with non-color-only underlines for all other whole-word occurrences of a selected word (`WordOccurrenceScanner`, `TextKit2EditorView`) (`2d5f011`).
+- Added JSON user settings persistence in `~/.SwiftEdit/settings.json` (`JSONPreferencesStore`), default full-screen window launch, `Cmd+W` Word Wrap toggle (moving Close Tab to `Shift+Cmd+W`), and Drag & Drop support for opening dropped files in tabs and dropped folders in the left Folder Navigator (`2d5f011`).
+- Added verified in-app macOS auto-update installation (`AppUpdateInstaller`, `UpdateCheckSheetView`) and enhanced `Scripts/install-from-github.sh` to close any running instance, preserve quarantine-free state via `xattr -dr com.apple.quarantine` when previously unquarantined, and automatically relaunch `SwiftEdit.app` (`2d5f011`).
+
+### Changed
+- Reduced `Release` macOS `SwiftEdit.app` bundle size by 58% (`15 MB → 6.3 MB`; main executable `14.61 MB → 5.61 MB`, −94% symbols) by enabling `-Osize`, `wholemodule`, ThinLTO, dead-code stripping, symbol stripping, and space-optimized asset catalog compilation in `XcodeApp/PH.SwiftEdit.xcodeproj/project.pbxproj` and `Scripts/build-app.sh` (`2d5f011`).
+- Optimized hot paths across `WordOccurrenceScanner`, `DocumentSearchEngine`, `MarkdownSyntaxHighlighter`, `MarkdownNativePreviewView` (`InlineMarkdownRenderCache`), `LineNumberGutterView` (contiguous UTF-8 scan), `DocumentSession`, `LogTail`, `LogSyntaxHighlighter`, and `AppUpdateInstaller` (zero-bridge hex SHA-256 and non-blocking `ditto`) (`2d5f011`).
+- Raised automated test coverage from 60.31% to 85.75% lines (`SwiftEditCore` 91.11%, `SwiftEditUI` 81.17%) across 352 tests in 105 suites (`2d5f011`).
+
+### Fixed
+- Fixed Markdown Document Navigator `Enter` and click navigation so selecting an outline item reliably jumps and scrolls to the target heading without resetting `selectedIndex` on unchanged queries (`DocumentNavigatorOverlayView`, `SwiftEditRootView`, `TextKit2EditorView.revealSelection`) (`2d5f011`).
+- Fixed stale rendering attributes lingering in the ±256-character viewport overscan margin, stale thumbnail states in `PreviewThumbnailTileView`, `O(L²)` worst-case inline link scanning on repeated `[` characters, non-finite `GutterLineMetric` guards, and late `updateNSView` session resurrection after closing embedded terminal tabs (`2d5f011`).
+
+### Security
+- Amended Constitution (`v1.6.0`, `SEC-004`) to permit the embedded `SwiftTerm` PTY terminal on macOS with `ENABLE_APP_SANDBOX = NO` while keeping `SwiftEditCore` dependency-free, enforcing SHA-256 verification and allowlisted GitHub HTTPS URLs on auto-update, and using strictly positional `/bin/sh` arguments (`CWE-78`) in the post-exit swap helper (`2d5f011`).
+
+## [Unreleased] - 2026-11-22 UTC
+Branch: feature/logging | Commit: ca51161
+
+### Added
+- Added level-aware `.log` highlighting (trace to critical, timestamps, GUIDs, strings, exceptions, stack frames; NLog, Serilog, log4net, syslog and JSON layouts) and a live log tail: `Cmd+L` direct, `Shift+Cmd+L` inverse (newest first), with an in-editor panel for Stop/Resume, order and line count (default 80). The tail runs in the background, never locks the file, handles truncation and rotation, and opens logs above 64 MiB as read-only tail-only tabs (`openspec/specs/log-tail-terminal-panel-lint-hover-and-help/spec.md`).
+- Added the `Cmd+J` Terminal panel: multiple sessions that open the preferred allowlisted terminal in the current folder (or the user home), reporting launch failures and terminal quits without crashing; no shell runs inside SwiftEdit (`SEC-004`).
+- Added English explanations for every lint rule, shown in a popover when hovering the gutter lint dot.
+- Added Help → SwiftEdit Help (`Shift+Cmd+?`), rendering the bundled README offline, and `Scripts/dev/log-writer.py` for generating large NLog/Serilog/log4net/syslog/JSON test logs with live writing, rotation and truncation.
+
+### Changed
+- Rewrote `README.md` in English for GitHub with the logo and the `SwiftEdit` app name (install and quarantine commands target `SwiftEdit.app`).
+- Moved Toggle Task Checkbox to `Option+Cmd+L` (`Shift+Cmd+L` is now Log inverse).
+- Programmatic editor updates replace only the changed range (10k-line tail update 3.31 ms → 0.81 ms) and lint render projections are cached by generation (10 renders with 1000 diagnostics 2.31 ms → 0.005 ms).
+
+### Fixed
+- Fixed navigator rows that ignored clicks outside the title text, and made jumps scroll reliably to far, not-yet-laid-out lines.
+- Fixed out-of-order live-tail snapshots overwriting newer ones, and file-event watching not resuming after a log is recreated.
+
+## [Unreleased] - 2026-11-22 UTC
 Branch: hotfix/github-tests_still-on-error | Commit: 0026d27
 
 ### Changed

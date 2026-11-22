@@ -19,6 +19,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-markdown.git", from: "0.5.0"),
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
     ],
     targets: [
         .target(
@@ -35,10 +36,13 @@ let package = Package(
             name: "SwiftEditUI",
             dependencies: [
                 "SwiftEditCore",
+                .product(name: "SwiftTerm", package: "SwiftTerm", condition: .when(platforms: [.macOS])),
             ],
             resources: [
                 // OpenDyslexic (SIL OFL 1.1, unmodified upstream files, SHA-256 pinned in OpenDyslexicBundle).
                 .copy("Resources/Fonts"),
+                // In-app Help: a copy of the repository README (kept identical by HelpDocumentationTests).
+                .copy("Resources/Help"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
