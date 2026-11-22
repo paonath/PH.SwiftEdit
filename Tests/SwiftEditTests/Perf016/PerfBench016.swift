@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 @testable import SwiftEditCore
 @testable import SwiftEditUI
@@ -38,6 +39,20 @@ enum PerfBench016 {
         for _ in 0..<runs {
             let d = clock.measure(body)
             samples.append(Double(d.components.seconds) * 1_000 + Double(d.components.attoseconds) / 1e15)
+        }
+        return samples.sorted()[runs / 2]
+    }
+
+    /// Median per-thread CPU time in milliseconds of `runs` synchronous executions of `body`,
+    /// immune to OS scheduler preemption under parallel test contention on shared CI runners.
+    static func medianThreadCPUMilliseconds(runs: Int = 15, _ body: () -> Void) -> Double {
+        var samples: [Double] = []
+        samples.reserveCapacity(runs)
+        for _ in 0..<runs {
+            let start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+            body()
+            let elapsed = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - start
+            samples.append(Double(elapsed) / 1_000_000.0)
         }
         return samples.sorted()[runs / 2]
     }
