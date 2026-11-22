@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - 2026-11-22 UTC
+Branch: hotfix/github-tests_still-on-error | Commit: 0026d27
+
+### Changed
+- Parallelized CPU-bound `SwiftEditCore` performance benchmarks off `@MainActor` and deduplicated `PerfGolden016`/`PerfGolden017` fingerprint evaluation, cutting `swift test --parallel` runtime (`cc61433`).
+- Switched `PerfExtreme3CyclesTests` and `PerformanceCachingAndSecurityLintTests` benchmark budgets to per-thread CPU time (`CLOCK_THREAD_CPUTIME_ID`) to avoid false failures from OS scheduler preemption on shared macOS CI runners.
+- Upgraded `.github/workflows/test.yml` and `.github/workflows/release.yml` to Node.js 24 native actions (`actions/checkout@v7`, `actions/cache@v6`, `actions/upload-artifact@v7`) with SwiftPM `.build` dependency caching.
+
+### Fixed
+- Resolved Swift compiler type-checker timeout in `SwiftEditRootView.body` on `macos-26` CI runners (`90316b7`) and extracted complex modifier/binding expressions in `SwiftEditCommands`, `MarkdownDiagnosticsPopoverView`, `DocumentNavigatorOverlayView`, `PropertiesPanelView`, and `UpdateCheckSheetView` (`cc61433`).
+
 ## [Unreleased] - 2026-11-21 UTC
 Branch: feature/FirstStub | Commit: 448182f
 
