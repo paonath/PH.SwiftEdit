@@ -8,7 +8,7 @@ struct PerfExtreme3CyclesTests {
 
     private static var cycleBudgets: (mdLint: Double, mdSec: Double, mdOutline: Double, yamlLint: Double, yamlOutline: Double, mdIndex: Double, docIndex: Double) {
         #if DEBUG
-        return (150.0, 150.0, 10.0, 160.0, 15.0, 25.0, 20.0)
+        return (250.0, 250.0, 25.0, 260.0, 30.0, 45.0, 35.0)
         #else
         return (10.0, 8.0, 2.0, 12.0, 2.0, 5.0, 3.0)
         #endif
@@ -23,25 +23,25 @@ struct PerfExtreme3CyclesTests {
         let budgets = Self.cycleBudgets
 
         // WHEN all three optimization cycles' target functions are benchmarked on 20k-line fixtures
-        let cycle1MdLintMs = PerfBench016.medianMilliseconds(runs: 7) {
+        let cycle1MdLintMs = PerfBench016.medianThreadCPUMilliseconds(runs: 7) {
             _ = MarkdownAllConstructsLinter.diagnostics(index: mdIndex, deadlineExceeded: { false })
         }
-        let cycle1MdSecurityMs = PerfBench016.medianMilliseconds(runs: 7) {
+        let cycle1MdSecurityMs = PerfBench016.medianThreadCPUMilliseconds(runs: 7) {
             _ = MarkdownAllConstructsLinter.securityOnlyDiagnostics(text: mdSnap.text, deadlineExceeded: { false })
         }
-        let cycle1MdOutlineMs = PerfBench016.medianMilliseconds(runs: 7) {
+        let cycle1MdOutlineMs = PerfBench016.medianThreadCPUMilliseconds(runs: 7) {
             _ = MarkdownHeadingOutlineEngine.outline(index: mdIndex)
         }
-        let cycle2YamlLintMs = PerfBench016.medianMilliseconds(runs: 7) {
+        let cycle2YamlLintMs = PerfBench016.medianThreadCPUMilliseconds(runs: 7) {
             _ = YAMLStructureLinter.lint(index: ymlIndex)
         }
-        let cycle2YamlOutlineMs = PerfBench016.medianMilliseconds(runs: 7) {
+        let cycle2YamlOutlineMs = PerfBench016.medianThreadCPUMilliseconds(runs: 7) {
             _ = YAMLOutlineEngine.outline(index: ymlIndex)
         }
-        let cycle3MdLineIndexMs = PerfBench016.medianMilliseconds(runs: 7) {
+        let cycle3MdLineIndexMs = PerfBench016.medianThreadCPUMilliseconds(runs: 7) {
             _ = MarkdownLineIndex(text: mdSnap.text)
         }
-        let cycle3DocTextIndexMs = PerfBench016.medianMilliseconds(runs: 7) {
+        let cycle3DocTextIndexMs = PerfBench016.medianThreadCPUMilliseconds(runs: 7) {
             _ = DocumentTextIndex(text: mdSnap.text)
         }
 

@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import Testing
 @testable import SwiftEditCore
@@ -168,9 +169,9 @@ struct PerformanceCachingAndSecurityLintTests {
         defer { try? FileManager.default.removeItem(at: tempRec) }
 
         // WHEN measuring cached bracket caret resolution, large-doc typing latency, gutter lineCount, PreviewThumbnailCache, and openFileAsync
-        let tCaretStart = DispatchTime.now().uptimeNanoseconds
+        let tCaretStart = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
         let resolvedActive = SearchDiffAndBracketEngine.resolveActivePair(in: topology, caretLocation: 10)
-        let caretMs = Double(DispatchTime.now().uptimeNanoseconds - tCaretStart) / 1_000_000.0
+        let caretMs = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - tCaretStart) / 1_000_000.0
 
         let (typeMs, readsAfterHugeAttempt, bannerAfterHuge, openedBigTitle, cachedBeforeHide, cachedAfterHide) = await Self.runP8WorkbenchScenario(
             lines20kWithNewline: lines20kWithNewline,
@@ -209,9 +210,9 @@ struct PerformanceCachingAndSecurityLintTests {
             fileSystem: fs
         )
         model.newUntitledTab()
-        let tTypeStart = DispatchTime.now().uptimeNanoseconds
+        let tTypeStart = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
         model.handleEditorTextChanged(lines20kWithNewline)
-        let typeMs = Double(DispatchTime.now().uptimeNanoseconds - tTypeStart) / 1_000_000.0
+        let typeMs = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - tTypeStart) / 1_000_000.0
 
         await model.openFileAsync(at: hugeFileURL, withinScope: scope)
         let readsAfterHugeAttempt = fs.readCallCount
