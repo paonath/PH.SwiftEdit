@@ -147,7 +147,6 @@ private extension PreviewThumbnailCache {
 @Suite("PerformanceCachingAndSecurityLintTests")
 struct PerformanceCachingAndSecurityLintTests {
 
-    @MainActor
     @Test("P8: Cached BracketTopology, non-blocking large-doc typing, O(1) lineCount gutter, async file load, and preview/diff eviction stay fast and bounded")
     func p8CachingAsyncFileLoadAndEvictionMetrics() async throws {
         // GIVEN a 10,000-line document with brackets and an isolated workbench + spy filesystem for 3 MiB valid & 65 MiB oversize files
@@ -162,26 +161,56 @@ struct PerformanceCachingAndSecurityLintTests {
         let lines10k = (0..<10_000).map { "line \($0) (val + \($0))" }.joined(separator: "\n")
         let snap10k = DocumentSession(text: lines10k).snapshot
         let topology = try #require(SearchDiffAndBracketEngine.scanTopology(in: snap10k).completedValue)
+        let lines20kWithNewline = (0..<20_000).map { "Line \($0) plain markdown text" }.joined(separator: "\n") + "\n"
+        let gutter10k = LineNumberGutterProjection.evaluate(text: lines10k, caretLocation: 100, fontSizePoints: 13)
 
         let tempRec = FileManager.default.temporaryDirectory.appendingPathComponent("SwiftEditP8-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tempRec) }
-
-        let model = SwiftEditWorkbenchModel(
-            preferencesStore: InMemoryKeyValueStore(),
-            recentFilesStore: InMemoryKeyValueStore(),
-            recoveryDirectoryURL: tempRec,
-            fileSystem: fs
-        )
 
         // WHEN measuring cached bracket caret resolution, large-doc typing latency, gutter lineCount, PreviewThumbnailCache, and openFileAsync
         let tCaretStart = DispatchTime.now().uptimeNanoseconds
         let resolvedActive = SearchDiffAndBracketEngine.resolveActivePair(in: topology, caretLocation: 10)
         let caretMs = Double(DispatchTime.now().uptimeNanoseconds - tCaretStart) / 1_000_000.0
 
+        let (typeMs, readsAfterHugeAttempt, bannerAfterHuge, openedBigTitle, cachedBeforeHide, cachedAfterHide) = await Self.runP8WorkbenchScenario(
+            lines20kWithNewline: lines20kWithNewline,
+            scope: scope,
+            hugeFileURL: hugeFileURL,
+            bigFileURL: bigFileURL,
+            tempRec: tempRec,
+            fs: fs
+        )
+
+        // THEN caret lookup & 20kL typing finish within 16 ms, oversize reads 0 bytes, >=2MiB opens async, and hide evicts thumbnails
+        #expect(resolvedActive?.openSymbol == "(")
+        #expect(caretMs < 16.0)
+        #expect(typeMs < 50.0)
+        #expect(gutter10k.lineCount == 10_000)
+        #expect(readsAfterHugeAttempt == 0)
+        #expect(bannerAfterHuge.localizedCaseInsensitiveContains("Open failed"))
+        #expect(openedBigTitle == "large.md")
+        #expect(cachedBeforeHide == true)
+        #expect(cachedAfterHide == false)
+    }
+
+    @MainActor
+    private static func runP8WorkbenchScenario(
+        lines20kWithNewline: String,
+        scope: URL,
+        hugeFileURL: URL,
+        bigFileURL: URL,
+        tempRec: URL,
+        fs: OversizeGateSpyFileSystem
+    ) async -> (Double, Int, String, String, Bool, Bool) {
+        let model = SwiftEditWorkbenchModel(
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
+            recoveryDirectoryURL: tempRec,
+            fileSystem: fs
+        )
         model.newUntitledTab()
-        let lines20k = (0..<20_000).map { "Line \($0) plain markdown text" }.joined(separator: "\n")
         let tTypeStart = DispatchTime.now().uptimeNanoseconds
-        model.handleEditorTextChanged(lines20k + "\n")
+        model.handleEditorTextChanged(lines20kWithNewline)
         let typeMs = Double(DispatchTime.now().uptimeNanoseconds - tTypeStart) / 1_000_000.0
 
         await model.openFileAsync(at: hugeFileURL, withinScope: scope)
@@ -199,21 +228,9 @@ struct PerformanceCachingAndSecurityLintTests {
         model.showDiffPane = true
         model.toggleDiffPane()
         let cachedAfterHide = PreviewThumbnailCache.shared.image(forKey: "thumb-1") != nil
-        let gutter10k = LineNumberGutterProjection.evaluate(text: lines10k, caretLocation: 100, fontSizePoints: 13)
-
-        // THEN caret lookup & 20kL typing finish within 16 ms, oversize reads 0 bytes, >=2MiB opens async, and hide evicts thumbnails
-        #expect(resolvedActive?.openSymbol == "(")
-        #expect(caretMs < 16.0)
-        #expect(typeMs < 50.0)
-        #expect(gutter10k.lineCount == 10_000)
-        #expect(readsAfterHugeAttempt == 0)
-        #expect(bannerAfterHuge.localizedCaseInsensitiveContains("Open failed"))
-        #expect(openedBigTitle == "large.md")
-        #expect(cachedBeforeHide == true)
-        #expect(cachedAfterHide == false)
+        return (typeMs, readsAfterHugeAttempt, bannerAfterHuge, openedBigTitle, cachedBeforeHide, cachedAfterHide)
     }
 
-    @MainActor
     @Test("N11 [Security]: 5kL and 20kL Markdown documents preserve .unsafeLinkScheme & .unsafeImagePath errors, and stale async revisions are discarded")
     func n11Security5kAnd20kPreserveSecurityErrorsAndDiscardStaleAsyncLint() async throws {
         // GIVEN 5,000-line and ~960 KB 20,000-line Markdown documents each containing malicious javascript: link and path-traversal image
@@ -226,21 +243,12 @@ struct PerformanceCachingAndSecurityLintTests {
         let tempRec = FileManager.default.temporaryDirectory.appendingPathComponent("SwiftEditN11-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tempRec) }
 
-        let model = SwiftEditWorkbenchModel(
-            preferencesStore: InMemoryKeyValueStore(),
-            recentFilesStore: InMemoryKeyValueStore(),
-            recoveryDirectoryURL: tempRec
-        )
-        model.newUntitledTab()
-
         // WHEN running MarkdownLintAndFormatEngine on 5kL/20kL and then rapidly superseding revisions on the workbench model
         let res5k = try #require(MarkdownLintAndFormatEngine.lint(snapshot: snap5k, profile: .allConstructs).completedValue)
         let res20k = try #require(MarkdownLintAndFormatEngine.lint(snapshot: snap20k, profile: .allConstructs).completedValue)
         let secFast20k = try #require(MarkdownLintAndFormatEngine.lintSecurityFastPath(snapshot: snap20k).completedValue)
 
-        model.handleEditorTextChanged(doc20k)
-        model.handleEditorTextChanged("# Clean final revision\n\nSafe content.\n")
-        await model.awaitPendingDiagnostics()
+        let hasUnsafeInSettledModel = await Self.runN11WorkbenchSupersedeScenario(doc20k: doc20k, tempRec: tempRec)
 
         let rules5k = Set(res5k.diagnostics.map(\.rule))
         let rules20k = Set(res20k.diagnostics.map(\.rule))
@@ -253,11 +261,24 @@ struct PerformanceCachingAndSecurityLintTests {
         #expect(rules20k.contains(.unsafeImagePath))
         #expect(secRules.contains(.unsafeLinkScheme))
         #expect(secRules.contains(.unsafeImagePath))
-        #expect(!model.lintDiagnostics.contains { $0.rule == .unsafeLinkScheme || $0.rule == .unsafeImagePath })
+        #expect(!hasUnsafeInSettledModel)
         #expect(MarkdownLintAndFormatEngine.lintSecurityFastPath(snapshot: snap5k, clock: DelayedElapsedClock(999)) == .degradedOrTimedOut(.deadlineExceeded(limitMilliseconds: 250)))
     }
 
     @MainActor
+    private static func runN11WorkbenchSupersedeScenario(doc20k: String, tempRec: URL) async -> Bool {
+        let model = SwiftEditWorkbenchModel(
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
+            recoveryDirectoryURL: tempRec
+        )
+        model.newUntitledTab()
+        model.handleEditorTextChanged(doc20k)
+        model.handleEditorTextChanged("# Clean final revision\n\nSafe content.\n")
+        await model.awaitPendingDiagnostics()
+        return model.lintDiagnostics.contains { $0.rule == .unsafeLinkScheme || $0.rule == .unsafeImagePath }
+    }
+
     @Test("N7: Rapid tab open or switch during in-flight large-file async decode preserves newer active tab without overwriting buffer")
     func n7RapidTabSwitchCancelsStaleAsyncDecodeActivation() async throws {
         // GIVEN a >= 2 MiB fileA whose background read suspends deterministically and a short fileB
@@ -271,6 +292,27 @@ struct PerformanceCachingAndSecurityLintTests {
         let tempRec = FileManager.default.temporaryDirectory.appendingPathComponent("SwiftEditN7-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tempRec) }
 
+        let (activeTitle, activePrefix) = await Self.runN7WorkbenchSwitchScenario(
+            scope: scope,
+            fileA: fileA,
+            fileB: fileB,
+            tempRec: tempRec,
+            fs: fs
+        )
+
+        // THEN fileB remains the active tab with its buffer intact and stale fileA completion does not overwrite active projection
+        #expect(activeTitle == "short.md")
+        #expect(activePrefix == "# Short B")
+    }
+
+    @MainActor
+    private static func runN7WorkbenchSwitchScenario(
+        scope: URL,
+        fileA: URL,
+        fileB: URL,
+        tempRec: URL,
+        fs: SuspendingLargeFileSystem
+    ) async -> (String, String) {
         let model = SwiftEditWorkbenchModel(
             preferencesStore: InMemoryKeyValueStore(),
             recentFilesStore: InMemoryKeyValueStore(),
@@ -287,9 +329,7 @@ struct PerformanceCachingAndSecurityLintTests {
         fs.releaseBlockedRead()
         await inFlightTaskA.value
 
-        // THEN fileB remains the active tab with its buffer intact and stale fileA completion does not overwrite active projection
-        #expect(model.activeTabTitle == "short.md")
-        #expect(model.activeDocumentSession?.text.prefix(32) == "# Short B")
+        return (model.activeTabTitle, String(model.activeDocumentSession?.text.prefix(32) ?? ""))
     }
 
     @Test("P9 [Perf Pass 1]: Linear applyTextEdits (5k edits + emoji), packed-arena MyersDiff (4k lines), and streaming goToLine")

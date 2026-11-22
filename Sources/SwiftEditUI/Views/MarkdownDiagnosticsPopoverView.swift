@@ -13,40 +13,53 @@ struct MarkdownDiagnosticsPopoverView: View {
     var body: some View {
         let diagnostics = model.lintDiagnostics
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(model.activeLintStatus.label).appFont(.headline)
-                Spacer()
-                Button("Fix All") { model.applyFixAll() }
-                    .disabled(!diagnostics.contains { $0.quickFix != nil })
-                    .accessibilityHint("Applies every available fix in a single undo step")
-            }
+            headerView(diagnostics: diagnostics)
             Divider()
-            if diagnostics.isEmpty {
-                Text("No Markdown diagnostics").foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(diagnostics.prefix(MarkdownLintAndFormatEngine.maxDiagnostics).enumerated()), id: \.offset) { _, diagnostic in
-                            HStack(spacing: 6) {
-                                Image(systemName: diagnostic.severity == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
-                                    .accessibilityLabel(diagnostic.severity == .error ? "Error" : "Warning")
-                                    .foregroundStyle((diagnostic.severity == .error ? model.palette.unbalancedBracketHighlight : model.palette.bidiWarningForeground).swiftUIColor)
-                                Button("Ln \(diagnostic.line): \(diagnostic.message)") { model.jumpToDiagnostic(diagnostic) }
-                                    .buttonStyle(.plain)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                if diagnostic.quickFix != nil {
-                                    Button("Fix") { model.applyQuickFix(diagnostic) }
-                                }
-                            }
-                            .accessibilityElement(children: .combine)
-                        }
-                    }
-                }
-                .frame(maxHeight: 280)
-            }
+            contentView(diagnostics: diagnostics)
         }
         .padding(12)
         .frame(width: 420)
+    }
+
+    private func headerView(diagnostics: [MarkdownLintDiagnostic]) -> some View {
+        HStack {
+            Text(model.activeLintStatus.label).appFont(.headline)
+            Spacer()
+            Button("Fix All") { model.applyFixAll() }
+                .disabled(!diagnostics.contains { $0.quickFix != nil })
+                .accessibilityHint("Applies every available fix in a single undo step")
+        }
+    }
+
+    @ViewBuilder
+    private func contentView(diagnostics: [MarkdownLintDiagnostic]) -> some View {
+        if diagnostics.isEmpty {
+            Text("No Markdown diagnostics").foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(diagnostics.prefix(MarkdownLintAndFormatEngine.maxDiagnostics).enumerated()), id: \.offset) { _, diagnostic in
+                        rowView(diagnostic)
+                    }
+                }
+            }
+            .frame(maxHeight: 280)
+        }
+    }
+
+    private func rowView(_ diagnostic: MarkdownLintDiagnostic) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: diagnostic.severity == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                .accessibilityLabel(diagnostic.severity == .error ? "Error" : "Warning")
+                .foregroundStyle((diagnostic.severity == .error ? model.palette.unbalancedBracketHighlight : model.palette.bidiWarningForeground).swiftUIColor)
+            Button("Ln \(diagnostic.line): \(diagnostic.message)") { model.jumpToDiagnostic(diagnostic) }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if diagnostic.quickFix != nil {
+                Button("Fix") { model.applyQuickFix(diagnostic) }
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 #endif

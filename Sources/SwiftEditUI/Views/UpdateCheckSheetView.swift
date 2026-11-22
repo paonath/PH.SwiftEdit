@@ -22,13 +22,7 @@ public struct UpdateCheckSheetView: View {
                 .foregroundStyle(palette.chromeForeground.swiftUIColor)
 
             if model.isCheckingForUpdates {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Checking GitHub Releases for SwiftEdit…")
-                        .appFont(.callout)
-                        .foregroundStyle(palette.secondaryForeground.swiftUIColor)
-                }
+                checkingView
             } else {
                 outcomeBody
             }
@@ -41,66 +35,92 @@ public struct UpdateCheckSheetView: View {
         .purpleModalSheetChrome(palette: palette)
     }
 
+    private var checkingView: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Checking GitHub Releases for SwiftEdit…")
+                .appFont(.callout)
+                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+        }
+    }
+
     @ViewBuilder
     private var outcomeBody: some View {
         switch model.updateCheckOutcome {
         case .upToDate(let current):
-            VStack(spacing: 6) {
-                Text("SwiftEdit \(current) is up to date.")
-                    .appFont(.headline)
-                    .foregroundStyle(palette.chromeForeground.swiftUIColor)
-                Text("You are running the latest available release.")
-                    .appFont(.caption)
-                    .foregroundStyle(palette.secondaryForeground.swiftUIColor)
-            }
+            upToDateView(current: current)
         case .noReleasesFound(let current):
-            VStack(spacing: 6) {
-                Text("SwiftEdit \(current) is up to date.")
-                    .appFont(.headline)
-                    .foregroundStyle(palette.chromeForeground.swiftUIColor)
-                Text("No newer GitHub release was found for paonath/PH.SwiftEdit.")
-                    .appFont(.caption)
-                    .foregroundStyle(palette.secondaryForeground.swiftUIColor)
-            }
+            noReleasesView(current: current)
         case .updateAvailable(let current, let latest, let releaseURL, let downloadURL):
-            VStack(spacing: 10) {
-                Text("Update Available: SwiftEdit \(latest)")
-                    .appFont(.headline)
-                    .foregroundStyle(palette.chromeForeground.swiftUIColor)
-                Text("Installed version: \(current)")
-                    .appFont(.caption, monospaced: true)
-                    .foregroundStyle(palette.secondaryForeground.swiftUIColor)
-                HStack(spacing: 10) {
-                    Button("Download Update…") {
-                        model.openVerifiedUpdateURL(downloadURL ?? releaseURL)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(palette.activeControlFill.swiftUIColor)
-
-                    Button("Release Notes…") {
-                        model.openVerifiedUpdateURL(releaseURL)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(palette.chromeAccent.swiftUIColor)
-                }
-            }
+            updateAvailableView(current: current, latest: latest, releaseURL: releaseURL, downloadURL: downloadURL)
         case .error(let message):
-            VStack(spacing: 10) {
-                Text(message)
-                    .appFont(.callout)
-                    .foregroundStyle(palette.bidiWarningForeground.swiftUIColor)
-                    .multilineTextAlignment(.center)
-                HStack(spacing: 10) {
-                    Button("Retry") { model.checkForUpdates() }
-                        .buttonStyle(.bordered)
-                    Button("Open GitHub Releases…") {
-                        model.openVerifiedUpdateURL(GitHubReleaseUpdateChecker.releasesPageURL)
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
+            errorView(message: message)
         case .none:
             EmptyView()
+        }
+    }
+
+    private func upToDateView(current: String) -> some View {
+        VStack(spacing: 6) {
+            Text("SwiftEdit \(current) is up to date.")
+                .appFont(.headline)
+                .foregroundStyle(palette.chromeForeground.swiftUIColor)
+            Text("You are running the latest available release.")
+                .appFont(.caption)
+                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+        }
+    }
+
+    private func noReleasesView(current: String) -> some View {
+        VStack(spacing: 6) {
+            Text("SwiftEdit \(current) is up to date.")
+                .appFont(.headline)
+                .foregroundStyle(palette.chromeForeground.swiftUIColor)
+            Text("No newer GitHub release was found for paonath/PH.SwiftEdit.")
+                .appFont(.caption)
+                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+        }
+    }
+
+    private func updateAvailableView(current: String, latest: String, releaseURL: URL, downloadURL: URL?) -> some View {
+        VStack(spacing: 10) {
+            Text("Update Available: SwiftEdit \(latest)")
+                .appFont(.headline)
+                .foregroundStyle(palette.chromeForeground.swiftUIColor)
+            Text("Installed version: \(current)")
+                .appFont(.caption, monospaced: true)
+                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+            HStack(spacing: 10) {
+                Button("Download Update…") {
+                    model.openVerifiedUpdateURL(downloadURL ?? releaseURL)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(palette.activeControlFill.swiftUIColor)
+
+                Button("Release Notes…") {
+                    model.openVerifiedUpdateURL(releaseURL)
+                }
+                .buttonStyle(.bordered)
+                .tint(palette.chromeAccent.swiftUIColor)
+            }
+        }
+    }
+
+    private func errorView(message: String) -> some View {
+        VStack(spacing: 10) {
+            Text(message)
+                .appFont(.callout)
+                .foregroundStyle(palette.bidiWarningForeground.swiftUIColor)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 10) {
+                Button("Retry") { model.checkForUpdates() }
+                    .buttonStyle(.bordered)
+                Button("Open GitHub Releases…") {
+                    model.openVerifiedUpdateURL(GitHubReleaseUpdateChecker.releasesPageURL)
+                }
+                .buttonStyle(.bordered)
+            }
         }
     }
 }

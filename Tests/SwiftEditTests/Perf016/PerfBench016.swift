@@ -88,9 +88,15 @@ enum PerfGolden016 {
         }
     }.joined(separator: "\n")
 
+    @MainActor
+    private static var cachedCurrent: [String: UInt64]?
+
     /// Current fingerprints of every observable output the performance passes may touch.
     @MainActor
     static func current() -> [String: UInt64] {
+        if let cachedCurrent {
+            return cachedCurrent
+        }
         let md = DocumentSession(text: markdown).snapshot
         let yml = DocumentSession(text: yaml).snapshot
         let mdIndex = MarkdownLineIndex(text: markdown)
@@ -103,7 +109,7 @@ enum PerfGolden016 {
             }
         }
         let carets = [0, 1, 37, (markdown as NSString).length / 2, (markdown as NSString).length]
-        return [
+        let computed: [String: UInt64] = [
             "spans.markdown": PerfBench016.fingerprint(viewports(mdIndex, .markdown)),
             "spans.yaml": PerfBench016.fingerprint(viewports(ymlIndex, .yaml)),
             "lint.markdown": PerfBench016.fingerprint(SwiftEditWorkbenchModel.lintDiagnostics(for: md, language: .markdown)),
@@ -118,5 +124,7 @@ enum PerfGolden016 {
                 MarkdownSmartNewlineEngine.evaluateNewline(in: md, caretLocation: carets[3], isMarkdownDocument: true) as Any,
             ]),
         ]
+        cachedCurrent = computed
+        return computed
     }
 }

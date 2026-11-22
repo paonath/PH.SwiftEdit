@@ -4,7 +4,6 @@ import Testing
 @testable import SwiftEditUI
 
 @Suite("PerfBaselineAndGolden017Tests")
-@MainActor
 struct PerfBaselineAndGolden017Tests {
 
     @Test("P10: the 017 analysis report ranks at least three measured bottlenecks with baselines")
@@ -18,6 +17,7 @@ struct PerfBaselineAndGolden017Tests {
         #expect(ranked.count >= 3)
     }
 
+    @MainActor
     @Test("N10: 017 golden fingerprints captured before pass 1 still match")
     func n10Golden017Equivalence() {
         // GIVEN fingerprints recorded before the 017 passes

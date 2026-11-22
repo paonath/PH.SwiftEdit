@@ -77,35 +77,47 @@ struct PropertiesPanelView: View {
         let palette = model.palette
         let propertiesModel = model.propertiesModel
         let rows = (propertiesModel?.properties ?? []).map { PropertiesPanelRow(property: $0, modelIsReadOnly: propertiesModel?.isReadOnly ?? true) }
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                state.isCollapsed.toggle()
-            } label: {
-                Label("Properties (\(rows.count))", systemImage: state.isCollapsed ? "chevron.right" : "chevron.down")
-                    .appFont(.caption, weight: .semibold)
-                    .foregroundStyle(palette.secondaryForeground.swiftUIColor)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Properties, \(rows.count) entries")
-            .accessibilityValue(state.isCollapsed ? "Collapsed" : "Expanded")
+        applyPanelChrome(to: panelContent(rows: rows, isReadOnly: propertiesModel?.isReadOnly, palette: palette), palette: palette)
+    }
 
+    private func panelContent(rows: [PropertiesPanelRow], isReadOnly: Bool?, palette: PurpleThemePalette) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            headerButton(rowCount: rows.count, palette: palette)
             if !state.isCollapsed {
-                if propertiesModel?.isReadOnly == true {
+                if isReadOnly == true {
                     Text("Frontmatter is read-only: unterminated, malformed or unsupported YAML.")
                         .appFont(.caption)
                         .foregroundStyle(palette.secondaryForeground.swiftUIColor)
                 }
                 ForEach(rows) { row in rowView(row, palette: palette) }
-                if propertiesModel?.isReadOnly == false { addRow(palette: palette) }
+                if isReadOnly == false { addRow(palette: palette) }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(palette.editorCanvasBackground.swiftUIColor)
-        .overlay(alignment: .bottom) { Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(height: 1) }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Frontmatter properties")
-        .onChange(of: model.activeDocumentSession?.revision) { drafts = [:] }
+    }
+
+    private func headerButton(rowCount: Int, palette: PurpleThemePalette) -> some View {
+        Button {
+            state.isCollapsed.toggle()
+        } label: {
+            Label("Properties (\(rowCount))", systemImage: state.isCollapsed ? "chevron.right" : "chevron.down")
+                .appFont(.caption, weight: .semibold)
+                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Properties, \(rowCount) entries")
+        .accessibilityValue(state.isCollapsed ? "Collapsed" : "Expanded")
+    }
+
+    @ViewBuilder
+    private func applyPanelChrome<Content: View>(to content: Content, palette: PurpleThemePalette) -> some View {
+        content
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(palette.editorCanvasBackground.swiftUIColor)
+            .overlay(alignment: .bottom) { Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(height: 1) }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Frontmatter properties")
+            .onChange(of: model.activeDocumentSession?.revision) { drafts = [:] }
     }
 
     private func keyText(_ key: String, palette: PurpleThemePalette) -> some View {
