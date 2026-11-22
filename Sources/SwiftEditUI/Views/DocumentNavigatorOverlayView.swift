@@ -19,39 +19,61 @@ struct DocumentNavigatorOverlayView: View {
 
     var body: some View {
         if let state = model.navigatorState {
-            VStack(spacing: 0) {
-                TextField("Go to heading…", text: Binding(
-                    get: { model.navigatorState?.query ?? "" },
-                    set: { model.navigatorState?.setQuery($0) }
-                ))
-                .textFieldStyle(.plain)
-                .appFont(size: 20)
-                .padding(14)
-                .focused($queryFocused)
-                .onSubmit { model.confirmDocumentNavigator() }
-                .onKeyPress(.downArrow) { model.navigatorState?.moveDown(); return .handled }
-                .onKeyPress(.upArrow) { model.navigatorState?.moveUp(); return .handled }
-                .onKeyPress(.escape) { model.closeDocumentNavigator(); return .handled }
-                Divider()
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(state.filtered.enumerated()), id: \.element.id) { row, heading in
-                                rowView(heading, selected: row == state.selectedIndex)
-                                    .id(heading.id)
-                                    .onTapGesture {
-                                        model.navigatorState?.select(index: row)
-                                        model.confirmDocumentNavigator()
-                                    }
+            applyOverlayChrome(to: overlayContent(state: state))
+        }
+    }
+
+    private var queryBinding: Binding<String> {
+        Binding(
+            get: { model.navigatorState?.query ?? "" },
+            set: { model.navigatorState?.setQuery($0) }
+        )
+    }
+
+    private func overlayContent(state: DocumentNavigatorState) -> some View {
+        VStack(spacing: 0) {
+            searchField
+            Divider()
+            resultsList(state: state)
+        }
+    }
+
+    private var searchField: some View {
+        TextField("Go to heading…", text: queryBinding)
+            .textFieldStyle(.plain)
+            .appFont(size: 20)
+            .padding(14)
+            .focused($queryFocused)
+            .onSubmit { model.confirmDocumentNavigator() }
+            .onKeyPress(.downArrow) { model.navigatorState?.moveDown(); return .handled }
+            .onKeyPress(.upArrow) { model.navigatorState?.moveUp(); return .handled }
+            .onKeyPress(.escape) { model.closeDocumentNavigator(); return .handled }
+    }
+
+    private func resultsList(state: DocumentNavigatorState) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(state.filtered.enumerated()), id: \.element.id) { row, heading in
+                        rowView(heading, selected: row == state.selectedIndex)
+                            .id(heading.id)
+                            .onTapGesture {
+                                model.navigatorState?.select(index: row)
+                                model.confirmDocumentNavigator()
                             }
-                        }
-                    }
-                    .onChange(of: state.selectedIndex) { _, newValue in
-                        if state.filtered.indices.contains(newValue) { proxy.scrollTo(state.filtered[newValue].id) }
                     }
                 }
-                .frame(maxHeight: 360)
             }
+            .onChange(of: state.selectedIndex) { _, newValue in
+                if state.filtered.indices.contains(newValue) { proxy.scrollTo(state.filtered[newValue].id) }
+            }
+        }
+        .frame(maxHeight: 360)
+    }
+
+    @ViewBuilder
+    private func applyOverlayChrome<Content: View>(to content: Content) -> some View {
+        content
             .frame(width: 560)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(model.palette.strokeLavender.swiftUIColor))
@@ -60,7 +82,6 @@ struct DocumentNavigatorOverlayView: View {
             .onAppear { queryFocused = true }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Document navigator")
-        }
     }
 
     private func rowView(_ heading: MarkdownHeading, selected: Bool) -> some View {

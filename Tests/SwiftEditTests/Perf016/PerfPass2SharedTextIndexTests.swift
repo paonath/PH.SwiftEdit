@@ -4,7 +4,6 @@ import Testing
 @testable import SwiftEditUI
 
 @Suite("PerfPass2SharedTextIndexTests", .serialized)
-@MainActor
 struct PerfPass2SharedTextIndexTests {
 
     @Test("P11 pass 2: caret moves answered from the per-revision index are at least 20% faster than full rescans")
@@ -55,6 +54,7 @@ struct PerfPass2SharedTextIndexTests {
         #expect(legacy.map(\.1) == indexed.map(\.1))
     }
 
+    @MainActor
     @Test("N12 pass 2: the shared index never serves a previous revision after a same-length edit")
     func n12NoStaleIndexAfterSameLengthEdit() throws {
         // GIVEN an open tab whose index was built at one revision

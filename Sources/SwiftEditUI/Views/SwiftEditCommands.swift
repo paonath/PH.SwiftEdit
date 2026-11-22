@@ -27,6 +27,19 @@ public struct SwiftEditCommands: Commands {
     public init() {}
 
     public var body: some Commands {
+        appInfoCommands
+        newItemCommands
+        saveItemCommands
+        pasteboardAfterCommands
+        sidebarAfterCommands
+        printItemCommands
+        navigateMenu
+        markdownMenu
+        helpCommands
+    }
+
+    @CommandsBuilder
+    private var appInfoCommands: some Commands {
         CommandGroup(replacing: .appInfo) {
             Button("About SwiftEdit") {
                 model?.isAboutSheetPresented = true
@@ -37,7 +50,10 @@ public struct SwiftEditCommands: Commands {
             }
             .disabled(model == nil)
         }
+    }
 
+    @CommandsBuilder
+    private var newItemCommands: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Document") { model?.newUntitledTab() }
                 .keyboardShortcut("n", modifiers: .command)
@@ -67,7 +83,10 @@ public struct SwiftEditCommands: Commands {
                 }
             }
         }
+    }
 
+    @CommandsBuilder
+    private var saveItemCommands: some Commands {
         CommandGroup(replacing: .saveItem) {
             Button("Save") { model?.saveActiveDocument() }
                 .keyboardShortcut("s", modifiers: .command)
@@ -80,7 +99,10 @@ public struct SwiftEditCommands: Commands {
                 .keyboardShortcut("w", modifiers: .command)
                 .disabled(model == nil)
         }
+    }
 
+    @CommandsBuilder
+    private var pasteboardAfterCommands: some Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
             Button("Duplicate Line or Selection") { model?.performCommandD() }
@@ -103,7 +125,10 @@ public struct SwiftEditCommands: Commands {
                 .keyboardShortcut("g", modifiers: .command)
                 .disabled(model == nil)
         }
+    }
 
+    @CommandsBuilder
+    private var sidebarAfterCommands: some Commands {
         CommandGroup(after: .sidebar) {
             Button("Toggle Folder Navigator") { model?.toggleLeftSidebar() }
                 .keyboardShortcut("b", modifiers: .command)
@@ -119,7 +144,10 @@ public struct SwiftEditCommands: Commands {
                 .keyboardShortcut("0", modifiers: .command)
                 .disabled(model == nil)
         }
+    }
 
+    @CommandsBuilder
+    private var printItemCommands: some Commands {
         // Replaces the system Print item so Cmd+P toggles the in-memory Markdown preview and never reaches the print spooler (SEC-004).
         CommandGroup(replacing: .printItem) {
             Button(model?.showMarkdownPreview == true ? "Hide Markdown Preview" : "Show Markdown Preview") {
@@ -128,7 +156,10 @@ public struct SwiftEditCommands: Commands {
             .keyboardShortcut("p", modifiers: .command)
             .disabled(model == nil)
         }
+    }
 
+    @CommandsBuilder
+    private var navigateMenu: some Commands {
         CommandMenu("Navigate") {
             Button("Document Navigator") { model?.toggleDocumentNavigator() }
                 .keyboardShortcut("\\", modifiers: .option)
@@ -137,7 +168,10 @@ public struct SwiftEditCommands: Commands {
                 .keyboardShortcut("1", modifiers: .option)
                 .disabled(model == nil)
         }
+    }
 
+    @CommandsBuilder
+    private var markdownMenu: some Commands {
         CommandMenu("Markdown") {
           Group {
             Group {
@@ -166,7 +200,10 @@ public struct SwiftEditCommands: Commands {
           }
           .disabled(model?.isMarkdownMenuEnabled != true)
         }
+    }
 
+    @CommandsBuilder
+    private var helpCommands: some Commands {
         CommandGroup(replacing: .help) {
             Button("Keyboard Shortcuts CheatSheet") {
                 model?.isCheatSheetPresented = true
