@@ -96,7 +96,7 @@ public struct SwiftEditCommands: Commands {
                 .disabled(model?.safetyBanner.canSave != true)
             Divider()
             Button("Close Document") { model?.requestCloseActiveTab() }
-                .keyboardShortcut("w", modifiers: .command)
+                .keyboardShortcut("w", modifiers: [.command, .shift])
                 .disabled(model == nil)
         }
     }
