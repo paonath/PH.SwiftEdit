@@ -294,6 +294,19 @@ public struct PurpleThemePalette: Equatable, Sendable {
     public let yamlKeyForeground: RGBAColorToken
     /// Editor link/image text (`#7C3AED` Light 5.7:1, `#A78BFA` Black 7.0:1); `primaryAccent` on black was 3.69:1 (`F-017-02`).
     public let linkForeground: RGBAColorToken
+    /// Log severity foregrounds (`trace`…`error`) on the editor canvas, all `>= 4.5:1`; `critical` is drawn as
+    /// `logCriticalForeground` on `logCriticalBackground` (VS Code log grammar mapping).
+    public let logTraceForeground: RGBAColorToken
+    public let logDebugForeground: RGBAColorToken
+    public let logInfoForeground: RGBAColorToken
+    public let logWarnForeground: RGBAColorToken
+    public let logErrorForeground: RGBAColorToken
+    public let logCriticalForeground: RGBAColorToken
+    public let logCriticalBackground: RGBAColorToken
+    public let logTimestampForeground: RGBAColorToken
+    public let logGuidForeground: RGBAColorToken
+    public let logStringForeground: RGBAColorToken
+    public let logExceptionForeground: RGBAColorToken
 
     /// Returns the deterministic depth-indexed color for a matched nested bracket pair (`AR-012`).
     public func nestedBracketColor(forDepth depth: Int) -> RGBAColorToken {
@@ -397,7 +410,18 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 diffInsertedBackground: RGBAColorToken(hex: "#DCFCE7"),
                 diffRemovedBackground: RGBAColorToken(hex: "#FEE2E2"),
                 yamlKeyForeground: RGBAColorToken(hex: "#6B7280"),
-                linkForeground: RGBAColorToken(hex: "#7C3AED")
+                linkForeground: RGBAColorToken(hex: "#7C3AED"),
+                logTraceForeground: RGBAColorToken(hex: "#6B7280"),
+                logDebugForeground: RGBAColorToken(hex: "#0E7490"),
+                logInfoForeground: RGBAColorToken(hex: "#15803D"),
+                logWarnForeground: RGBAColorToken(hex: "#B45309"),
+                logErrorForeground: RGBAColorToken(hex: "#B91C1C"),
+                logCriticalForeground: RGBAColorToken(hex: "#FFFFFF"),
+                logCriticalBackground: RGBAColorToken(hex: "#B91C1C"),
+                logTimestampForeground: RGBAColorToken(hex: "#1D4ED8"),
+                logGuidForeground: RGBAColorToken(hex: "#6D28D9"),
+                logStringForeground: RGBAColorToken(hex: "#9D174D"),
+                logExceptionForeground: RGBAColorToken(hex: "#C2410C")
             )
         case .black:
             return PurpleThemePalette(
@@ -455,7 +479,18 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 diffInsertedBackground: RGBAColorToken(hex: "#052E16"),
                 diffRemovedBackground: RGBAColorToken(hex: "#450A0A"),
                 yamlKeyForeground: RGBAColorToken(hex: "#9CA3AF"),
-                linkForeground: RGBAColorToken(hex: "#A78BFA")
+                linkForeground: RGBAColorToken(hex: "#A78BFA"),
+                logTraceForeground: RGBAColorToken(hex: "#9CA3AF"),
+                logDebugForeground: RGBAColorToken(hex: "#22D3EE"),
+                logInfoForeground: RGBAColorToken(hex: "#4ADE80"),
+                logWarnForeground: RGBAColorToken(hex: "#FBBF24"),
+                logErrorForeground: RGBAColorToken(hex: "#F87171"),
+                logCriticalForeground: RGBAColorToken(hex: "#FFFFFF"),
+                logCriticalBackground: RGBAColorToken(hex: "#991B1B"),
+                logTimestampForeground: RGBAColorToken(hex: "#60A5FA"),
+                logGuidForeground: RGBAColorToken(hex: "#A78BFA"),
+                logStringForeground: RGBAColorToken(hex: "#F9A8D4"),
+                logExceptionForeground: RGBAColorToken(hex: "#FB923C")
             )
         }
     }

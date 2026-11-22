@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-22 UTC
+Branch: feature/logging | Commit: ca51161
+
+### Added
+- Added level-aware `.log` highlighting (trace to critical, timestamps, GUIDs, strings, exceptions, stack frames; NLog, Serilog, log4net, syslog and JSON layouts) and a live log tail: `Cmd+L` direct, `Shift+Cmd+L` inverse (newest first), with an in-editor panel for Stop/Resume, order and line count (default 80). The tail runs in the background, never locks the file, handles truncation and rotation, and opens logs above 64 MiB as read-only tail-only tabs (`openspec/specs/log-tail-terminal-panel-lint-hover-and-help/spec.md`).
+- Added the `Cmd+J` Terminal panel: multiple sessions that open the preferred allowlisted terminal in the current folder (or the user home), reporting launch failures and terminal quits without crashing; no shell runs inside SwiftEdit (`SEC-004`).
+- Added English explanations for every lint rule, shown in a popover when hovering the gutter lint dot.
+- Added Help → SwiftEdit Help (`Shift+Cmd+?`), rendering the bundled README offline, and `Scripts/dev/log-writer.py` for generating large NLog/Serilog/log4net/syslog/JSON test logs with live writing, rotation and truncation.
+
+### Changed
+- Rewrote `README.md` in English for GitHub with the logo and the `SwiftEdit` app name (install and quarantine commands target `SwiftEdit.app`).
+- Moved Toggle Task Checkbox to `Option+Cmd+L` (`Shift+Cmd+L` is now Log inverse).
+- Programmatic editor updates replace only the changed range (10k-line tail update 3.31 ms → 0.81 ms) and lint render projections are cached by generation (10 renders with 1000 diagnostics 2.31 ms → 0.005 ms).
+
+### Fixed
+- Fixed navigator rows that ignored clicks outside the title text, and made jumps scroll reliably to far, not-yet-laid-out lines.
+- Fixed out-of-order live-tail snapshots overwriting newer ones, and file-event watching not resuming after a log is recreated.
+
+## [Unreleased] - 2026-11-22 UTC
 Branch: hotfix/github-tests_still-on-error | Commit: 0026d27
 
 ### Changed

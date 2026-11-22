@@ -364,7 +364,11 @@ public final class SwiftEditWorkbenchModel {
     public private(set) var grantedScopeRootURL: URL?
     public private(set) var folderEntries: [FolderEntryDescriptor] = []
     public private(set) var currentSelection = SwiftEditCore.TextRange(location: 0, length: 0)
-    public private(set) var lintDiagnostics: [MarkdownLintDiagnostic] = []
+    public private(set) var lintDiagnostics: [MarkdownLintDiagnostic] = [] {
+        didSet { lintGeneration &+= 1 }
+    }
+    /// Bumped on every diagnostics assignment: O(1) cache key instead of comparing up to 1000 diagnostics per render.
+    @ObservationIgnored private var lintGeneration: UInt64 = 0
     public private(set) var bracketResult: BracketBalanceResult?
     public private(set) var safetyBanner: InspectionSafetyBannerState
     public private(set) var statusBannerMessage: String?
@@ -372,6 +376,8 @@ public final class SwiftEditWorkbenchModel {
     public var showDiffPane: Bool = false
     public var isCheatSheetPresented: Bool = false
     public var isAboutSheetPresented: Bool = false
+    /// Help → SwiftEdit Help: bundled README rendered offline with the native Markdown preview.
+    public var isHelpSheetPresented: Bool = false
     /// Starts `true` on empty launch or single-file open (`Cmd+O`) and auto-expands (`false`) when mounting a workspace folder (`UI-001`).
     public var isLeftSidebarCollapsed: Bool = true
     public var findReplaceState = FindReplaceBarState()
@@ -413,7 +419,8 @@ public final class SwiftEditWorkbenchModel {
     @ObservationIgnored private var cachedGutterProjection: (id: DocumentID, revision: BufferRevision, caret: Int, fontSize: Double, value: LineNumberGutterProjection)?
     @ObservationIgnored private var cachedStatusBarMetrics: (id: DocumentID, revision: BufferRevision, caret: Int, value: StatusBarMetricsProjection)?
     @ObservationIgnored private var cachedPreviewSourceLine: (id: DocumentID, revision: BufferRevision, caret: Int, value: Int)?
-    @ObservationIgnored private var cachedVisibleLint: (diagnostics: [MarkdownLintDiagnostic], caretLine: Int, visible: [MarkdownLintDiagnostic], severityByLine: [Int: MarkdownLintSeverity])?
+    @ObservationIgnored private var cachedVisibleLint: (generation: UInt64, caretLine: Int, visible: [MarkdownLintDiagnostic], severityByLine: [Int: MarkdownLintSeverity])?
+    @ObservationIgnored private var cachedLintDetails: (generation: UInt64, caretLine: Int, details: [Int: String])?
     @ObservationIgnored private var lastPersistedRecoveryRevisions: [DocumentID: BufferRevision] = [:]
 
     public init(
@@ -533,6 +540,8 @@ public final class SwiftEditWorkbenchModel {
     }
 
     isolated deinit {
+        if let observer = terminalTerminationObserver { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        for tail in logTails.values { tail.stop() }
         diagnosticsTask?.cancel()
         updateCheckTask?.cancel()
         recoveryDebounceTask?.cancel()
@@ -754,6 +763,8 @@ public final class SwiftEditWorkbenchModel {
         do {
             let loaded = try loader.load(from: standardizedURL, withinScope: scope)
             try completeOpenLoadedSession(loaded, at: standardizedURL, withinScope: scope)
+        } catch DomainError.fileTooLarge(let byteCount) where DocumentLanguage.resolve(filename: standardizedURL.lastPathComponent) == .log {
+            openLogTailOnly(at: standardizedURL, byteCount: byteCount)
         } catch {
             statusBannerMessage = "Open failed: \(error)"
         }
@@ -785,6 +796,8 @@ public final class SwiftEditWorkbenchModel {
                 loaded = try loader.load(from: standardizedURL, withinScope: scope)
             }
             try completeOpenLoadedSession(loaded, at: standardizedURL, withinScope: scope)
+        } catch DomainError.fileTooLarge(let byteCount) where DocumentLanguage.resolve(filename: standardizedURL.lastPathComponent) == .log {
+            if asyncOpenGeneration == expectedGeneration { openLogTailOnly(at: standardizedURL, byteCount: byteCount) }
         } catch {
             if asyncOpenGeneration == expectedGeneration {
                 statusBannerMessage = "Open failed: \(error)"
@@ -920,6 +933,8 @@ public final class SwiftEditWorkbenchModel {
 
     public func closeTab(id: DocumentID) {
         asyncOpenGeneration &+= 1
+        logTails.removeValue(forKey: id)?.stop()
+        logTailOnlyTabIDs.remove(id)
         do {
             _ = try tabSession.closeTab(id: id)
             sessionsByID.removeValue(forKey: id)
@@ -1023,6 +1038,10 @@ public final class SwiftEditWorkbenchModel {
     public func saveActiveDocument() {
         guard let activeID = tabSession.activeTabID,
               let session = sessionsByID[activeID] else { return }
+        guard !logTailOnlyTabIDs.contains(activeID) else {
+            statusBannerMessage = "Save blocked: this log is too large to edit and is shown as a live tail only."
+            return
+        }
         guard !session.isBinaryReadOnly, safetyBanner.canSave else {
             statusBannerMessage = "Save blocked: binary read-only file."
             return
@@ -1092,7 +1111,7 @@ public final class SwiftEditWorkbenchModel {
     /// YAML runs `YAMLStructureLinter`; plain text is never linted.
     nonisolated static func lintDiagnostics(for snap: DocumentSnapshot, language: DocumentLanguage) -> [MarkdownLintDiagnostic] {
         switch language {
-        case .plainText:
+        case .plainText, .log:
             return []
         case .yaml:
             return YAMLStructureLinter.lint(snapshot: snap)
@@ -1577,7 +1596,7 @@ public final class SwiftEditWorkbenchModel {
         switch editorSyntaxLanguage {
         case .markdown: navigatorState = DocumentNavigatorState(headings: MarkdownHeadingOutlineEngine.outline(index: activeLineIndex() ?? MarkdownLineIndex(text: session.text)))
         case .yaml: navigatorState = DocumentNavigatorState(headings: YAMLOutlineEngine.outline(index: activeLineIndex() ?? MarkdownLineIndex(text: session.text)))
-        case .plainText: return
+        case .plainText, .log: return
         }
     }
 
@@ -1649,6 +1668,163 @@ public final class SwiftEditWorkbenchModel {
         if navigatorState != nil { closeDocumentNavigator(); return true }
         if isDistractionFree { toggleDistractionFree(); return true }
         return false
+    }
+
+    // MARK: Terminal panel (Cmd+J)
+
+    /// Terminal sessions of the bottom panel; each launches the preferred external terminal (`SEC-004`: no shell runs inside SwiftEdit).
+    public private(set) var terminalSessions: [TerminalPanelSession] = []
+    public private(set) var isTerminalPanelVisible = false
+    public var selectedTerminalSessionID: UUID?
+    @ObservationIgnored private var terminalSessionCounter = 0
+    /// Real user home (in the App Sandbox `homeDirectoryForCurrentUser` is the container).
+    @ObservationIgnored public var userHomeDirectoryProvider: () -> URL = {
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir { return URL(fileURLWithPath: String(cString: dir), isDirectory: true) }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    /// `Cmd+J`: opening shows the panel and starts a terminal session; closing hides it and ends every session.
+    public func toggleTerminalPanel() {
+        if isTerminalPanelVisible {
+            isTerminalPanelVisible = false
+            terminalSessions.removeAll()
+            selectedTerminalSessionID = nil
+            requestEditorFocus()
+        } else {
+            isTerminalPanelVisible = true
+            if terminalSessions.isEmpty { openTerminalSession() }
+        }
+    }
+
+    /// Adds a session launching the preferred terminal in the current folder (home when no folder is open).
+    /// Launch failures are recorded on the session (never thrown), so a broken terminal can never take the app down.
+    @discardableResult
+    public func openTerminalSession() -> TerminalPanelSession {
+        terminalSessionCounter += 1
+        let directory = (selectedFolderURL ?? userHomeDirectoryProvider()).standardizedFileURL
+        let scope = selectedFolderURL == nil ? nil : (grantedScopeRootURL ?? selectedFolderURL)
+        var session = TerminalPanelSession(title: "Terminal \(terminalSessionCounter)", directory: directory)
+        launch(&session, withinScope: scope)
+        terminalSessions.append(session)
+        selectedTerminalSessionID = session.id
+        isTerminalPanelVisible = true
+        return session
+    }
+
+    /// Re-launches (brings to front) the terminal of `id` in its folder.
+    public func relaunchTerminalSession(id: UUID) {
+        guard let index = terminalSessions.firstIndex(where: { $0.id == id }) else { return }
+        let scope = selectedFolderURL == nil ? nil : (grantedScopeRootURL ?? selectedFolderURL)
+        launch(&terminalSessions[index], withinScope: scope)
+    }
+
+    @ObservationIgnored private var terminalTerminationObserver: (any NSObjectProtocol)?
+
+    /// Marks sessions whose terminal app quit (or crashed) as failed with a readable message; SwiftEdit keeps running.
+    private func observeTerminalTerminationIfNeeded() {
+        guard terminalTerminationObserver == nil else { return }
+        terminalTerminationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let bundleID = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+            MainActor.assumeIsolated { self?.terminalApplicationDidTerminate(bundleIdentifier: bundleID) }
+        }
+    }
+
+    /// Records that the external terminal with `bundleIdentifier` is gone (normal quit or crash).
+    func terminalApplicationDidTerminate(bundleIdentifier: String?) {
+        guard let bundleIdentifier else { return }
+        for index in terminalSessions.indices where terminalSessions[index].bundleIdentifier == bundleIdentifier {
+            if case .running(let name, _) = terminalSessions[index].state {
+                terminalSessions[index].state = .failed(message: "\(name) quit or crashed. Use Open Again to restart it.")
+            }
+        }
+    }
+
+    public func closeTerminalSession(id: UUID) {
+        terminalSessions.removeAll { $0.id == id }
+        if selectedTerminalSessionID == id { selectedTerminalSessionID = terminalSessions.last?.id }
+        if terminalSessions.isEmpty { isTerminalPanelVisible = false; requestEditorFocus() }
+    }
+
+    private func launch(_ session: inout TerminalPanelSession, withinScope scope: URL?) {
+        let explicitID: String?
+        if let selected = preferredTerminalBundleID, installedTerminalBundleIDsProvider().contains(selected) {
+            explicitID = selected
+        } else {
+            explicitID = nil
+        }
+        do {
+            let resolution = try desktopWorkspace.openInTerminal(targetURL: session.directory, withinScope: scope, explicitBundleIdentifier: explicitID)
+            let name = TerminalCatalog.knownTerminals.first { $0.bundleIdentifier == resolution.bundleIdentifier }?.displayName ?? resolution.bundleIdentifier
+            session.state = .running(appName: name, since: Date())
+            session.bundleIdentifier = resolution.bundleIdentifier
+            observeTerminalTerminationIfNeeded()
+        } catch {
+            session.state = .failed(message: "Terminal could not start: \(error)")
+        }
+    }
+
+    // MARK: Log function (live tail)
+
+    /// Live tails keyed by tab; a tab keeps its controller (and last snapshot) until the panel is closed.
+    public private(set) var logTails: [DocumentID: LogTailController] = [:]
+    /// Tabs opened as tail-only because the log exceeds the open size gate: never editable or savable.
+    public private(set) var logTailOnlyTabIDs: Set<DocumentID> = []
+    @ObservationIgnored public var logFileReader: any LogFileReading = LocalLogFileReader()
+
+    /// Log panel controller of the active tab, if the Log function was started on it.
+    public var activeLogTail: LogTailController? {
+        guard activeBinaryInspection == nil, let id = tabSession.activeTabID else { return nil }
+        return logTails[id]
+    }
+
+    /// `⌘L` (direct) / `⌘⇧L` (inverse): starts — or switches the mode of — the live tail of the active file-backed tab.
+    /// The tail runs in the background; other tabs stay fully usable and the file stays writable by other processes.
+    public func startLogTail(mode: LogTailMode) {
+        guard activeBinaryInspection == nil, let id = tabSession.activeTabID,
+              let url = tabSession.tabs.first(where: { $0.id == id })?.fileURL else {
+            statusBannerMessage = "Log: save the document to a file first."
+            return
+        }
+        if let existing = logTails[id] {
+            existing.setMode(mode)
+            existing.start()
+            return
+        }
+        let controller = LogTailController(tabID: id, url: url, mode: mode, reader: logFileReader)
+        logTails[id] = controller
+        controller.start()
+    }
+
+    /// Pauses the live tail of the active tab (the last snapshot stays visible).
+    public func stopLogTail() { activeLogTail?.stop() }
+
+    /// Closes the Log panel and returns to the normal editor (tail-only tabs keep their stopped tail visible).
+    public func closeLogTail() {
+        guard let id = tabSession.activeTabID, let controller = logTails[id] else { return }
+        controller.stop()
+        guard !logTailOnlyTabIDs.contains(id) else { return }
+        logTails.removeValue(forKey: id)
+        requestEditorFocus()
+    }
+
+    /// Opens a log above the size gate as a read-only live tail (bounded window from the end of the file).
+    private func openLogTailOnly(at url: URL, byteCount: UInt64) {
+        let session = DocumentSession(fileURL: url, text: "")
+        do {
+            try tabSession.openOrActivate(snapshot: session.snapshot, title: url.lastPathComponent, fileURL: url, isDirty: false)
+        } catch {
+            statusBannerMessage = "Open failed: \(error)"
+            return
+        }
+        activeBinaryInspection = nil
+        sessionsByID[session.id] = session
+        savedBaselineByID[session.id] = session.snapshot
+        logTailOnlyTabIDs.insert(session.id)
+        let mb = Double(byteCount) / 1_048_576
+        statusBannerMessage = String(format: "Log too large to edit (%.0f MB): showing a live tail of the last lines.", mb)
+        startLogTail(mode: .direct)
     }
 
     // MARK: Frontmatter Properties panel (016)
@@ -1859,16 +2035,15 @@ public final class SwiftEditWorkbenchModel {
 
     private func resolvedVisibleLintCache() -> (visible: [MarkdownLintDiagnostic], severityByLine: [Int: MarkdownLintSeverity]) {
         let caretLine = previewSourceLine
-        let current = lintDiagnostics
-        if let cached = cachedVisibleLint, cached.caretLine == caretLine, cached.diagnostics == current {
+        if let cached = cachedVisibleLint, cached.caretLine == caretLine, cached.generation == lintGeneration {
             return (cached.visible, cached.severityByLine)
         }
-        let visible = ActiveLineLintSuppressionPolicy.visibleDiagnostics(current, caretLine: caretLine)
+        let visible = ActiveLineLintSuppressionPolicy.visibleDiagnostics(lintDiagnostics, caretLine: caretLine)
         var severityByLine: [Int: MarkdownLintSeverity] = Dictionary(minimumCapacity: visible.count)
         for d in visible where severityByLine[d.line] != .error {
             severityByLine[d.line] = d.severity
         }
-        cachedVisibleLint = (current, caretLine, visible, severityByLine)
+        cachedVisibleLint = (lintGeneration, caretLine, visible, severityByLine)
         return (visible, severityByLine)
     }
 
@@ -1880,6 +2055,24 @@ public final class SwiftEditWorkbenchModel {
     /// Worst severity per 1-based line (errors win) for gutter badges, built once per `(lintDiagnostics, caretLine)`.
     public var gutterSeverityByLine: [Int: MarkdownLintSeverity] {
         resolvedVisibleLintCache().severityByLine
+    }
+
+    /// Hover text per line for the gutter lint badge: one entry per diagnostic, `CODE: message` plus the rule explanation.
+    public var gutterLintDetailsByLine: [Int: String] {
+        let caretLine = previewSourceLine
+        if let cached = cachedLintDetails, cached.generation == lintGeneration, cached.caretLine == caretLine { return cached.details }
+        let details = Self.lintDetails(resolvedVisibleLintCache().visible)
+        cachedLintDetails = (lintGeneration, caretLine, details)
+        return details
+    }
+
+    nonisolated static func lintDetails(_ diagnostics: [MarkdownLintDiagnostic]) -> [Int: String] {
+        var grouped: [Int: [String]] = [:]
+        for d in diagnostics {
+            let message = d.message.hasPrefix(d.rule.code) ? d.message : "\(d.rule.code): \(d.message)"
+            grouped[d.line, default: []].append("\(message)\n\(d.rule.explanation)")
+        }
+        return grouped.mapValues { $0.joined(separator: "\n\n") }
     }
 
     /// Toggles the diagnostics popover (`⇧⌘M`); ignored while lint is Off or Paused.
@@ -2420,10 +2613,16 @@ public struct SwiftEditRootView: View {
                             onGoToLine: { model.executeGoToLine() },
                             onClose: { model.presentFindBar(mode: .hidden) }
                         ) }
+                        if let tail = model.activeLogTail, !model.isDistractionFree {
+                            LogTailPanelView(model: model, tail: tail)
+                        }
                         if model.isPropertiesPanelVisible {
                             PropertiesPanelView(model: model, state: model.propertiesPanel)
                         }
                         editorAndOptionalPanels
+                        if model.isTerminalPanelVisible, !model.isDistractionFree {
+                            TerminalPanelView(model: model)
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -2511,6 +2710,12 @@ public struct SwiftEditRootView: View {
             .sheet(isPresented: $model.isCheatSheetPresented) {
                 KeyboardShortcutsCheatSheetView(palette: model.palette) {
                     model.isCheatSheetPresented = false
+                    model.requestEditorFocus()
+                }
+            }
+            .sheet(isPresented: $model.isHelpSheetPresented) {
+                HelpDocumentationView(palette: model.palette) {
+                    model.isHelpSheetPresented = false
                     model.requestEditorFocus()
                 }
             }
@@ -2606,6 +2811,7 @@ public struct SwiftEditRootView: View {
                 }
                 guard !activeModel.isCheatSheetPresented,
                       !activeModel.isAboutSheetPresented,
+                      !activeModel.isHelpSheetPresented,
                       !activeModel.isUpdateDialogPresented,
                       activeModel.pendingDirtyCloseTabID == nil,
                       activeModel.pendingBatchOpenPlan == nil,
@@ -3141,7 +3347,30 @@ public struct SwiftEditRootView: View {
 
     private var editorAndOptionalPanels: some View {
         HSplitView {
-            if let session = model.activeDocumentSession {
+            if let tail = model.activeLogTail {
+                // Read-only live tail view: its own document identity, follows the newest line (bottom in direct, top in inverse).
+                TextKit2EditorView(
+                    documentID: tail.viewID,
+                    bufferRevision: BufferRevision(tail.generation),
+                    text: tail.text,
+                    isEditable: false,
+                    palette: model.palette,
+                    fontSizePoints: model.zoomController.scaledFontSizePoints,
+                    highlightProjection: EditorHighlightProjection(),
+                    onTextChange: { _ in },
+                    onSelectionChange: { _ in },
+                    onSmartNewline: { _ in nil },
+                    onListIndent: { _ in .notApplicable },
+                    onTableTab: { _ in .notApplicable },
+                    documentLanguage: .log,
+                    programmaticSelection: SwiftEditCore.TextRange(location: tail.mode == .direct ? (tail.text as NSString).length : 0, length: 0),
+                    programmaticSelectionToken: Int(truncatingIfNeeded: tail.generation),
+                    onEscape: { model.handleEscape() },
+                    typography: model.typography,
+                    typographyGeneration: model.typographyGeneration
+                )
+                .accessibilityLabel("Live log tail")
+            } else if let session = model.activeDocumentSession {
                 HStack(spacing: 0) {
                     if !model.isDistractionFree {
                         LineNumberGutterView(
@@ -3149,7 +3378,8 @@ public struct SwiftEditRootView: View {
                             palette: model.palette,
                             severityByLine: model.gutterSeverityByLine,
                             viewportMetrics: gutterViewportMetrics,
-                            width: model.gutterWidth
+                            width: model.gutterWidth,
+                            lintDetailsByLine: model.gutterLintDetailsByLine
                         )
                     }
                     TextKit2EditorView(

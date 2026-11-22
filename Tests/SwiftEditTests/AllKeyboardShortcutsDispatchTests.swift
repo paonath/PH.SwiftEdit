@@ -201,7 +201,7 @@ struct AllKeyboardShortcutsDispatchTests {
         let fence = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "C", charactersIgnoringModifiers: "c", modifiers: [.command, .shift]), model: model)
         let link = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "k", modifiers: [.command]), model: model)
         let image = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "I", charactersIgnoringModifiers: "i", modifiers: [.command, .shift]), model: model)
-        let task = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "L", charactersIgnoringModifiers: "l", modifiers: [.command, .shift]), model: model)
+        let task = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "¬", charactersIgnoringModifiers: "l", modifiers: [.command, .option]), model: model)
         let quoteIT = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: ":", charactersIgnoringModifiers: ".", keyCode: 47, modifiers: [.command, .shift]), model: model)
         let table = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "†", charactersIgnoringModifiers: "t", modifiers: [.command, .option]), model: model)
         let diag = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "M", charactersIgnoringModifiers: "m", modifiers: [.command, .shift]), model: model)

@@ -173,6 +173,33 @@ public struct GutterViewportMetrics: Equatable, Sendable {
 }
 
 #if os(macOS)
+/// Gutter lint dot: hovering shows an English popover with the rule code, message and explanation (also a tooltip and
+/// the VoiceOver label). The hover area is larger than the 8 pt dot so it is easy to target.
+struct LintBadge: View {
+    let color: Color
+    let details: String
+    let isError: Bool
+    @State private var isHovering = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 8, height: 8)
+            .frame(width: 16, height: 16)
+            .contentShape(Rectangle())
+            .onHover { isHovering = $0 }
+            .popover(isPresented: $isHovering, arrowEdge: .trailing) {
+                Text(details)
+                    .appFont(.callout)
+                    .frame(maxWidth: 380, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+            }
+            .help(details)
+            .accessibilityLabel("\(isError ? "Lint error" : "Lint warning"): \(details)")
+    }
+}
+
 /// Left 1-based line-number gutter synchronized with TextKit 2 vertical scroll and soft-wrap fragment heights (`BUG-012`, `UI-001`, `UI-002`).
 public struct LineNumberGutterView: View {
     public let projection: LineNumberGutterProjection
@@ -182,15 +209,19 @@ public struct LineNumberGutterView: View {
     public var viewportMetrics: GutterViewportMetrics?
     /// Zoom- and font-driven width (`ZoomedChromeMetrics.gutterWidth`).
     public var width: CGFloat
+    /// English hover text per 1-based line (rule code, message and explanation), shown by the lint badge.
+    public var lintDetailsByLine: [Int: String]
 
     public init(
         projection: LineNumberGutterProjection,
         palette: PurpleThemePalette,
         severityByLine: [Int: MarkdownLintSeverity] = [:],
         viewportMetrics: GutterViewportMetrics? = nil,
-        width: CGFloat = 52
+        width: CGFloat = 52,
+        lintDetailsByLine: [Int: String] = [:]
     ) {
         self.width = width
+        self.lintDetailsByLine = lintDetailsByLine
         self.projection = projection
         self.palette = palette
         self.severityByLine = severityByLine
@@ -242,11 +273,11 @@ public struct LineNumberGutterView: View {
                     .fill(severityColor)
                     .frame(width: 3, height: max(12, projection.fontSizePoints * 0.95))
                     .accessibilityHidden(true)
-                Circle()
-                    .fill(severityColor)
-                    .frame(width: 8, height: 8)
-                    .help(severity == .error ? "Markdown lint error on this line" : "Markdown lint warning on this line")
-                    .accessibilityLabel(severity == .error ? "Lint error" : "Lint warning")
+                LintBadge(
+                    color: severityColor,
+                    details: lintDetailsByLine[lineNumber] ?? (severity == .error ? "Markdown lint error on this line" : "Markdown lint warning on this line"),
+                    isError: severity == .error
+                )
             }
             Text("\(lineNumber)")
                 .appFont(size: projection.fontSizePoints, weight: (isActive || severity != nil) ? .semibold : .regular, monospaced: true, role: .editor)

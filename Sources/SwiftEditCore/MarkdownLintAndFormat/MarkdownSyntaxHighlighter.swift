@@ -9,6 +9,8 @@ public enum MarkdownSyntaxKind: Equatable, Sendable {
     case blockquote, tableRow, thematicBreak
     /// YAML key (grey, lighter weight), value (canvas text), structural punctuation and comment (`UI-002`, `REQ-010`).
     case yamlKey, yamlValue, yamlPunctuation, yamlComment
+    /// Log tokens (`.log` tabs): severity word, timestamp, GUID, quoted string, exception name or stack frame.
+    case logLevel(LogLevel), logTimestamp, logGuid, logString, logException
 
     /// `true` for the four YAML kinds emitted by `YAMLSyntaxHighlighter`.
     public var isYAML: Bool {

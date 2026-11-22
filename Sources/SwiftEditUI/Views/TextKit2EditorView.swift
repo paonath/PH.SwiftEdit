@@ -284,9 +284,8 @@ struct TextKit2EditorView: NSViewRepresentable {
             let length = textView.textStorage?.length ?? 0
             if programmaticSelection.location >= 0, programmaticSelection.upperBound <= length {
                 coordinator.isApplyingProgrammaticUpdate = true
-                textView.setSelectedRange(NSRange(location: programmaticSelection.location, length: programmaticSelection.length))
+                Coordinator.revealSelection(NSRange(location: programmaticSelection.location, length: programmaticSelection.length), in: textView)
                 coordinator.isApplyingProgrammaticUpdate = false
-                textView.scrollRangeToVisible(NSRange(location: programmaticSelection.location, length: programmaticSelection.length))
                 selectionChanged = true
             }
         }
@@ -840,10 +839,17 @@ struct TextKit2EditorView: NSViewRepresentable {
 
             if isSameDocument {
                 let currentLength = textView.textStorage?.length ?? 0
-                let fullRange = NSRange(location: 0, length: currentLength)
-                if !isDisplaying(newText, in: textView) {
-                    if textView.shouldChangeText(in: fullRange, replacementString: newText) {
-                        textView.textStorage?.replaceCharacters(in: fullRange, with: newText)
+                let oldText = currentNativeText(of: textView)
+                if oldText != newText {
+                    // Replace only the differing middle range (common prefix/suffix kept): TextKit 2 re-lays out just the
+                    // touched paragraphs, live log tails append in O(delta), and the single undo step stays exact.
+                    let edit = Self.minimalReplacement(from: oldText, to: newText)
+                        ?? (NSRange(location: 0, length: currentLength), newText)
+                    if !textView.isEditable {
+                        // Read-only views (log tail): no undo registration, no delegate edit notifications.
+                        textView.textStorage?.replaceCharacters(in: edit.range, with: edit.replacement)
+                    } else if textView.shouldChangeText(in: edit.range, replacementString: edit.replacement) {
+                        textView.textStorage?.replaceCharacters(in: edit.range, with: edit.replacement)
                         textView.didChangeText()
                     } else {
                         textView.string = newText
@@ -862,6 +868,40 @@ struct TextKit2EditorView: NSViewRepresentable {
             let clampedLocation = min(max(0, targetLocation), newLength)
             let clampedLength = min(max(0, targetLength), newLength - clampedLocation)
             textView.setSelectedRange(NSRange(location: clampedLocation, length: clampedLength))
+        }
+
+        /// Smallest UTF-16 range of `old` (and its replacement) that turns `old` into `new`, keeping the longest common
+        /// prefix and suffix on Unicode-scalar boundaries; `nil` when `old` has no contiguous UTF-8 storage.
+        static func minimalReplacement(from old: String, to new: String) -> (range: NSRange, replacement: String)? {
+            var a = old, b = new
+            let bounds: (prefix: Int, suffix: Int)? = a.withUTF8 { x in
+                b.withUTF8 { y in
+                    guard let xb = x.baseAddress ?? (x.isEmpty ? UnsafePointer(bitPattern: 1) : nil),
+                          let yb = y.baseAddress ?? (y.isEmpty ? UnsafePointer(bitPattern: 1) : nil) else { return nil }
+                    let la = x.count, lb = y.count, limit = min(la, lb)
+                    // Common prefix: memcmp on 4 KiB blocks, then bytes inside the first differing block.
+                    var p = 0
+                    while p + 4096 <= limit, memcmp(xb + p, yb + p, 4096) == 0 { p += 4096 }
+                    while p < limit, x[p] == y[p] { p += 1 }
+                    while p > 0, p < la, (x[p] & 0xC0) == 0x80 { p -= 1 }
+                    // Common suffix (not overlapping the prefix), same strategy from the end.
+                    let maxSuffix = limit - p
+                    var q = 0
+                    while q + 4096 <= maxSuffix, memcmp(xb + la - q - 4096, yb + lb - q - 4096, 4096) == 0 { q += 4096 }
+                    while q < maxSuffix, x[la - 1 - q] == y[lb - 1 - q] { q += 1 }
+                    while q > 0, (x[la - q] & 0xC0) == 0x80 { q -= 1 }
+                    return (p, q)
+                }
+            }
+            guard let bounds else { return nil }
+            // UTF-8 → UTF-16 offsets through String indices (breadcrumb-accelerated for native strings).
+            let oldStart = a.utf8.index(a.utf8.startIndex, offsetBy: bounds.prefix)
+            let oldEnd = a.utf8.index(a.utf8.endIndex, offsetBy: -bounds.suffix)
+            let newStart = b.utf8.index(b.utf8.startIndex, offsetBy: bounds.prefix)
+            let newEnd = b.utf8.index(b.utf8.endIndex, offsetBy: -bounds.suffix)
+            let location = a.utf16.distance(from: a.utf16.startIndex, to: oldStart)
+            let length = a.utf16.distance(from: oldStart, to: oldEnd)
+            return (NSRange(location: location, length: length), String(b[newStart..<newEnd]))
         }
 
         /// Native UTF-8 copy of the text-storage contents, refreshed on every `textDidChange` and programmatic update (`PERF-B3`).
@@ -898,6 +938,26 @@ struct TextKit2EditorView: NSViewRepresentable {
         /// `true` when the editor already shows `text`; compares native storage (memcmp) instead of a bridged `O(N)` walk.
         func isDisplaying(_ text: String, in textView: NSTextView) -> Bool {
             currentNativeText(of: textView) == text
+        }
+
+        /// Selects `range` (clamped to the text) and scrolls it into view (Navigator jumps, Find, Go to Line).
+        ///
+        /// TextKit 2 positions unlaid-out text by estimate, so a first `scrollRangeToVisible` can land beside a far target;
+        /// when the target fragment is still outside the visible rect, only that fragment is laid out (never the whole
+        /// document, `UI-012`) and the scroll is repeated.
+        static func revealSelection(_ range: NSRange, in textView: NSTextView) {
+            let length = textView.textStorage?.length ?? (textView.string as NSString).length
+            let location = min(max(0, range.location), length)
+            let clamped = NSRange(location: location, length: min(max(0, range.length), length - location))
+            textView.setSelectedRange(clamped)
+            textView.scrollRangeToVisible(clamped)
+            guard let tlm = textView.textLayoutManager, let tcm = tlm.textContentManager,
+                  let start = tcm.location(tcm.documentRange.location, offsetBy: location),
+                  let target = NSTextRange(location: start, end: tcm.location(start, offsetBy: min(1, length - location)) ?? start),
+                  let visible = textView.enclosingScrollView?.documentVisibleRect else { return }
+            if let fragment = tlm.textLayoutFragment(for: start), visible.intersects(fragment.layoutFragmentFrame) { return }
+            tlm.ensureLayout(for: target)
+            textView.scrollRangeToVisible(clamped)
         }
 
         /// Zero-bridge cache lookup used by `renderingAttributesValidator`: avoids touching `textView.string` completely on cache hits.
@@ -1054,6 +1114,24 @@ enum EditorRenderingAttributes {
             return [(.foregroundColor, palette.yamlKeyForeground.nsColor), (.font, fonts.yamlKey)]
         case .yamlValue:
             return []
+        case .logLevel(let level):
+            switch level {
+            case .trace: return [(.foregroundColor, palette.logTraceForeground.nsColor)]
+            case .debug: return [(.foregroundColor, palette.logDebugForeground.nsColor)]
+            case .info: return [(.foregroundColor, palette.logInfoForeground.nsColor)]
+            case .warn: return [(.foregroundColor, palette.logWarnForeground.nsColor), (.font, fonts.bold)]
+            case .error: return [(.foregroundColor, palette.logErrorForeground.nsColor), (.font, fonts.bold)]
+            case .critical:
+                return [(.foregroundColor, palette.logCriticalForeground.nsColor), (.backgroundColor, palette.logCriticalBackground.nsColor), (.font, fonts.bold)]
+            }
+        case .logTimestamp:
+            return [(.foregroundColor, palette.logTimestampForeground.nsColor)]
+        case .logGuid:
+            return [(.foregroundColor, palette.logGuidForeground.nsColor)]
+        case .logString:
+            return [(.foregroundColor, palette.logStringForeground.nsColor)]
+        case .logException:
+            return [(.foregroundColor, palette.logExceptionForeground.nsColor), (.font, fonts.italic)]
         }
     }
 }

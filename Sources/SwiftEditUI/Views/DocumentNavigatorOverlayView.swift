@@ -57,6 +57,8 @@ struct DocumentNavigatorOverlayView: View {
                     ForEach(Array(state.filtered.enumerated()), id: \.element.id) { row, heading in
                         rowView(heading, selected: row == state.selectedIndex)
                             .id(heading.id)
+                            // The whole row (including the Spacer area) must be clickable, not just the title glyphs.
+                            .contentShape(Rectangle())
                             .onTapGesture {
                                 model.navigatorState?.select(index: row)
                                 model.confirmDocumentNavigator()

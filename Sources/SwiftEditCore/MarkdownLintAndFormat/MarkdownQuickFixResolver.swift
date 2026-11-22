@@ -120,7 +120,7 @@ public enum ActiveLintStatus: Equatable, Sendable {
 
     /// Off for plain-text and binary snapshots, Paused for degraded buffers, Active for Markdown and YAML tabs (`REQ-003`).
     public static func classify(language: DocumentLanguage, snapshot: DocumentSnapshot, diagnosticCount: Int) -> ActiveLintStatus {
-        guard language != .plainText, !snapshot.isBinaryReadOnly else { return .off }
+        guard language != .plainText, language != .log, !snapshot.isBinaryReadOnly else { return .off }
         if snapshot.isDegradedPlainText { return .paused }
         return .active(count: diagnosticCount)
     }

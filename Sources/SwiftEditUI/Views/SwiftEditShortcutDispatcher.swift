@@ -120,6 +120,13 @@ public enum SwiftEditShortcutDispatcher {
         isEditingOverlayTextField: Bool
     ) -> Bool {
         switch charsIgnored {
+        case "l":
+            guard !isEditingOverlayTextField else { return false }
+            model.startLogTail(mode: .direct)
+            return true
+        case "j":
+            model.toggleTerminalPanel()
+            return true
         case "n":
             model.newUntitledTab()
             return true
@@ -236,7 +243,7 @@ public enum SwiftEditShortcutDispatcher {
             return true
         case "l":
             guard !isEditingOverlayTextField else { return false }
-            if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.taskToggle) }
+            model.startLogTail(mode: .inverse)
             return true
         case ".", ">":
             guard !isEditingOverlayTextField else { return false }
@@ -268,6 +275,10 @@ public enum SwiftEditShortcutDispatcher {
         case "t":
             guard !isEditingOverlayTextField else { return false }
             if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.insertTable) }
+            return true
+        case "l":
+            guard !isEditingOverlayTextField else { return false }
+            if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.taskToggle) }
             return true
         default:
             return false

@@ -39,6 +39,8 @@ let package = Package(
             resources: [
                 // OpenDyslexic (SIL OFL 1.1, unmodified upstream files, SHA-256 pinned in OpenDyslexicBundle).
                 .copy("Resources/Fonts"),
+                // In-app Help: a copy of the repository README (kept identical by HelpDocumentationTests).
+                .copy("Resources/Help"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
