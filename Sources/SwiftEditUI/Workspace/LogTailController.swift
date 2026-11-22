@@ -27,9 +27,14 @@ final class LogTailWorker: @unchecked Sendable {
         self.deliver = deliver
     }
 
+    deinit {
+        timer?.cancel()
+        vnode?.cancel()
+    }
+
     func start() {
-        queue.async { [self] in
-            guard !running else { return }
+        queue.async { [weak self] in
+            guard let self, !running else { return }
             running = true
             pollLocked(force: true)
             let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -126,10 +131,12 @@ public final class LogTailController {
     public func start() {
         guard !isRunning else { return }
         isRunning = true
+        sessionToken &+= 1
+        let activeToken = sessionToken
         lastSequence = 0
         errorMessage = nil
         let worker = LogTailWorker(url: url, reader: reader) { [weak self] result, sequence in
-            Task { @MainActor in self?.receive(result, sequence: sequence) }
+            Task { @MainActor in self?.receive(result, sequence: sequence, sessionToken: activeToken) }
         }
         self.worker = worker
         worker.start()
@@ -137,6 +144,7 @@ public final class LogTailController {
 
     /// Stops listening; the last snapshot stays visible until the panel is closed.
     public func stop() {
+        sessionToken &+= 1
         worker?.stop()
         worker = nil
         isRunning = false
@@ -162,9 +170,11 @@ public final class LogTailController {
     }
 
     @ObservationIgnored private var lastSequence: UInt64 = 0
+    @ObservationIgnored private var sessionToken: UInt64 = 0
 
-    /// Applies a worker delivery unless a newer one was already applied (main-actor `Task`s are not strictly FIFO).
-    func receive(_ result: Result<LogTailBuffer, Error>, sequence: UInt64) {
+    /// Applies a worker delivery unless it belongs to a superseded session or a newer sequence was already applied.
+    func receive(_ result: Result<LogTailBuffer, Error>, sequence: UInt64, sessionToken: UInt64? = nil) {
+        if let sessionToken, sessionToken != self.sessionToken { return }
         guard sequence > lastSequence else { return }
         lastSequence = sequence
         apply(result)
@@ -183,9 +193,10 @@ public final class LogTailController {
     }
 
     private func reproject() {
-        let lines = buffer.projected(count: lineCount, mode: mode)
-        text = lines.joined(separator: "\n")
-        visibleLineCount = lines.count
+        let projected = buffer.textAndCount(count: lineCount, mode: mode)
+        guard projected.text != text || projected.lineCount != visibleLineCount else { return }
+        text = projected.text
+        visibleLineCount = projected.lineCount
         generation &+= 1
     }
 }

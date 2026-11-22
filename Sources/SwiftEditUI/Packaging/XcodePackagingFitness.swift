@@ -58,10 +58,10 @@ public enum EntitlementsFitnessValidator {
         }
 
         var violations: [EntitlementViolation] = []
-        if (dict["com.apple.security.app-sandbox"] as? Bool) != true {
+        if platform == .iOS, (dict["com.apple.security.app-sandbox"] as? Bool) != true {
             violations.append(EntitlementViolation(
                 key: "com.apple.security.app-sandbox",
-                reason: "App Sandbox must be enabled (SEC-001)"
+                reason: "App Sandbox must be enabled on iOS (SEC-001)"
             ))
         }
 

@@ -105,7 +105,11 @@ struct AllKeyboardShortcutsDispatchTests {
         // WHEN dispatching Cmd+N, Cmd+W, Cmd+D, Cmd+S, Cmd+Shift+S, Cmd+Shift+O, Cmd+Shift+Option+O
         let cmdN = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "n", modifiers: [.command]), model: model)
         let countAfterN = model.tabSession.tabs.count
-        let cmdW = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "w", modifiers: [.command]), model: model)
+        let cmdWWrapOff = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "w", modifiers: [.command]), model: model)
+        #expect(cmdWWrapOff && !model.isWordWrapEnabled)
+        let cmdWWrapOn = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "w", modifiers: [.command]), model: model)
+        #expect(cmdWWrapOn && model.isWordWrapEnabled)
+        let cmdW = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "W", charactersIgnoringModifiers: "w", modifiers: [.command, .shift]), model: model)
         let dirtyPromptTriggered = (model.pendingDirtyCloseTabID != nil)
         model.resolvePendingDirtyClose(.dontSave)
         let countAfterW = model.tabSession.tabs.count

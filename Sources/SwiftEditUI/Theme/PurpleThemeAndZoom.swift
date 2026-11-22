@@ -284,8 +284,14 @@ public struct PurpleThemePalette: Equatable, Sendable {
     public let badgeSurface: RGBAColorToken
     /// `1pt` chrome separator token (`#C4B5FD` / `#3B1D6E`, stepped up to `#7C3AED` / `#A78BFA` `>= 3.0:1` under `reduceTransparency` or `increasedContrast`).
     public let hairlineBorder: RGBAColorToken
-    /// Active text-selection background inside `TextKit2EditorView` (`#DDD6FE` Light, `#3B0764` Black).
+    /// High-contrast active text-selection background inside `TextKit2EditorView` (`#6D28D9` Light, `#A78BFA` Black).
     public let selectionBackground: RGBAColorToken
+    /// High-contrast foreground text paired with `selectionBackground` (`#FFFFFF` Light 8.9:1, `#000000` Black 7.1:1, WCAG AAA).
+    public let selectionForeground: RGBAColorToken
+    /// Soft secondary highlight background for other whole-word occurrences of the selected word (`#EDE9FE` Light, `#23173D` Black).
+    public let wordOccurrenceBackground: RGBAColorToken
+    /// Subtle underline cue paired with `wordOccurrenceBackground` so matches never rely on color alone (WCAG 1.4.1).
+    public let wordOccurrenceUnderline: RGBAColorToken
     /// Inserted-line background in Side-by-Side Myers Diff (`#DCFCE7` Light, `#052E16` Black).
     public let diffInsertedBackground: RGBAColorToken
     /// Removed-line background in Side-by-Side Myers Diff (`#FEE2E2` Light, `#450A0A` Black).
@@ -383,9 +389,9 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 inertHTMLWarningForeground: RGBAColorToken(hex: "#7F1D1D"),
                 inertHTMLWarningBackground: RGBAColorToken(hex: "#FEE2E2"),
                 inertHTMLWarningBorder: RGBAColorToken(hex: "#DC2626"),
-                backtickInlineBackground: RGBAColorToken(hex: "#EDE9FE"),
-                backtickMultilineBackground: RGBAColorToken(hex: "#F5F3FF"),
-                backtickForeground: RGBAColorToken(hex: "#6D28D9"),
+                backtickInlineBackground: RGBAColorToken(hex: "#F7F0D4"),
+                backtickMultilineBackground: RGBAColorToken(hex: "#FBF6E2"),
+                backtickForeground: RGBAColorToken(hex: "#3F2E00"),
                 sidebarBinaryDisabledText: RGBAColorToken(hex: "#52525B"),
                 topBarSurface: RGBAColorToken(hex: "#F3E8FF"),
                 sheetSurface: RGBAColorToken(hex: "#F3E8FF"),
@@ -406,7 +412,10 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 activeControlForeground: RGBAColorToken(hex: "#FFFFFF"),
                 badgeSurface: RGBAColorToken(hex: "#E9D5FF"),
                 hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#7C3AED" : "#C4B5FD"),
-                selectionBackground: RGBAColorToken(hex: "#DDD6FE"),
+                selectionBackground: RGBAColorToken(hex: "#6D28D9"),
+                selectionForeground: RGBAColorToken(hex: "#FFFFFF"),
+                wordOccurrenceBackground: RGBAColorToken(hex: "#DDD6FE"),
+                wordOccurrenceUnderline: RGBAColorToken(hex: "#7C3AED", alpha: clampOpaque ? 1.0 : 0.75),
                 diffInsertedBackground: RGBAColorToken(hex: "#DCFCE7"),
                 diffRemovedBackground: RGBAColorToken(hex: "#FEE2E2"),
                 yamlKeyForeground: RGBAColorToken(hex: "#6B7280"),
@@ -452,9 +461,9 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 inertHTMLWarningForeground: RGBAColorToken(hex: "#FECACA"),
                 inertHTMLWarningBackground: RGBAColorToken(hex: "#450A0A"),
                 inertHTMLWarningBorder: RGBAColorToken(hex: "#EF4444"),
-                backtickInlineBackground: RGBAColorToken(hex: "#1F1733"),
-                backtickMultilineBackground: RGBAColorToken(hex: "#140F24"),
-                backtickForeground: RGBAColorToken(hex: "#DDD6FE"),
+                backtickInlineBackground: RGBAColorToken(hex: "#2B2412"),
+                backtickMultilineBackground: RGBAColorToken(hex: "#1F1A0D"),
+                backtickForeground: RGBAColorToken(hex: "#F6E5A8"),
                 sidebarBinaryDisabledText: RGBAColorToken(hex: "#9CA3AF"),
                 topBarSurface: darkGround,
                 sheetSurface: darkGround,
@@ -475,7 +484,10 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 activeControlForeground: RGBAColorToken(hex: "#FFFFFF"),
                 badgeSurface: RGBAColorToken(hex: "#2E1065"),
                 hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#A78BFA" : "#3B1D6E"),
-                selectionBackground: RGBAColorToken(hex: "#3B0764"),
+                selectionBackground: RGBAColorToken(hex: "#A78BFA"),
+                selectionForeground: RGBAColorToken(hex: "#000000"),
+                wordOccurrenceBackground: RGBAColorToken(hex: "#3B1D6E"),
+                wordOccurrenceUnderline: RGBAColorToken(hex: "#C4B5FD", alpha: clampOpaque ? 1.0 : 0.75),
                 diffInsertedBackground: RGBAColorToken(hex: "#052E16"),
                 diffRemovedBackground: RGBAColorToken(hex: "#450A0A"),
                 yamlKeyForeground: RGBAColorToken(hex: "#9CA3AF"),

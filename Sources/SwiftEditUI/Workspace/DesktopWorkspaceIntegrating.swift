@@ -306,7 +306,7 @@ public struct TerminalPanelSession: Identifiable, Equatable, Sendable {
 
     public let id: UUID
     public let title: String
-    public let directory: URL
+    public var directory: URL
     public var state: State
     /// Bundle identifier of the launched terminal (used to detect when that app quits or crashes).
     public var bundleIdentifier: String?

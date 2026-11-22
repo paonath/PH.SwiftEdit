@@ -137,7 +137,7 @@ public enum SwiftEditShortcutDispatcher {
             if model.safetyBanner.canSave { model.saveActiveDocument() }
             return true
         case "w":
-            model.requestCloseActiveTab()
+            model.toggleWordWrap()
             return true
         case "f":
             model.presentFindBar(mode: .find)
@@ -216,6 +216,9 @@ public enum SwiftEditShortcutDispatcher {
             return true
         }
         switch charsIgnored {
+        case "w":
+            model.requestCloseActiveTab()
+            return true
         case "o":
             model.openFolderViaPanel()
             return true

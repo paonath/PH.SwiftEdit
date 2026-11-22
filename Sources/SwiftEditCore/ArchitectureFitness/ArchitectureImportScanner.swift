@@ -29,6 +29,7 @@ public enum ArchitectureImportScanner {
     private static let allowlistedPackageIdentities: Set<String> = [
         "swift-markdown",
         "swift-cmark",
+        "swiftterm",
     ]
 
     /// Scans a single Swift source text and reports any forbidden framework imports inside `SwiftEditCore`.
@@ -276,6 +277,31 @@ public enum PackageManifestDumpValidator {
     private struct DumpTargetDependency: Decodable, Sendable {
         let byName: [String?]?
         let product: [String?]?
+
+        private enum CodingKeys: String, CodingKey { case byName, product }
+
+        private enum LossyString: Decodable {
+            case string(String)
+            case other
+            init(from decoder: Decoder) throws {
+                if let container = try? decoder.singleValueContainer(),
+                   let str = try? container.decode(String.self) {
+                    self = .string(str)
+                } else {
+                    self = .other
+                }
+            }
+            var value: String? {
+                if case .string(let s) = self { return s }
+                return nil
+            }
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.byName = try container.decodeIfPresent([LossyString].self, forKey: .byName)?.map(\.value)
+            self.product = try container.decodeIfPresent([LossyString].self, forKey: .product)?.map(\.value)
+        }
     }
 
     /// Decodes `swift package dump-package` JSON `Data` and validates deployment platforms, external packages, and `SwiftEditCore` target dependencies.

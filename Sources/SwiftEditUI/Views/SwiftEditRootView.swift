@@ -13,19 +13,40 @@ public struct EditorHighlightProjection: Equatable, Sendable {
     public let activeBracketPair: BracketPairSpan?
     public let unbalancedBrackets: [UnbalancedBracket]
     public let backtickSpans: [BacktickHighlightSpan]
+    public let wordOccurrenceRanges: [SwiftEditCore.TextRange]
 
     public init(
         activeLineRange: SwiftEditCore.TextRange = SwiftEditCore.TextRange(location: 0, length: 0),
         bracketPairs: [BracketPairSpan] = [],
         activeBracketPair: BracketPairSpan? = nil,
         unbalancedBrackets: [UnbalancedBracket] = [],
-        backtickSpans: [BacktickHighlightSpan] = []
+        backtickSpans: [BacktickHighlightSpan] = [],
+        wordOccurrenceRanges: [SwiftEditCore.TextRange] = []
     ) {
         self.activeLineRange = activeLineRange
         self.bracketPairs = bracketPairs
         self.activeBracketPair = activeBracketPair
         self.unbalancedBrackets = unbalancedBrackets
         self.backtickSpans = backtickSpans
+        self.wordOccurrenceRanges = wordOccurrenceRanges
+    }
+
+    /// `O(log L)` variant reusing a per-revision `DocumentTextIndex` (zero `NSString` bridging per caret move).
+    public static func evaluate(
+        index: DocumentTextIndex,
+        caretLocation: Int,
+        bracketResult: BracketBalanceResult?,
+        backtickResult: BacktickHighlightResult?,
+        wordOccurrenceRanges: [SwiftEditCore.TextRange] = []
+    ) -> EditorHighlightProjection {
+        EditorHighlightProjection(
+            activeLineRange: index.lineContentRange(atUTF16Offset: caretLocation),
+            bracketPairs: bracketResult?.matchedPairs ?? [],
+            activeBracketPair: bracketResult?.activePair,
+            unbalancedBrackets: bracketResult?.unbalancedBrackets ?? [],
+            backtickSpans: backtickResult?.spans ?? [],
+            wordOccurrenceRanges: wordOccurrenceRanges
+        )
     }
 
     /// Computes a deterministic highlight projection without mutating `session`, incrementing `BufferRevision`, or copying the full UTF-16 buffer (`PERF-007`).
@@ -33,7 +54,8 @@ public struct EditorHighlightProjection: Equatable, Sendable {
         text: String,
         caretLocation: Int,
         bracketResult: BracketBalanceResult?,
-        backtickResult: BacktickHighlightResult?
+        backtickResult: BacktickHighlightResult?,
+        wordOccurrenceRanges: [SwiftEditCore.TextRange] = []
     ) -> EditorHighlightProjection {
         let nsString = text as NSString
         let clampedCaret = min(max(0, caretLocation), nsString.length)
@@ -51,7 +73,8 @@ public struct EditorHighlightProjection: Equatable, Sendable {
             bracketPairs: bracketResult?.matchedPairs ?? [],
             activeBracketPair: bracketResult?.activePair,
             unbalancedBrackets: bracketResult?.unbalancedBrackets ?? [],
-            backtickSpans: backtickResult?.spans ?? []
+            backtickSpans: backtickResult?.spans ?? [],
+            wordOccurrenceRanges: wordOccurrenceRanges
         )
     }
 }
@@ -141,12 +164,47 @@ public final class SwiftEditWorkbenchModel {
 
     /// Non-mutating highlight projection for the active document canvas (`UI-002`, `UI-005`, `UI-006`).
     public var activeHighlightProjection: EditorHighlightProjection {
-        EditorHighlightProjection.evaluate(
-            text: activeDocumentSession?.text ?? "",
+        let occurrences = cachedWordOccurrencesForActiveSelection()
+        if let session = activeDocumentSession {
+            let idx = textIndexCache.index(for: session.snapshot)
+            return EditorHighlightProjection.evaluate(
+                index: idx,
+                caretLocation: currentSelection.location,
+                bracketResult: bracketResult,
+                backtickResult: backtickResult,
+                wordOccurrenceRanges: occurrences
+            )
+        }
+        return EditorHighlightProjection.evaluate(
+            text: "",
             caretLocation: currentSelection.location,
             bracketResult: bracketResult,
-            backtickResult: backtickResult
+            backtickResult: backtickResult,
+            wordOccurrenceRanges: occurrences
         )
+    }
+
+    @ObservationIgnored private var wordOccurrenceCache: (
+        id: DocumentID,
+        revision: BufferRevision,
+        selection: SwiftEditCore.TextRange,
+        ranges: [SwiftEditCore.TextRange]
+    )?
+
+    private func cachedWordOccurrencesForActiveSelection() -> [SwiftEditCore.TextRange] {
+        guard currentSelection.length >= WordOccurrenceScanner.minWordUTF16Length,
+              let session = activeDocumentSession else {
+            return []
+        }
+        if let cache = wordOccurrenceCache,
+           cache.id == session.id,
+           cache.revision == session.revision,
+           cache.selection == currentSelection {
+            return cache.ranges
+        }
+        let ranges = WordOccurrenceScanner.scan(selection: currentSelection, in: session.snapshot)
+        wordOccurrenceCache = (session.id, session.revision, currentSelection, ranges)
+        return ranges
     }
 
     /// Synchronizes live macOS system dark/light appearance and refreshes `palette` dynamically when in `.auto` mode without reloading buffers (`UI-003`).
@@ -338,14 +396,80 @@ public final class SwiftEditWorkbenchModel {
         savePreferences()
     }
 
-    /// Persists appearance, zoom, font choices, and preferred terminal together so no setting overwrites another.
+    /// Whether soft line wrapping is active in the editor (`Cmd+W`). Persisted in `~/.SwiftEdit/settings.json`.
+    public var isWordWrapEnabled: Bool = true
+    /// Whether SwiftEdit opens in macOS Full Screen on launch by default. Persisted in `~/.SwiftEdit/settings.json`.
+    public var launchInFullScreen: Bool = true
+    @ObservationIgnored private var didApplyInitialFullScreen = false
+
+    /// `Cmd+W`: toggles soft line wrap / horizontal unwrap in the editor and persists the choice.
+    public func toggleWordWrap() {
+        isWordWrapEnabled.toggle()
+        statusBannerMessage = isWordWrapEnabled ? "Word Wrap: ON" : "Word Wrap: OFF"
+        savePreferences()
+    }
+
+    /// Updates whether SwiftEdit launches in full screen by default and persists the choice.
+    public func setLaunchInFullScreen(_ enabled: Bool) {
+        guard launchInFullScreen != enabled else { return }
+        launchInFullScreen = enabled
+        savePreferences()
+    }
+
+    /// Triggers initial macOS Full Screen once when the primary window attaches (skipped in headless tests).
+    func applyInitialFullScreenIfNeeded(for window: NSWindow) {
+        guard !didApplyInitialFullScreen else { return }
+        didApplyInitialFullScreen = true
+        guard launchInFullScreen,
+              ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
+              !window.styleMask.contains(.fullScreen) else { return }
+        DispatchQueue.main.async { [weak window] in
+            guard let window, !window.styleMask.contains(.fullScreen) else { return }
+            window.toggleFullScreen(nil)
+        }
+    }
+
+    /// Opens a dropped or externally handed-off folder in the left Folder Navigator and expands the sidebar.
+    public func openDroppedFolder(_ folderURL: URL) {
+        let standardized = folderURL.standardizedFileURL
+        isLeftSidebarCollapsed = false
+        selectWorkspaceFolder(standardized)
+        statusBannerMessage = "Opened folder \(standardized.lastPathComponent)."
+    }
+
+    /// Handles files and/or folders dragged onto the window or the macOS Dock/Finder icon:
+    /// directories open first in the left Folder Navigator (establishing workspace scope), then files open in editor tabs.
+    public func openDroppedURLs(_ urls: [URL]) {
+        var directories: [URL] = []
+        var files: [URL] = []
+        for rawURL in urls where rawURL.isFileURL {
+            let standardized = rawURL.standardizedFileURL
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: standardized.path, isDirectory: &isDir), isDir.boolValue {
+                directories.append(standardized)
+            } else {
+                files.append(standardized)
+            }
+        }
+        for folder in directories {
+            openDroppedFolder(folder)
+        }
+        for file in files {
+            openFile(at: file, withinScope: file.deletingLastPathComponent())
+        }
+    }
+
+    /// Persists appearance, zoom, font choices, word wrap, full-screen default, terminal height, and preferred terminal together so no setting overwrites another.
     private func savePreferences() {
         preferencesStore.save(EditorPreferences(
             appearanceMode: appearanceMode,
             zoomPercent: zoomController.zoomPercent,
             interfaceFont: interfaceFont,
             editorFont: editorFont,
-            preferredTerminalBundleID: preferredTerminalBundleID
+            preferredTerminalBundleID: preferredTerminalBundleID,
+            isWordWrapEnabled: isWordWrapEnabled,
+            launchInFullScreen: launchInFullScreen,
+            terminalPanelHeight: Int(terminalPanelHeight.rounded())
         ))
     }
     public var zoomController: EditorZoomController {
@@ -477,8 +601,14 @@ public final class SwiftEditWorkbenchModel {
         self.savePanelProvider = savePanelProvider
         self.openPanelProvider = openPanelProvider
         self.clipboardWriter = clipboardWriter
-        let resolvedPrefsStore: any PreferencesProviding = preferencesStore
-            ?? UserDefaultsPreferencesStore(suiteName: preferencesSuiteName)
+        let resolvedPrefsStore: any PreferencesProviding
+        if let preferencesStore {
+            resolvedPrefsStore = preferencesStore
+        } else if let preferencesSuiteName {
+            resolvedPrefsStore = UserDefaultsPreferencesStore(suiteName: preferencesSuiteName)
+        } else {
+            resolvedPrefsStore = EditorPreferencesStore.defaultHomeJSONStore()
+        }
         self.preferencesStore = EditorPreferencesStore(store: resolvedPrefsStore)
         let prefs = self.preferencesStore.load()
         let initialSystemDark = systemDarkDetector()
@@ -493,6 +623,9 @@ public final class SwiftEditWorkbenchModel {
         self.interfaceFont = prefs.interfaceFont
         self.editorFont = prefs.editorFont
         self.preferredTerminalBundleID = prefs.preferredTerminalBundleID
+        self.isWordWrapEnabled = prefs.isWordWrapEnabled
+        self.launchInFullScreen = prefs.launchInFullScreen
+        self.terminalPanelHeight = CGFloat(prefs.terminalPanelHeight)
 
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
@@ -541,6 +674,7 @@ public final class SwiftEditWorkbenchModel {
 
     isolated deinit {
         if let observer = terminalTerminationObserver { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        embeddedTerminalRegistry.terminateAll()
         for tail in logTails.values { tail.stop() }
         diagnosticsTask?.cancel()
         updateCheckTask?.cancel()
@@ -991,7 +1125,12 @@ public final class SwiftEditWorkbenchModel {
     }
 
     public func performCommandD() {
+        guard activeLogTail == nil else {
+            statusBannerMessage = "Duplicate blocked while live log tail is active."
+            return
+        }
         guard let activeID = tabSession.activeTabID,
+              !logTailOnlyTabIDs.contains(activeID),
               var session = sessionsByID[activeID] else { return }
         guard !session.isBinaryReadOnly, safetyBanner.canSave else {
             statusBannerMessage = "Duplicate blocked: binary read-only file."
@@ -1011,7 +1150,12 @@ public final class SwiftEditWorkbenchModel {
     }
 
     public func formatActiveDocument() {
+        guard activeLogTail == nil else {
+            statusBannerMessage = "Format blocked while live log tail is active."
+            return
+        }
         guard let activeID = tabSession.activeTabID,
+              !logTailOnlyTabIDs.contains(activeID),
               var session = sessionsByID[activeID] else { return }
         guard !session.isBinaryReadOnly, safetyBanner.canFormat else {
             statusBannerMessage = "Format blocked: binary read-only file."
@@ -1057,9 +1201,14 @@ public final class SwiftEditWorkbenchModel {
         saveDocument(to: targetURL)
     }
 
-    /// Prompts for a destination via the injected save-panel seam and saves the active document there; rejected fail-closed on binary read-only buffers before any panel is shown (`DATA-003`, `UI-008`).
+    /// Prompts for a destination via the injected save-panel seam and saves the active document there; rejected fail-closed on binary read-only and tail-only buffers before any panel is shown (`DATA-003`, `UI-008`).
     public func saveActiveDocumentAsViaPanel() {
-        guard let session = activeDocumentSession else { return }
+        guard let activeID = tabSession.activeTabID,
+              let session = activeDocumentSession else { return }
+        guard !logTailOnlyTabIDs.contains(activeID) else {
+            statusBannerMessage = "Save As blocked: this log is too large to edit and is shown as a live tail only."
+            return
+        }
         guard !session.isBinaryReadOnly, safetyBanner.canSave else {
             statusBannerMessage = "Save As blocked: binary read-only file."
             return
@@ -1071,6 +1220,10 @@ public final class SwiftEditWorkbenchModel {
     public func saveDocument(to targetURL: URL) {
         guard let activeID = tabSession.activeTabID,
               let session = sessionsByID[activeID] else { return }
+        guard !logTailOnlyTabIDs.contains(activeID) else {
+            statusBannerMessage = "Save blocked: this log is too large to edit and is shown as a live tail only."
+            return
+        }
         guard !session.isBinaryReadOnly else {
             statusBannerMessage = "Save blocked: binary read-only file."
             return
@@ -1291,7 +1444,9 @@ public final class SwiftEditWorkbenchModel {
 
     /// Replaces the currently selected match in one `BufferRevision` step and re-runs `Find` to highlight the next occurrence (`BUG-009`).
     public func executeReplaceSingle() {
-        guard let activeID = tabSession.activeTabID,
+        guard activeLogTail == nil,
+              let activeID = tabSession.activeTabID,
+              !logTailOnlyTabIDs.contains(activeID),
               var session = sessionsByID[activeID],
               !session.isBinaryReadOnly,
               !findReplaceState.query.isEmpty,
@@ -1321,7 +1476,9 @@ public final class SwiftEditWorkbenchModel {
 
     /// Replaces all literal matches of `findReplaceState.query` with `findReplaceState.replacement` in one atomic revision (`BC-004`).
     public func executeReplaceAll() {
-        guard let activeID = tabSession.activeTabID,
+        guard activeLogTail == nil,
+              let activeID = tabSession.activeTabID,
+              !logTailOnlyTabIDs.contains(activeID),
               var session = sessionsByID[activeID] else { return }
         let snap = session.snapshot
         let options = SearchOptions(isCaseSensitive: findReplaceState.isCaseSensitive)
@@ -1363,7 +1520,9 @@ public final class SwiftEditWorkbenchModel {
 
     /// Updates the active document's wire `LineEnding` (`LF`, `CRLF`, `CR`) and marks the tab dirty (`DATA-004`).
     public func setActiveDocumentLineEnding(_ lineEnding: LineEnding) {
-        guard let activeID = tabSession.activeTabID,
+        guard activeLogTail == nil,
+              let activeID = tabSession.activeTabID,
+              !logTailOnlyTabIDs.contains(activeID),
               var session = sessionsByID[activeID] else { return }
         do {
             try session.setLineEnding(lineEnding)
@@ -1670,23 +1829,46 @@ public final class SwiftEditWorkbenchModel {
         return false
     }
 
-    // MARK: Terminal panel (Cmd+J)
+    // MARK: Terminal panel (Cmd+J — Embedded SwiftTerm PTY Emulator)
 
-    /// Terminal sessions of the bottom panel; each launches the preferred external terminal (`SEC-004`: no shell runs inside SwiftEdit).
+    /// Embedded terminal sessions of the bottom panel; each owns an in-app `SwiftTerm.LocalProcessTerminalView` PTY
+    /// that terminates cleanly when its tab, the panel, or SwiftEdit closes (never leaving orphan terminals open).
     public private(set) var terminalSessions: [TerminalPanelSession] = []
     public private(set) var isTerminalPanelVisible = false
     public var selectedTerminalSessionID: UUID?
+    /// User-resizable height of the bottom embedded terminal panel (clamped `120...720 pt`).
+    public var terminalPanelHeight: CGFloat = 240
+    public static let minTerminalPanelHeight: CGFloat = 120
+    public static let maxTerminalPanelHeight: CGFloat = 720
+
+    public func setTerminalPanelHeight(_ height: CGFloat, maxAvailableHeight: CGFloat? = nil, persist: Bool = true) {
+        let upperBound: CGFloat
+        if let maxAvailableHeight, maxAvailableHeight.isFinite, maxAvailableHeight > Self.minTerminalPanelHeight {
+            upperBound = min(Self.maxTerminalPanelHeight, max(Self.minTerminalPanelHeight, maxAvailableHeight))
+        } else {
+            upperBound = Self.maxTerminalPanelHeight
+        }
+        let clamped = min(max(Self.minTerminalPanelHeight, height), upperBound)
+        if abs(clamped - terminalPanelHeight) > 0.25 {
+            terminalPanelHeight = clamped
+            if persist { savePreferences() }
+        } else if persist {
+            savePreferences()
+        }
+    }
+    @ObservationIgnored public let embeddedTerminalRegistry = EmbeddedTerminalRegistry()
     @ObservationIgnored private var terminalSessionCounter = 0
-    /// Real user home (in the App Sandbox `homeDirectoryForCurrentUser` is the container).
+    /// Real user home directory.
     @ObservationIgnored public var userHomeDirectoryProvider: () -> URL = {
         if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir { return URL(fileURLWithPath: String(cString: dir), isDirectory: true) }
         return FileManager.default.homeDirectoryForCurrentUser
     }
 
-    /// `Cmd+J`: opening shows the panel and starts a terminal session; closing hides it and ends every session.
+    /// `Cmd+J`: opening shows the embedded terminal panel and starts a shell session; closing hides it and terminates every child shell cleanly.
     public func toggleTerminalPanel() {
         if isTerminalPanelVisible {
             isTerminalPanelVisible = false
+            embeddedTerminalRegistry.terminateAll()
             terminalSessions.removeAll()
             selectedTerminalSessionID = nil
             requestEditorFocus()
@@ -1696,73 +1878,79 @@ public final class SwiftEditWorkbenchModel {
         }
     }
 
-    /// Adds a session launching the preferred terminal in the current folder (home when no folder is open).
-    /// Launch failures are recorded on the session (never thrown), so a broken terminal can never take the app down.
+    /// Adds an embedded terminal session running the user's interactive shell in the current folder (or home when no folder is open).
     @discardableResult
     public func openTerminalSession() -> TerminalPanelSession {
         terminalSessionCounter += 1
         let directory = (selectedFolderURL ?? userHomeDirectoryProvider()).standardizedFileURL
-        let scope = selectedFolderURL == nil ? nil : (grantedScopeRootURL ?? selectedFolderURL)
+        let shellPath = EmbeddedTerminalRegistry.defaultShellPath()
+        let shellName = URL(fileURLWithPath: shellPath).lastPathComponent
         var session = TerminalPanelSession(title: "Terminal \(terminalSessionCounter)", directory: directory)
-        launch(&session, withinScope: scope)
+        session.state = .running(appName: shellName, since: Date())
         terminalSessions.append(session)
         selectedTerminalSessionID = session.id
         isTerminalPanelVisible = true
         return session
     }
 
-    /// Re-launches (brings to front) the terminal of `id` in its folder.
+    /// Restarts the embedded PTY shell for `id` in its working directory.
     public func relaunchTerminalSession(id: UUID) {
         guard let index = terminalSessions.firstIndex(where: { $0.id == id }) else { return }
-        let scope = selectedFolderURL == nil ? nil : (grantedScopeRootURL ?? selectedFolderURL)
-        launch(&terminalSessions[index], withinScope: scope)
+        let shellName = URL(fileURLWithPath: EmbeddedTerminalRegistry.defaultShellPath()).lastPathComponent
+        terminalSessions[index].state = .running(appName: shellName, since: Date())
+        embeddedTerminalRegistry.restart(sessionID: id, directory: terminalSessions[index].directory)
+    }
+
+    /// Updates a session's state when its embedded PTY child shell exits (`exit`, `Ctrl+D`, or signal).
+    public func embeddedTerminalDidTerminate(id: UUID, exitCode: Int32?) {
+        guard let index = terminalSessions.firstIndex(where: { $0.id == id }) else { return }
+        if exitCode == 0 {
+            // Normal shell exit (`exit` / `Ctrl+D`): close the tab cleanly so no dead terminal remains.
+            closeTerminalSession(id: id)
+        } else {
+            let detail = exitCode.map { "exited with code \($0)" } ?? "terminated"
+            terminalSessions[index].state = .failed(message: "Shell \(detail). Click Restart to open a new shell.")
+        }
+    }
+
+    /// Records a launch failure from `LocalProcessTerminalViewDelegate` without crashing the editor.
+    public func embeddedTerminalDidFail(id: UUID, message: String) {
+        guard let index = terminalSessions.firstIndex(where: { $0.id == id }) else { return }
+        terminalSessions[index].state = .failed(message: "Terminal could not start: \(message)")
+    }
+
+    /// Updates the working directory tracked for an embedded terminal session when the shell emits OSC 7.
+    public func embeddedTerminalDidUpdateDirectory(id: UUID, directory: String?) {
+        guard let directory, !directory.isEmpty,
+              let index = terminalSessions.firstIndex(where: { $0.id == id }) else { return }
+        let url: URL?
+        if directory.hasPrefix("file://") {
+            url = URL(string: directory)
+        } else {
+            url = URL(fileURLWithPath: directory, isDirectory: true)
+        }
+        if let url {
+            terminalSessions[index].directory = url.standardizedFileURL
+        }
     }
 
     @ObservationIgnored private var terminalTerminationObserver: (any NSObjectProtocol)?
 
-    /// Marks sessions whose terminal app quit (or crashed) as failed with a readable message; SwiftEdit keeps running.
-    private func observeTerminalTerminationIfNeeded() {
-        guard terminalTerminationObserver == nil else { return }
-        terminalTerminationObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] note in
-            let bundleID = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
-            MainActor.assumeIsolated { self?.terminalApplicationDidTerminate(bundleIdentifier: bundleID) }
-        }
-    }
-
-    /// Records that the external terminal with `bundleIdentifier` is gone (normal quit or crash).
+    /// Records that an external terminal with `bundleIdentifier` terminated (kept for sidebar external handoff compatibility).
     func terminalApplicationDidTerminate(bundleIdentifier: String?) {
         guard let bundleIdentifier else { return }
         for index in terminalSessions.indices where terminalSessions[index].bundleIdentifier == bundleIdentifier {
             if case .running(let name, _) = terminalSessions[index].state {
-                terminalSessions[index].state = .failed(message: "\(name) quit or crashed. Use Open Again to restart it.")
+                terminalSessions[index].state = .failed(message: "\(name) quit or crashed. Use Restart to reopen it.")
             }
         }
     }
 
     public func closeTerminalSession(id: UUID) {
+        embeddedTerminalRegistry.terminate(sessionID: id)
         terminalSessions.removeAll { $0.id == id }
         if selectedTerminalSessionID == id { selectedTerminalSessionID = terminalSessions.last?.id }
         if terminalSessions.isEmpty { isTerminalPanelVisible = false; requestEditorFocus() }
-    }
-
-    private func launch(_ session: inout TerminalPanelSession, withinScope scope: URL?) {
-        let explicitID: String?
-        if let selected = preferredTerminalBundleID, installedTerminalBundleIDsProvider().contains(selected) {
-            explicitID = selected
-        } else {
-            explicitID = nil
-        }
-        do {
-            let resolution = try desktopWorkspace.openInTerminal(targetURL: session.directory, withinScope: scope, explicitBundleIdentifier: explicitID)
-            let name = TerminalCatalog.knownTerminals.first { $0.bundleIdentifier == resolution.bundleIdentifier }?.displayName ?? resolution.bundleIdentifier
-            session.state = .running(appName: name, since: Date())
-            session.bundleIdentifier = resolution.bundleIdentifier
-            observeTerminalTerminationIfNeeded()
-        } catch {
-            session.state = .failed(message: "Terminal could not start: \(error)")
-        }
     }
 
     // MARK: Log function (live tail)
@@ -1819,9 +2007,13 @@ public final class SwiftEditWorkbenchModel {
             return
         }
         activeBinaryInspection = nil
+        showMarkdownPreview = false
+        previewCache = nil
+        isDiagnosticsPopoverPresented = false
         sessionsByID[session.id] = session
         savedBaselineByID[session.id] = session.snapshot
         logTailOnlyTabIDs.insert(session.id)
+        refreshDiagnosticsForActiveDocument()
         let mb = Double(byteCount) / 1_048_576
         statusBannerMessage = String(format: "Log too large to edit (%.0f MB): showing a live tail of the last lines.", mb)
         startLogTail(mode: .direct)
@@ -2466,6 +2658,27 @@ public final class SwiftEditWorkbenchModel {
         NSWorkspace.shared.open(verified)
     }
 
+    public private(set) var isInstallingUpdate = false
+    @ObservationIgnored public var updateInstaller = AppUpdateInstaller()
+
+    /// Downloads, verifies SHA-256, schedules atomic replacement (preserving quarantine-free status), and quits SwiftEdit to relaunch automatically.
+    public func installUpdateAndRelaunch(downloadURL: URL) {
+        guard !isInstallingUpdate else { return }
+        isInstallingUpdate = true
+        updateCheckTask?.cancel()
+        updateCheckTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.updateInstaller.stageAndScheduleInstall(downloadURL: downloadURL)
+                self.isInstallingUpdate = false
+                NSApp.terminate(nil)
+            } catch {
+                self.isInstallingUpdate = false
+                self.updateCheckOutcome = .error(message: "Automatic update failed: \(error)")
+            }
+        }
+    }
+
     private func reconcileSessionURLsAfterRename(from oldURL: URL, to newURL: URL) {
         for tab in tabSession.tabs {
             if let existing = sessionsByID[tab.id], existing.fileURL != tab.fileURL {
@@ -2575,12 +2788,17 @@ public struct SwiftEditRootView: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var model = SwiftEditWorkbenchModel()
     @State private var draggingTabID: DocumentID?
+    @State private var isExternalDropTargeted = false
     @State private var dragStartSidebarRatio: Double?
     @State private var presentedDirtyAlertTabID: DocumentID?
     @State private var gutterViewportMetrics: GutterViewportMetrics?
     @State private var keyDownMonitor: Any?
 
     public init() {}
+
+    init(initialModel: SwiftEditWorkbenchModel) {
+        self._model = State(initialValue: initialModel)
+    }
 
     private var layoutContent: some View {
         VStack(spacing: 0) {
@@ -2657,12 +2875,52 @@ public struct SwiftEditRootView: View {
 
     private var baseRootView: some View {
         layoutContent
-            .background(HostingWindowFinder { window in model.hostWindow = window })
+            .background(HostingWindowFinder { window in
+                model.hostWindow = window
+                if let window {
+                    model.applyInitialFullScreenIfNeeded(for: window)
+                }
+            })
             .background(model.palette.chromeSurface.swiftUIColor)
             .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
             .preferredColorScheme(model.preferredSwiftUIColorScheme)
             .frame(minWidth: 960, minHeight: 620)
+            .onDrop(of: [UTType.fileURL], isTargeted: $isExternalDropTargeted) { providers in
+                handleExternalFileDrop(providers: providers)
+            }
+            .overlay {
+                if isExternalDropTargeted {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(model.palette.chromeAccent.swiftUIColor, lineWidth: 2)
+                        .allowsHitTesting(false)
+                }
+            }
             .focusedSceneValue(\.workbenchModel, model)
+    }
+
+    private func handleExternalFileDrop(providers: [NSItemProvider]) -> Bool {
+        let matching = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !matching.isEmpty else { return false }
+        let activeModel = model
+        for provider in matching {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                let resolvedURL: URL?
+                if let data = item as? Data {
+                    resolvedURL = URL(dataRepresentation: data, relativeTo: nil)
+                } else if let url = item as? URL {
+                    resolvedURL = url
+                } else if let str = item as? String {
+                    resolvedURL = URL(string: str)
+                } else {
+                    resolvedURL = nil
+                }
+                guard let resolvedURL, resolvedURL.isFileURL else { return }
+                Task { @MainActor in
+                    activeModel.openDroppedURLs([resolvedURL])
+                }
+            }
+        }
+        return true
     }
 
     @ViewBuilder
@@ -2800,6 +3058,13 @@ public struct SwiftEditRootView: View {
         guard keyDownMonitor == nil else { return }
         let activeModel = model
         keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Fast path: plain typing, Shift, and Ctrl (e.g. Ctrl+C/D/L in terminal) have no Cmd/Opt shortcut;
+            // except Up/Down/Return/Escape when the Document Navigator overlay is open.
+            let cmdOrOpt = event.modifierFlags.intersection([.command, .option])
+            let isNavigatorControlKey = event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 125 || event.keyCode == 126 || event.keyCode == 53
+            if cmdOrOpt.isEmpty && !isNavigatorControlKey {
+                return event
+            }
             let consumed = MainActor.assumeIsolated { () -> Bool in
                 guard let eventWindow = event.window, eventWindow.attachedSheet == nil else {
                     return false
@@ -2807,6 +3072,27 @@ public struct SwiftEditRootView: View {
                 if let ownerWindow = activeModel.hostWindow {
                     guard eventWindow === ownerWindow else { return false }
                 } else if eventWindow.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" || eventWindow.isSheet {
+                    return false
+                }
+                if activeModel.navigatorState != nil, cmdOrOpt.isEmpty {
+                    switch event.keyCode {
+                    case 36, 76: // Return / Numpad Enter
+                        activeModel.confirmDocumentNavigator()
+                        return true
+                    case 125: // Down Arrow
+                        activeModel.navigatorState?.moveDown()
+                        return true
+                    case 126: // Up Arrow
+                        activeModel.navigatorState?.moveUp()
+                        return true
+                    case 53: // Escape
+                        activeModel.closeDocumentNavigator()
+                        return true
+                    default:
+                        break
+                    }
+                }
+                if cmdOrOpt.isEmpty {
                     return false
                 }
                 guard !activeModel.isCheatSheetPresented,
@@ -2819,6 +3105,16 @@ public struct SwiftEditRootView: View {
                     return false
                 }
                 let responder = eventWindow.firstResponder
+                // When the embedded SwiftTerm terminal is focused, only intercept Cmd+J (toggle terminal)
+                // and let all other terminal shortcuts (Option-as-Meta, Cmd+C/V/K, etc.) pass straight to SwiftTerm.
+                if responder is SwiftEditTerminalView {
+                    let mods = event.modifierFlags.intersection(ShortcutKeyEvent.relevantModifierMask)
+                    if mods == [.command], (event.charactersIgnoringModifiers ?? "").lowercased() == "j" {
+                        activeModel.toggleTerminalPanel()
+                        return true
+                    }
+                    return false
+                }
                 let isEditingOverlayTextField = (responder is NSTextView) && !(responder is SwiftEditNSTextView)
                 return SwiftEditShortcutDispatcher.dispatch(event: event, model: activeModel, isEditingOverlayTextField: isEditingOverlayTextField)
             }
@@ -3354,6 +3650,7 @@ public struct SwiftEditRootView: View {
                     bufferRevision: BufferRevision(tail.generation),
                     text: tail.text,
                     isEditable: false,
+                    isWordWrapEnabled: model.isWordWrapEnabled,
                     palette: model.palette,
                     fontSizePoints: model.zoomController.scaledFontSizePoints,
                     highlightProjection: EditorHighlightProjection(),
@@ -3387,6 +3684,7 @@ public struct SwiftEditRootView: View {
                         bufferRevision: session.revision,
                         text: session.text,
                         isEditable: !session.isBinaryReadOnly,
+                        isWordWrapEnabled: model.isWordWrapEnabled,
                         palette: model.palette,
                         fontSizePoints: model.zoomController.scaledFontSizePoints,
                         highlightProjection: model.activeHighlightProjection,

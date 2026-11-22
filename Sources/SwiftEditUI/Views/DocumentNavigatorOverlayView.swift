@@ -45,6 +45,7 @@ struct DocumentNavigatorOverlayView: View {
             .padding(14)
             .focused($queryFocused)
             .onSubmit { model.confirmDocumentNavigator() }
+            .onKeyPress(.return) { model.confirmDocumentNavigator(); return .handled }
             .onKeyPress(.downArrow) { model.navigatorState?.moveDown(); return .handled }
             .onKeyPress(.upArrow) { model.navigatorState?.moveUp(); return .handled }
             .onKeyPress(.escape) { model.closeDocumentNavigator(); return .handled }
@@ -66,6 +67,7 @@ struct DocumentNavigatorOverlayView: View {
                     }
                 }
             }
+            .focusable(false)
             .onChange(of: state.selectedIndex) { _, newValue in
                 if state.filtered.indices.contains(newValue) { proxy.scrollTo(state.filtered[newValue].id) }
             }
@@ -81,7 +83,16 @@ struct DocumentNavigatorOverlayView: View {
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(model.palette.strokeLavender.swiftUIColor))
             .shadow(radius: 24)
             .padding(.top, 90)
-            .onAppear { queryFocused = true }
+            .onAppear {
+                queryFocused = true
+                DispatchQueue.main.async {
+                    queryFocused = true
+                }
+            }
+            .onKeyPress(.return) { model.confirmDocumentNavigator(); return .handled }
+            .onKeyPress(.downArrow) { model.navigatorState?.moveDown(); return .handled }
+            .onKeyPress(.upArrow) { model.navigatorState?.moveUp(); return .handled }
+            .onKeyPress(.escape) { model.closeDocumentNavigator(); return .handled }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Document navigator")
     }

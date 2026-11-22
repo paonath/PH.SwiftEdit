@@ -23,6 +23,8 @@ public struct UpdateCheckSheetView: View {
 
             if model.isCheckingForUpdates {
                 checkingView
+            } else if model.isInstallingUpdate {
+                installingView
             } else {
                 outcomeBody
             }
@@ -40,6 +42,16 @@ public struct UpdateCheckSheetView: View {
             ProgressView()
                 .controlSize(.small)
             Text("Checking GitHub Releases for SwiftEdit…")
+                .appFont(.callout)
+                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+        }
+    }
+
+    private var installingView: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Downloading, verifying SHA-256, and preparing relaunch…")
                 .appFont(.callout)
                 .foregroundStyle(palette.secondaryForeground.swiftUIColor)
         }
@@ -92,11 +104,19 @@ public struct UpdateCheckSheetView: View {
                 .appFont(.caption, monospaced: true)
                 .foregroundStyle(palette.secondaryForeground.swiftUIColor)
             HStack(spacing: 10) {
-                Button("Download Update…") {
-                    model.openVerifiedUpdateURL(downloadURL ?? releaseURL)
+                if let downloadURL, downloadURL.pathExtension.lowercased() == "zip" {
+                    Button("Install & Relaunch") {
+                        model.installUpdateAndRelaunch(downloadURL: downloadURL)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(palette.activeControlFill.swiftUIColor)
+                } else {
+                    Button("Download Update…") {
+                        model.openVerifiedUpdateURL(downloadURL ?? releaseURL)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(palette.activeControlFill.swiftUIColor)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(palette.activeControlFill.swiftUIColor)
 
                 Button("Release Notes…") {
                     model.openVerifiedUpdateURL(releaseURL)

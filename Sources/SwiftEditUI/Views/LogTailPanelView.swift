@@ -59,6 +59,8 @@ struct LogTailPanelView: View {
         .background(palette.chromeSurface.swiftUIColor)
         .overlay(alignment: .bottom) { Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(height: 1) }
         .onAppear { lineText = String(tail.lineCount) }
+        .onChange(of: tail.tabID) { _, _ in lineText = String(tail.lineCount) }
+        .onChange(of: tail.lineCount) { _, newCount in lineText = String(newCount) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Log panel")
     }

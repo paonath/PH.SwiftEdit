@@ -152,6 +152,11 @@ public struct SwiftEditSettingsView: View {
         self.modelProvider = modelProvider
     }
 
+    init(initialSettings: SettingsViewModel) {
+        self._settings = State(initialValue: initialSettings)
+        self.modelProvider = { initialSettings.model }
+    }
+
     public var body: some View {
         Group {
             if let settings {

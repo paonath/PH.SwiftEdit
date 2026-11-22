@@ -154,6 +154,12 @@ public struct SwiftEditCommands: Commands {
             Button("Stop Log Tail") { model?.stopLogTail() }
                 .disabled(model?.activeLogTail?.isRunning != true)
             Divider()
+            Button(model?.isWordWrapEnabled == false ? "Enable Word Wrap" : "Disable Word Wrap") {
+                model?.toggleWordWrap()
+            }
+            .keyboardShortcut("w", modifiers: .command)
+            .disabled(model == nil)
+            Divider()
             Button("Toggle Terminal Panel") { model?.toggleTerminalPanel() }
                 .keyboardShortcut("j", modifiers: .command)
                 .disabled(model == nil)

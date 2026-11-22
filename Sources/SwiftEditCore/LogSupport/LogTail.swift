@@ -24,37 +24,129 @@ public struct LogTailBuffer: Sendable, Equatable {
     /// Appends `data`. When `startsMidLine` is `true` (a window that does not begin at a line start), the leading
     /// fragment up to the first newline is discarded.
     public mutating func ingest(_ data: Data, startsMidLine: Bool = false) {
-        var bytes = [UInt8](data)
-        if startsMidLine {
-            guard let nl = bytes.firstIndex(of: 0x0A) else { return }
-            bytes.removeSubrange(0...nl)
-            partial.removeAll()
+        guard !data.isEmpty else { return }
+        data.withUnsafeBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            let count = bytes.count
+            var cursor = 0
+            if startsMidLine {
+                var foundNL = -1
+                var i = 0
+                while i < count {
+                    if bytes[i] == 0x0A {
+                        foundNL = i
+                        break
+                    }
+                    i += 1
+                }
+                guard foundNL >= 0 else { return }
+                cursor = foundNL + 1
+                partial.removeAll(keepingCapacity: true)
+            }
+
+            // Collect newline positions in the remaining slice so that if a single chunk carries
+            // more than `maxLines` lines (e.g. initial 8 MiB tail window), we only decode the
+            // trailing `maxLines` lines instead of allocating and immediately discarding the rest.
+            var newlineOffsets: [Int] = []
+            newlineOffsets.reserveCapacity(min(Self.maxLines + 1, max(16, (count - cursor) / 64)))
+            var scan = cursor
+            while scan < count {
+                if bytes[scan] == 0x0A {
+                    newlineOffsets.append(scan)
+                }
+                scan += 1
+            }
+
+            if !newlineOffsets.isEmpty {
+                let firstNewlineIndex: Int
+                if newlineOffsets.count > Self.maxLines {
+                    firstNewlineIndex = newlineOffsets.count - Self.maxLines
+                    // Everything before `newlineOffsets[firstNewlineIndex - 1]` is dropped; partial is superseded.
+                    lines.removeAll(keepingCapacity: true)
+                    partial.removeAll(keepingCapacity: true)
+                    cursor = newlineOffsets[firstNewlineIndex - 1] + 1
+                } else {
+                    firstNewlineIndex = 0
+                }
+
+                let decodedCount = newlineOffsets.count - firstNewlineIndex
+                if lines.count + decodedCount > Self.maxLines {
+                    let drop = lines.count + decodedCount - Self.maxLines
+                    if drop >= lines.count {
+                        lines.removeAll(keepingCapacity: true)
+                    } else {
+                        lines.removeFirst(drop)
+                    }
+                }
+                lines.reserveCapacity(min(Self.maxLines, lines.count + decodedCount))
+
+                var segStart = cursor
+                for nlIdx in firstNewlineIndex..<newlineOffsets.count {
+                    let nlPos = newlineOffsets[nlIdx]
+                    if partial.isEmpty {
+                        var segEnd = nlPos
+                        if segEnd > segStart && bytes[segEnd - 1] == 0x0D {
+                            segEnd -= 1
+                        }
+                        if segEnd == segStart {
+                            lines.append("")
+                        } else {
+                            let slice = UnsafeBufferPointer(rebasing: bytes[segStart..<segEnd])
+                            lines.append(String(decoding: slice, as: UTF8.self))
+                        }
+                    } else {
+                        var segEnd = nlPos
+                        if segEnd > segStart && bytes[segEnd - 1] == 0x0D {
+                            segEnd -= 1
+                            if segEnd > segStart {
+                                partial.append(contentsOf: bytes[segStart..<segEnd])
+                            }
+                        } else if segEnd > segStart {
+                            partial.append(contentsOf: bytes[segStart..<segEnd])
+                        } else if partial.last == 0x0D {
+                            partial.removeLast()
+                        }
+                        lines.append(String(decoding: partial, as: UTF8.self))
+                        partial.removeAll(keepingCapacity: true)
+                    }
+                    segStart = nlPos + 1
+                }
+                cursor = segStart
+            }
+
+            if cursor < count {
+                let remaining = count - cursor
+                let cap = 1 << 20
+                if remaining >= cap {
+                    partial.removeAll(keepingCapacity: true)
+                    partial.append(contentsOf: bytes[(count - cap)..<count])
+                } else {
+                    partial.append(contentsOf: bytes[cursor..<count])
+                    if partial.count > cap {
+                        partial.removeFirst(partial.count - cap)
+                    }
+                }
+            }
         }
-        var segmentStart = 0
-        var newLines: [String] = []
-        for (i, b) in bytes.enumerated() where b == 0x0A {
-            var lineBytes = partial + bytes[segmentStart..<i]
-            partial.removeAll()
-            if lineBytes.last == 0x0D { lineBytes.removeLast() }
-            newLines.append(String(decoding: lineBytes, as: UTF8.self))
-            segmentStart = i + 1
-        }
-        partial += bytes[segmentStart...]
-        if partial.count > 1 << 20 { // a pathological single line: keep the last 1 MiB only
-            partial.removeFirst(partial.count - (1 << 20))
-        }
-        lines += newLines
-        if lines.count > Self.maxLines { lines.removeFirst(lines.count - Self.maxLines) }
     }
 
     /// The last `count` complete lines in `mode` order.
     public func projected(count: Int, mode: LogTailMode) -> [String] {
-        let tail = Array(lines.suffix(max(0, min(count, Self.maxLines))))
-        return mode == .direct ? tail : tail.reversed()
+        let clamped = max(0, min(count, Self.maxLines))
+        let slice = lines.suffix(clamped)
+        return mode == .direct ? Array(slice) : Array(slice.reversed())
+    }
+
+    /// Joins the last `count` complete lines in `mode` order without allocating an intermediate `[String]`.
+    public func textAndCount(count: Int, mode: LogTailMode) -> (text: String, lineCount: Int) {
+        let clamped = max(0, min(count, Self.maxLines))
+        let slice = lines.suffix(clamped)
+        let joined = mode == .direct ? slice.joined(separator: "\n") : slice.reversed().joined(separator: "\n")
+        return (joined, slice.count)
     }
 
     public func text(count: Int, mode: LogTailMode) -> String {
-        projected(count: count, mode: mode).joined(separator: "\n")
+        textAndCount(count: count, mode: mode).text
     }
 }
 
@@ -88,13 +180,30 @@ public struct LocalLogFileReader: LogFileReading {
     }
 
     public func read(_ url: URL, offset: UInt64, length: Int) throws -> Data {
+        guard length > 0 else { return Data() }
         let fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else { throw DomainError.ioFailure("Cannot open log file (errno \(errno))") }
         defer { close(fd) }
         var data = Data(count: length)
-        let read = data.withUnsafeMutableBytes { pread(fd, $0.baseAddress, length, off_t(offset)) }
-        guard read >= 0 else { throw DomainError.ioFailure("Cannot read log file (errno \(errno))") }
-        data.removeSubrange(read..<length)
+        var totalRead = 0
+        try data.withUnsafeMutableBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            while totalRead < length {
+                let n = pread(fd, base.advanced(by: totalRead), length - totalRead, off_t(offset) + off_t(totalRead))
+                if n > 0 {
+                    totalRead += n
+                } else if n == 0 {
+                    break
+                } else if errno == EINTR {
+                    continue
+                } else {
+                    throw DomainError.ioFailure("Cannot read log file (errno \(errno))")
+                }
+            }
+        }
+        if totalRead < length {
+            data.removeSubrange(totalRead..<length)
+        }
         return data
     }
 }

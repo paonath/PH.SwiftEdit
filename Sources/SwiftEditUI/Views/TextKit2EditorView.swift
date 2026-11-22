@@ -154,6 +154,7 @@ struct TextKit2EditorView: NSViewRepresentable {
     var bufferRevision: BufferRevision = BufferRevision(1)
     let text: String
     let isEditable: Bool
+    var isWordWrapEnabled: Bool = true
     let palette: PurpleThemePalette
     let fontSizePoints: Double
     let highlightProjection: EditorHighlightProjection
@@ -254,8 +255,13 @@ struct TextKit2EditorView: NSViewRepresentable {
         coordinator.undoRegistry = undoRegistry
         coordinator.activeBufferRevision = bufferRevision
         coordinator.syntaxLanguage = documentLanguage
-        coordinator.gfmPalette = palette
-        coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints, typography: typography, generation: typographyGeneration)
+        coordinator.wordOccurrenceRanges = highlightProjection.wordOccurrenceRanges
+        coordinator.updateRenderingTableIfNeeded(
+            palette: palette,
+            fontSizePoints: fontSizePoints,
+            typography: typography,
+            generation: typographyGeneration
+        )
 
         let stylingChanged = applyStylingIfNeeded(to: textView, in: scrollView, coordinator: coordinator, force: false)
 
@@ -311,34 +317,97 @@ struct TextKit2EditorView: NSViewRepresentable {
     /// Installs the viewport-only GFM `renderingAttributesValidator` (hot path): only the laid-out fragment is scanned, prose keeps `#FFFFFF`/`#000000` (`21:1`), and cached fonts + `>= 4.5:1` palette tokens are applied (`UI-002`, `UI-012`).
     private func installGFMValidator(on textView: SwiftEditNSTextView, coordinator: Coordinator) {
         coordinator.syntaxLanguage = documentLanguage
-        coordinator.gfmPalette = palette
-        coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints, typography: typography, generation: typographyGeneration)
+        coordinator.wordOccurrenceRanges = highlightProjection.wordOccurrenceRanges
+        coordinator.updateRenderingTableIfNeeded(
+            palette: palette,
+            fontSizePoints: fontSizePoints,
+            typography: typography,
+            generation: typographyGeneration
+        )
         textView.textLayoutManager?.renderingAttributesValidator = { [weak coordinator, weak textView] layoutManager, fragment in
-            guard let coordinator, let textView, coordinator.syntaxLanguage != .plainText,
+            guard let coordinator, let textView,
                   let contentManager = layoutManager.textContentManager else { return }
             let docStart = contentManager.documentRange.location
-            let fragStart = contentManager.offset(from: docStart, to: fragment.rangeInElement.location)
+            let fragLocation = fragment.rangeInElement.location
+            let fragStart = contentManager.offset(from: docStart, to: fragLocation)
             let fragEnd = contentManager.offset(from: docStart, to: fragment.rangeInElement.endLocation)
             guard fragEnd > fragStart else { return }
-            let index = coordinator.renderingLineIndex(
-                for: textView,
-                documentID: coordinator.activeDocumentID,
-                revision: coordinator.activeBufferRevision
-            )
-            let spans = DocumentSyntaxHighlighter.spans(index: index, visibleRange: SwiftEditCore.TextRange(location: fragStart, length: fragEnd - fragStart), language: coordinator.syntaxLanguage)
-            guard !spans.isEmpty else { return }
-            let palette = coordinator.gfmPalette
-            let fonts = coordinator.cachedFonts
-            for span in spans {
-                let attributes = EditorRenderingAttributes.attributes(for: span.kind, palette: palette, fonts: fonts)
-                guard !attributes.isEmpty,
-                      let start = contentManager.location(docStart, offsetBy: span.range.location),
-                      let end = contentManager.location(start, offsetBy: span.range.length),
-                      let range = NSTextRange(location: start, end: end) else { continue }
-                for attribute in attributes {
-                    layoutManager.addRenderingAttribute(attribute.key, value: attribute.value, for: range)
+            let table = coordinator.renderingAttributeTable
+            if coordinator.syntaxLanguage != .plainText {
+                let index = coordinator.renderingLineIndex(
+                    for: textView,
+                    documentID: coordinator.activeDocumentID,
+                    revision: coordinator.activeBufferRevision
+                )
+                let spans = DocumentSyntaxHighlighter.spans(index: index, visibleRange: SwiftEditCore.TextRange(location: fragStart, length: fragEnd - fragStart), language: coordinator.syntaxLanguage)
+                for span in spans {
+                    let attributes = table.attributes(for: span.kind)
+                    guard !attributes.isEmpty else { continue }
+                    let start: (any NSTextLocation)?
+                    if span.range.location >= fragStart {
+                        start = contentManager.location(fragLocation, offsetBy: span.range.location - fragStart)
+                    } else {
+                        start = contentManager.location(docStart, offsetBy: span.range.location)
+                    }
+                    guard let start,
+                          let end = contentManager.location(start, offsetBy: span.range.length),
+                          let range = NSTextRange(location: start, end: end) else { continue }
+                    for attribute in attributes {
+                        layoutManager.addRenderingAttribute(attribute.key, value: attribute.value, for: range)
+                    }
                 }
             }
+            // Re-apply soft secondary word occurrence highlights intersecting this fragment so TextKit 2
+            // fragment revalidation during layoutViewport() or scrolling never clears them.
+            Self.applyWordOccurrences(
+                coordinator.wordOccurrenceRanges,
+                in: layoutManager,
+                contentManager: contentManager,
+                docStart: docStart,
+                anchorLocation: fragLocation,
+                anchorOffset: fragStart,
+                rangeStart: fragStart,
+                rangeEnd: fragEnd,
+                table: table
+            )
+        }
+    }
+
+    private static func applyWordOccurrences(
+        _ occurrences: [SwiftEditCore.TextRange],
+        in layoutManager: NSTextLayoutManager,
+        contentManager: NSTextContentManager,
+        docStart: any NSTextLocation,
+        anchorLocation: any NSTextLocation,
+        anchorOffset: Int,
+        rangeStart: Int,
+        rangeEnd: Int,
+        table: EditorRenderingAttributeTable
+    ) {
+        guard !occurrences.isEmpty else { return }
+        let occurrenceBg = table.wordOccurrenceBackground
+        let occurrenceUnderline = table.wordOccurrenceUnderline
+        let underlineStyle = NSUnderlineStyle.single.rawValue
+        var lo = 0, hi = occurrences.count
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2
+            if occurrences[mid].upperBound <= rangeStart { lo = mid + 1 } else { hi = mid }
+        }
+        var idx = lo
+        while idx < occurrences.count {
+            let occ = occurrences[idx]
+            if occ.location >= rangeEnd { break }
+            let start: (any NSTextLocation)? = occ.location >= anchorOffset
+                ? contentManager.location(anchorLocation, offsetBy: occ.location - anchorOffset)
+                : contentManager.location(docStart, offsetBy: occ.location)
+            if let start,
+               let end = contentManager.location(start, offsetBy: occ.length),
+               let range = NSTextRange(location: start, end: end) {
+                layoutManager.addRenderingAttribute(.backgroundColor, value: occurrenceBg, for: range)
+                layoutManager.addRenderingAttribute(.underlineStyle, value: underlineStyle, for: range)
+                layoutManager.addRenderingAttribute(.underlineColor, value: occurrenceUnderline, for: range)
+            }
+            idx += 1
         }
     }
 
@@ -354,13 +423,15 @@ struct TextKit2EditorView: NSViewRepresentable {
            coordinator.lastStyledPalette == palette,
            coordinator.lastStyledFontSize == fontSizePoints,
            coordinator.lastStyledTypographyGeneration == typographyGeneration,
-           coordinator.lastStyledIsEditable == isEditable {
+           coordinator.lastStyledIsEditable == isEditable,
+           coordinator.lastStyledWordWrap == isWordWrapEnabled {
             return false
         }
         coordinator.lastStyledPalette = palette
         coordinator.lastStyledFontSize = fontSizePoints
         coordinator.lastStyledTypographyGeneration = typographyGeneration
         coordinator.lastStyledIsEditable = isEditable
+        coordinator.lastStyledWordWrap = isWordWrapEnabled
         coordinator.updateGFMFontsIfNeeded(fontSizePoints: fontSizePoints, typography: typography, generation: typographyGeneration)
 
         let editorFont = coordinator.cachedRegularFont
@@ -371,9 +442,28 @@ struct TextKit2EditorView: NSViewRepresentable {
         scrollView.backgroundColor = canvasBg
         scrollView.appearance = NSAppearance(named: palette.mode == .black ? .darkAqua : .aqua)
         scrollView.scrollerKnobStyle = (palette.mode == .black) ? .light : .dark
+        scrollView.hasHorizontalScroller = !isWordWrapEnabled
 
         textView.usesAdaptiveColorMappingForDarkAppearance = false
         textView.isEditable = isEditable
+        textView.isHorizontallyResizable = !isWordWrapEnabled
+        if isWordWrapEnabled {
+            let width = max(120, scrollView.contentSize.width)
+            textView.maxSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+            textView.textContainer?.widthTracksTextView = true
+            textView.textContainer?.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+            if textView.frame.width != width {
+                textView.frame.size.width = width
+            }
+            if scrollView.documentVisibleRect.origin.x > 0 {
+                scrollView.contentView.scroll(to: NSPoint(x: 0, y: scrollView.documentVisibleRect.origin.y))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
+        } else {
+            textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            textView.textContainer?.widthTracksTextView = false
+            textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        }
         textView.backgroundColor = canvasBg
         textView.textColor = canvasFg
         textView.insertionPointColor = canvasFg
@@ -381,7 +471,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         textView.font = editorFont
         textView.selectedTextAttributes = [
             .backgroundColor: palette.selectionBackground.nsColor,
-            .foregroundColor: canvasFg,
+            .foregroundColor: palette.selectionForeground.nsColor,
         ]
         textView.typingAttributes = [
             .font: editorFont,
@@ -435,6 +525,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         coordinator.lastHighlightSnapshot = signature
 
         let hasAnyHighlights = !highlightProjection.backtickSpans.isEmpty
+            || !highlightProjection.wordOccurrenceRanges.isEmpty
             || !highlightProjection.bracketPairs.isEmpty
             || highlightProjection.activeBracketPair != nil
             || !lintDiagnostics.isEmpty
@@ -444,7 +535,17 @@ struct TextKit2EditorView: NSViewRepresentable {
             return false
         }
 
-        layoutManager.setRenderingAttributes([:], for: targetRange)
+        // Clear the full expanded overscan range [visibleStart, visibleEnd] so highlights applied
+        // inside the ±256-char margin never linger after selection clear or small scrolls.
+        let clearRange: NSTextRange
+        if let clearStart = contentManager.location(docRange.location, offsetBy: visibleStart),
+           let clearEnd = contentManager.location(clearStart, offsetBy: visibleEnd - visibleStart),
+           let expanded = NSTextRange(location: clearStart, end: clearEnd) {
+            clearRange = expanded
+        } else {
+            clearRange = targetRange
+        }
+        layoutManager.setRenderingAttributes([:], for: clearRange)
         coordinator.hadNonMutatingHighlights = hasAnyHighlights
         guard hasAnyHighlights else { return true }
 
@@ -455,20 +556,30 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         func makeTextRange(location: Int, length: Int) -> NSTextRange? {
             guard location >= 0, length > 0, location + length <= totalUTF16,
-                  intersectsVisible(location, length),
-                  let start = contentManager.location(docRange.location, offsetBy: location),
+                  intersectsVisible(location, length) else {
+                return nil
+            }
+            let start: (any NSTextLocation)?
+            if location >= visStart {
+                start = contentManager.location(targetRange.location, offsetBy: location - visStart)
+            } else {
+                start = contentManager.location(docRange.location, offsetBy: location)
+            }
+            guard let start,
                   let end = contentManager.location(start, offsetBy: length) else {
                 return nil
             }
             return NSTextRange(location: start, end: end)
         }
 
+        let table = coordinator.renderingAttributeTable
+
         // 1. Backtick inline and multiline fenced code highlights (sorted by location; binary search to first candidate)
         let backtickSpans = highlightProjection.backtickSpans
         if !backtickSpans.isEmpty {
-            let backtickFg = palette.backtickForeground.nsColor
-            let inlineBg = palette.backtickInlineBackground.nsColor
-            let multilineBg = palette.backtickMultilineBackground.nsColor
+            let backtickFg = table.backtickForeground
+            let inlineBg = table.backtickInlineBackground
+            let multilineBg = table.backtickMultilineBackground
             var lo = 0, hi = backtickSpans.count
             while lo < hi {
                 let mid = lo + (hi - lo) / 2
@@ -486,18 +597,36 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
         }
 
+        // 1b. Soft secondary highlights for other whole-word occurrences of the selected word (binary-searched to visible viewport; WCAG 1.4.1 non-color-only underline cue)
+        Self.applyWordOccurrences(
+            highlightProjection.wordOccurrenceRanges,
+            in: layoutManager,
+            contentManager: contentManager,
+            docStart: docRange.location,
+            anchorLocation: targetRange.location,
+            anchorOffset: visStart,
+            rangeStart: visibleStart,
+            rangeEnd: visibleEnd,
+            table: table
+        )
+
         let boldFont = coordinator.cachedBoldFont
 
-        // 2. Nested depth-colored bracket pairs ({}, [], ()) (sorted by openOffset; early-break past visibleEnd)
+        // 2. Nested depth-colored bracket pairs ({}, [], ()) (sorted by openOffset; early-break past visibleEnd and skip pairs whose endpoints are both off-screen)
+        let depthColors = table.nestedBracketColors
+        let depthCount = depthColors.count
         for pair in highlightProjection.bracketPairs {
             if pair.openOffset > visibleEnd { break }
             guard pair.closeOffset >= visibleStart else { continue }
-            let depthColor = palette.nestedBracketColor(forDepth: pair.nestingDepth).nsColor
-            if let openRange = makeTextRange(location: pair.openOffset, length: 1) {
+            let openVisible = pair.openOffset >= visibleStart && pair.openOffset <= visibleEnd
+            let closeVisible = pair.closeOffset >= visibleStart && pair.closeOffset <= visibleEnd
+            guard openVisible || closeVisible else { continue }
+            let depthColor = depthColors[max(0, pair.nestingDepth) % depthCount]
+            if openVisible, let openRange = makeTextRange(location: pair.openOffset, length: 1) {
                 layoutManager.addRenderingAttribute(.foregroundColor, value: depthColor, for: openRange)
                 layoutManager.addRenderingAttribute(.font, value: boldFont, for: openRange)
             }
-            if let closeRange = makeTextRange(location: pair.closeOffset, length: 1) {
+            if closeVisible, let closeRange = makeTextRange(location: pair.closeOffset, length: 1) {
                 layoutManager.addRenderingAttribute(.foregroundColor, value: depthColor, for: closeRange)
                 layoutManager.addRenderingAttribute(.font, value: boldFont, for: closeRange)
             }
@@ -505,7 +634,7 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         // 3. Active caret bracket pair background emphasis
         if let active = highlightProjection.activeBracketPair {
-            let activeBg = palette.activeBracketHighlight.nsColor
+            let activeBg = table.activeBracketHighlight
             if let openRange = makeTextRange(location: active.openOffset, length: 1) {
                 layoutManager.addRenderingAttribute(.backgroundColor, value: activeBg, for: openRange)
             }
@@ -514,26 +643,29 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
         }
 
-        // 3b. Prominent lint underlines + tinted range background (`>= 3.0:1` tokens): draw warnings then errors without allocating/sorting.
+        // 3b. Prominent lint underlines + tinted range background (`>= 3.0:1` tokens): single viewport-filtered pass,
+        // applying visible warnings immediately and deferring only visible errors so errors render on top.
         if !lintDiagnostics.isEmpty {
             let warnStyle = NSUnderlineStyle.thick.rawValue | NSUnderlineStyle.patternDot.rawValue
-            let warnColor = palette.bidiWarningForeground.nsColor
-            let warnBackground = warnColor.withAlphaComponent(0.18)
+            let warnColor = table.lintWarnColor
+            let warnBackground = table.lintWarnBackground
             let errStyle = NSUnderlineStyle.thick.rawValue
-            let errColor = palette.unbalancedBracketHighlight.nsColor
-            let errBackground = errColor.withAlphaComponent(0.24)
-            for diagnostic in lintDiagnostics where diagnostic.severity == .warning {
+            let errColor = table.lintErrorColor
+            let errBackground = table.lintErrorBackground
+            var visibleErrorRanges: [NSTextRange] = []
+            for diagnostic in lintDiagnostics {
                 guard let range = diagnostic.range else { continue }
                 let spanLength = range.length > 0 ? min(range.length, 1_024) : 1
                 guard let nsRange = makeTextRange(location: range.location, length: spanLength) else { continue }
-                layoutManager.addRenderingAttribute(.underlineStyle, value: warnStyle, for: nsRange)
-                layoutManager.addRenderingAttribute(.underlineColor, value: warnColor, for: nsRange)
-                layoutManager.addRenderingAttribute(.backgroundColor, value: warnBackground, for: nsRange)
+                if diagnostic.severity == .error {
+                    visibleErrorRanges.append(nsRange)
+                } else if diagnostic.severity == .warning {
+                    layoutManager.addRenderingAttribute(.underlineStyle, value: warnStyle, for: nsRange)
+                    layoutManager.addRenderingAttribute(.underlineColor, value: warnColor, for: nsRange)
+                    layoutManager.addRenderingAttribute(.backgroundColor, value: warnBackground, for: nsRange)
+                }
             }
-            for diagnostic in lintDiagnostics where diagnostic.severity == .error {
-                guard let range = diagnostic.range else { continue }
-                let spanLength = range.length > 0 ? min(range.length, 1_024) : 1
-                guard let nsRange = makeTextRange(location: range.location, length: spanLength) else { continue }
+            for nsRange in visibleErrorRanges {
                 layoutManager.addRenderingAttribute(.underlineStyle, value: errStyle, for: nsRange)
                 layoutManager.addRenderingAttribute(.underlineColor, value: errColor, for: nsRange)
                 layoutManager.addRenderingAttribute(.backgroundColor, value: errBackground, for: nsRange)
@@ -543,8 +675,8 @@ struct TextKit2EditorView: NSViewRepresentable {
         // 4. Unbalanced bracket error emphasis (sorted by offset; binary search to visibleStart)
         let unbalanced = highlightProjection.unbalancedBrackets
         if !unbalanced.isEmpty {
-            let errorColor = palette.unbalancedBracketHighlight.nsColor
-            let errorBg = palette.unbalancedBracketBackground.nsColor
+            let errorColor = table.unbalancedBracketForeground
+            let errorBg = table.unbalancedBracketBackground
             var lo = 0, hi = unbalanced.count
             while lo < hi {
                 let mid = lo + (hi - lo) / 2
@@ -611,6 +743,10 @@ struct TextKit2EditorView: NSViewRepresentable {
         var gfmPalette: PurpleThemePalette = .resolve(appearance: .light, systemPrefersDark: false)
         var gfmFontSize: Double = 13
         var cachedFonts = EditorRenderingFonts(fontSizePoints: 13)
+        var renderingAttributeTable = EditorRenderingAttributeTable(
+            palette: .resolve(appearance: .light, systemPrefersDark: false),
+            fonts: EditorRenderingFonts(fontSizePoints: 13)
+        )
         var cachedRegularFont: NSFont { cachedFonts.regular }
         var cachedBoldFont: NSFont { cachedFonts.bold }
         var cachedItalicFont: NSFont { cachedFonts.italic }
@@ -618,6 +754,8 @@ struct TextKit2EditorView: NSViewRepresentable {
         var lastStyledFontSize: Double?
         var lastStyledTypographyGeneration: Int?
         var lastStyledIsEditable: Bool?
+        var lastStyledWordWrap: Bool?
+        var wordOccurrenceRanges: [SwiftEditCore.TextRange] = []
         var lastSyncedBufferRevision: BufferRevision?
         var hasPendingLocalEdit = false
         var lastHighlightSnapshot: HighlightRenderSignature?
@@ -645,6 +783,27 @@ struct TextKit2EditorView: NSViewRepresentable {
             gfmFontSize = fontSizePoints
             gfmTypographyGeneration = generation
             cachedFonts = EditorRenderingFonts(fontSizePoints: fontSizePoints, typography: typography)
+            renderingAttributeTable = EditorRenderingAttributeTable(palette: gfmPalette, fonts: cachedFonts)
+        }
+
+        /// Rebuilds cached rendering attribute dictionaries only when palette, font size, or typography generation changes.
+        func updateRenderingTableIfNeeded(
+            palette: PurpleThemePalette,
+            fontSizePoints: Double,
+            typography: AppTypography,
+            generation: Int
+        ) {
+            let paletteChanged = gfmPalette != palette
+            let fontsChanged = gfmFontSize != fontSizePoints || gfmTypographyGeneration != generation
+            if paletteChanged { gfmPalette = palette }
+            if fontsChanged {
+                gfmFontSize = fontSizePoints
+                gfmTypographyGeneration = generation
+                cachedFonts = EditorRenderingFonts(fontSizePoints: fontSizePoints, typography: typography)
+            }
+            if paletteChanged || fontsChanged {
+                renderingAttributeTable = EditorRenderingAttributeTable(palette: gfmPalette, fonts: cachedFonts)
+            }
         }
 
         func markSynced(documentID: DocumentID, revision: BufferRevision) {
@@ -954,10 +1113,19 @@ struct TextKit2EditorView: NSViewRepresentable {
             guard let tlm = textView.textLayoutManager, let tcm = tlm.textContentManager,
                   let start = tcm.location(tcm.documentRange.location, offsetBy: location),
                   let target = NSTextRange(location: start, end: tcm.location(start, offsetBy: min(1, length - location)) ?? start),
-                  let visible = textView.enclosingScrollView?.documentVisibleRect else { return }
+                  let scrollView = textView.enclosingScrollView else { return }
+            let visible = scrollView.documentVisibleRect
             if let fragment = tlm.textLayoutFragment(for: start), visible.intersects(fragment.layoutFragmentFrame) { return }
             tlm.ensureLayout(for: target)
+            if let fragment = tlm.textLayoutFragment(for: start) {
+                let targetY = max(0, textView.textContainerOrigin.y + fragment.layoutFragmentFrame.minY - visible.height * 0.25)
+                let maxScrollY = max(0, textView.frame.height - visible.height)
+                scrollView.contentView.scroll(to: NSPoint(x: visible.origin.x, y: min(targetY, maxScrollY)))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
+            tlm.textViewportLayoutController.layoutViewport()
             textView.scrollRangeToVisible(clamped)
+            textView.needsDisplay = true
         }
 
         /// Zero-bridge cache lookup used by `renderingAttributesValidator`: avoids touching `textView.string` completely on cache hits.
@@ -1090,6 +1258,118 @@ struct EditorRenderingFonts {
     }
 }
 
+/// Pre-built per-`(palette, fonts)` attribute cache so `renderingAttributesValidator` allocates zero `NSColor`s or arrays per span.
+@MainActor
+struct EditorRenderingAttributeTable {
+    typealias Entries = [(key: NSAttributedString.Key, value: Any)]
+
+    let bold: Entries
+    let italic: Entries
+    let strikethrough: Entries
+    let code: Entries
+    let link: Entries
+    let inlineHTML: Entries
+    let secondary: Entries
+    let yamlKey: Entries
+    let logTrace: Entries
+    let logDebug: Entries
+    let logInfo: Entries
+    let logWarn: Entries
+    let logError: Entries
+    let logCritical: Entries
+    let logTimestamp: Entries
+    let logGuid: Entries
+    let logString: Entries
+    let logException: Entries
+
+    // Cached NSColors for non-mutating viewport highlights (backticks, brackets, lint underlines)
+    let backtickForeground: NSColor
+    let backtickInlineBackground: NSColor
+    let backtickMultilineBackground: NSColor
+    let wordOccurrenceBackground: NSColor
+    let wordOccurrenceUnderline: NSColor
+    let nestedBracketColors: [NSColor]
+    let activeBracketHighlight: NSColor
+    let lintWarnColor: NSColor
+    let lintWarnBackground: NSColor
+    let lintErrorColor: NSColor
+    let lintErrorBackground: NSColor
+    let unbalancedBracketForeground: NSColor
+    let unbalancedBracketBackground: NSColor
+
+    init(palette: PurpleThemePalette, fonts: EditorRenderingFonts) {
+        bold = [(.font, fonts.bold)]
+        italic = [(.font, fonts.italic)]
+        strikethrough = [(.strikethroughStyle, NSUnderlineStyle.single.rawValue)]
+        let inlineBg = palette.backtickInlineBackground.nsColor
+        let backtickFg = palette.backtickForeground.nsColor
+        code = [(.backgroundColor, inlineBg), (.foregroundColor, backtickFg)]
+        link = [(.underlineStyle, NSUnderlineStyle.single.rawValue), (.foregroundColor, palette.linkForeground.nsColor)]
+        inlineHTML = [(.foregroundColor, palette.inertHTMLWarningForeground.nsColor)]
+        secondary = [(.foregroundColor, palette.secondaryForeground.nsColor)]
+        yamlKey = [(.foregroundColor, palette.yamlKeyForeground.nsColor), (.font, fonts.yamlKey)]
+        logTrace = [(.foregroundColor, palette.logTraceForeground.nsColor)]
+        logDebug = [(.foregroundColor, palette.logDebugForeground.nsColor)]
+        logInfo = [(.foregroundColor, palette.logInfoForeground.nsColor)]
+        logWarn = [(.foregroundColor, palette.logWarnForeground.nsColor), (.font, fonts.bold)]
+        logError = [(.foregroundColor, palette.logErrorForeground.nsColor), (.font, fonts.bold)]
+        logCritical = [
+            (.foregroundColor, palette.logCriticalForeground.nsColor),
+            (.backgroundColor, palette.logCriticalBackground.nsColor),
+            (.font, fonts.bold),
+        ]
+        logTimestamp = [(.foregroundColor, palette.logTimestampForeground.nsColor)]
+        logGuid = [(.foregroundColor, palette.logGuidForeground.nsColor)]
+        logString = [(.foregroundColor, palette.logStringForeground.nsColor)]
+        logException = [(.foregroundColor, palette.logExceptionForeground.nsColor), (.font, fonts.italic)]
+
+        backtickForeground = backtickFg
+        backtickInlineBackground = inlineBg
+        backtickMultilineBackground = palette.backtickMultilineBackground.nsColor
+        wordOccurrenceBackground = palette.wordOccurrenceBackground.nsColor
+        wordOccurrenceUnderline = palette.wordOccurrenceUnderline.nsColor
+        nestedBracketColors = palette.nestedBracketPalette.isEmpty
+            ? [palette.primaryAccent.nsColor]
+            : palette.nestedBracketPalette.map(\.nsColor)
+        activeBracketHighlight = palette.activeBracketHighlight.nsColor
+        let warnColor = palette.bidiWarningForeground.nsColor
+        lintWarnColor = warnColor
+        lintWarnBackground = warnColor.withAlphaComponent(0.18)
+        let errColor = palette.unbalancedBracketHighlight.nsColor
+        lintErrorColor = errColor
+        lintErrorBackground = errColor.withAlphaComponent(0.24)
+        unbalancedBracketForeground = errColor
+        unbalancedBracketBackground = palette.unbalancedBracketBackground.nsColor
+    }
+
+    func attributes(for kind: MarkdownSyntaxKind) -> Entries {
+        switch kind {
+        case .heading, .bold: return bold
+        case .italic: return italic
+        case .strikethrough: return strikethrough
+        case .inlineCode, .codeBlock: return code
+        case .link, .image: return link
+        case .inlineHTML: return inlineHTML
+        case .task, .blockquote, .tableRow, .thematicBreak, .yamlPunctuation, .yamlComment: return secondary
+        case .yamlKey: return yamlKey
+        case .yamlValue: return []
+        case .logLevel(let level):
+            switch level {
+            case .trace: return logTrace
+            case .debug: return logDebug
+            case .info: return logInfo
+            case .warn: return logWarn
+            case .error: return logError
+            case .critical: return logCritical
+            }
+        case .logTimestamp: return logTimestamp
+        case .logGuid: return logGuid
+        case .logString: return logString
+        case .logException: return logException
+        }
+    }
+}
+
 /// Single source of truth mapping every `MarkdownSyntaxKind` (GFM and YAML) to non-mutating TextKit 2 rendering attributes.
 ///
 /// Prose and YAML values receive no foreground attribute so they keep the `#FFFFFF`/`#000000` canvas text (`21:1`, `UI-002`).
@@ -1103,7 +1383,7 @@ enum EditorRenderingAttributes {
         case .strikethrough:
             return [(.strikethroughStyle, NSUnderlineStyle.single.rawValue)]
         case .inlineCode, .codeBlock:
-            return [(.backgroundColor, palette.backtickInlineBackground.nsColor)]
+            return [(.backgroundColor, palette.backtickInlineBackground.nsColor), (.foregroundColor, palette.backtickForeground.nsColor)]
         case .link, .image:
             return [(.underlineStyle, NSUnderlineStyle.single.rawValue), (.foregroundColor, palette.linkForeground.nsColor)]
         case .inlineHTML:
