@@ -35,15 +35,67 @@ public struct LineNumberGutterProjection: Equatable, Sendable {
         )
     }
 
-    /// Evaluates 1-based line count and active caret line in one allocation-free UTF-16 pass without forcing whole-document TextKit layout (`UI-012`, `PERF-007`).
+    /// Evaluates 1-based line count and active caret line in one allocation-free contiguous UTF-8 byte pass without forcing whole-document TextKit layout (`UI-012`, `PERF-007`).
     /// - Parameters:
     ///   - text: Active buffer string (`LF`, `CRLF`, or `CR` breaks).
     ///   - caretLocation: UTF-16 caret offset; clamped safely into `0...text.utf16.count`.
     ///   - fontSizePoints: Effective zoomed font size in points.
     /// - Returns: Clamped `LineNumberGutterProjection` with at least line `1`.
     public static func evaluate(text: String, caretLocation: Int, fontSizePoints: Double) -> LineNumberGutterProjection {
+        let clampedCaret = max(0, caretLocation)
+        if let fast = text.utf8.withContiguousStorageIfAvailable({ buf -> LineNumberGutterProjection in
+            let count = buf.count
+            guard let base = buf.baseAddress, count > 0 else {
+                return LineNumberGutterProjection(lineCount: 1, activeLine: 1, fontSizePoints: fontSizePoints)
+            }
+            var totalLines = 1
+            var activeLine = 1
+            var utf16Offset = 0
+            var i = 0
+            while i < count {
+                let b = base[i]
+                if b == 0x0A {
+                    totalLines += 1
+                    utf16Offset += 1
+                    i += 1
+                    if utf16Offset <= clampedCaret { activeLine += 1 }
+                } else if b == 0x0D {
+                    totalLines += 1
+                    let beforeBreak = utf16Offset
+                    if i + 1 < count && base[i + 1] == 0x0A {
+                        utf16Offset += 2
+                        i += 2
+                        if beforeBreak + 1 < clampedCaret { activeLine += 1 }
+                    } else {
+                        utf16Offset += 1
+                        i += 1
+                        if utf16Offset <= clampedCaret { activeLine += 1 }
+                    }
+                } else if b < 0x80 {
+                    utf16Offset += 1
+                    i += 1
+                } else if b < 0xE0 {
+                    utf16Offset += 1
+                    i += 2
+                } else if b < 0xF0 {
+                    utf16Offset += 1
+                    i += 3
+                } else {
+                    utf16Offset += 2
+                    i += 4
+                }
+            }
+            return LineNumberGutterProjection(
+                lineCount: totalLines,
+                activeLine: min(max(1, activeLine), totalLines),
+                fontSizePoints: fontSizePoints
+            )
+        }) {
+            return fast
+        }
+
         let utf16 = text.utf16
-        let clampedCaret = min(max(0, caretLocation), utf16.count)
+        let boundedCaret = min(clampedCaret, utf16.count)
         var totalLines = 1
         var activeLine = 1
         var offset = 0
@@ -54,7 +106,7 @@ public struct LineNumberGutterProjection: Equatable, Sendable {
                 totalLines += 1
                 idx = utf16.index(after: idx)
                 offset += 1
-                if offset <= clampedCaret { activeLine += 1 }
+                if offset <= boundedCaret { activeLine += 1 }
             } else if unit == 0x0D {
                 totalLines += 1
                 let next = utf16.index(after: idx)
@@ -63,9 +115,9 @@ public struct LineNumberGutterProjection: Equatable, Sendable {
                 let beforeBreak = offset
                 offset += step
                 if step == 2 {
-                    if beforeBreak + 1 < clampedCaret { activeLine += 1 }
+                    if beforeBreak + 1 < boundedCaret { activeLine += 1 }
                 } else {
-                    if offset <= clampedCaret { activeLine += 1 }
+                    if offset <= boundedCaret { activeLine += 1 }
                 }
             } else {
                 idx = utf16.index(after: idx)
@@ -156,8 +208,8 @@ public struct GutterLineMetric: Equatable, Sendable {
 
     public init(lineNumber: Int, minY: CGFloat, height: CGFloat) {
         self.lineNumber = max(1, lineNumber)
-        self.minY = minY
-        self.height = max(0, height)
+        self.minY = minY.isFinite ? minY : 0
+        self.height = height.isFinite ? max(0, height) : 0
     }
 }
 
@@ -173,6 +225,33 @@ public struct GutterViewportMetrics: Equatable, Sendable {
 }
 
 #if os(macOS)
+/// Gutter lint dot: hovering shows an English popover with the rule code, message and explanation (also a tooltip and
+/// the VoiceOver label). The hover area is larger than the 8 pt dot so it is easy to target.
+struct LintBadge: View {
+    let color: Color
+    let details: String
+    let isError: Bool
+    @State private var isHovering = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 8, height: 8)
+            .frame(width: 16, height: 16)
+            .contentShape(Rectangle())
+            .onHover { isHovering = $0 }
+            .popover(isPresented: $isHovering, arrowEdge: .trailing) {
+                Text(details)
+                    .appFont(.callout)
+                    .frame(maxWidth: 380, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+            }
+            .help(details)
+            .accessibilityLabel("\(isError ? "Lint error" : "Lint warning"): \(details)")
+    }
+}
+
 /// Left 1-based line-number gutter synchronized with TextKit 2 vertical scroll and soft-wrap fragment heights (`BUG-012`, `UI-001`, `UI-002`).
 public struct LineNumberGutterView: View {
     public let projection: LineNumberGutterProjection
@@ -182,15 +261,19 @@ public struct LineNumberGutterView: View {
     public var viewportMetrics: GutterViewportMetrics?
     /// Zoom- and font-driven width (`ZoomedChromeMetrics.gutterWidth`).
     public var width: CGFloat
+    /// English hover text per 1-based line (rule code, message and explanation), shown by the lint badge.
+    public var lintDetailsByLine: [Int: String]
 
     public init(
         projection: LineNumberGutterProjection,
         palette: PurpleThemePalette,
         severityByLine: [Int: MarkdownLintSeverity] = [:],
         viewportMetrics: GutterViewportMetrics? = nil,
-        width: CGFloat = 52
+        width: CGFloat = 52,
+        lintDetailsByLine: [Int: String] = [:]
     ) {
         self.width = width
+        self.lintDetailsByLine = lintDetailsByLine
         self.projection = projection
         self.palette = palette
         self.severityByLine = severityByLine
@@ -242,11 +325,11 @@ public struct LineNumberGutterView: View {
                     .fill(severityColor)
                     .frame(width: 3, height: max(12, projection.fontSizePoints * 0.95))
                     .accessibilityHidden(true)
-                Circle()
-                    .fill(severityColor)
-                    .frame(width: 8, height: 8)
-                    .help(severity == .error ? "Markdown lint error on this line" : "Markdown lint warning on this line")
-                    .accessibilityLabel(severity == .error ? "Lint error" : "Lint warning")
+                LintBadge(
+                    color: severityColor,
+                    details: lintDetailsByLine[lineNumber] ?? (severity == .error ? "Markdown lint error on this line" : "Markdown lint warning on this line"),
+                    isError: severity == .error
+                )
             }
             Text("\(lineNumber)")
                 .appFont(size: projection.fontSizePoints, weight: (isActive || severity != nil) ? .semibold : .regular, monospaced: true, role: .editor)

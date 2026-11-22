@@ -86,14 +86,14 @@ struct XcodeAppShellAndPackagingFitnessTests {
         let macViolations = try EntitlementsFitnessValidator.validate(plistData: roguePlistData, platform: .macOS)
         let iosViolations = try EntitlementsFitnessValidator.validate(plistData: roguePlistData, platform: .iOS)
 
-        // THEN all five macOS security violations and six iOS violations are reported deterministically
+        // THEN all four macOS forbidden entitlement violations and six iOS violations (including app-sandbox) are reported deterministically
         #expect(macViolations.map(\.key) == [
-            "com.apple.security.app-sandbox",
             "com.apple.security.cs.disable-library-validation",
             "com.apple.security.files.all",
             "com.apple.security.network.server",
             "com.apple.security.temporary-exception.files.absolute-path.read-write",
         ])
+        #expect(iosViolations.contains { $0.key == "com.apple.security.app-sandbox" })
         #expect(iosViolations.contains { $0.key == "com.apple.security.network.client" })
     }
 }

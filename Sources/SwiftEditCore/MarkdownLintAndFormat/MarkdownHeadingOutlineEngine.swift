@@ -115,7 +115,9 @@ public struct DocumentNavigatorState: Equatable, Sendable {
     }
 
     /// Case-insensitive substring filter; an empty query shows ALL headings.
+    /// Identical queries are ignored so SwiftUI TextField commit/focus callbacks never reset `selectedIndex` before confirm.
     public mutating func setQuery(_ newQuery: String) {
+        guard newQuery != query else { return }
         let previousNeedle = query.trimmingCharacters(in: .whitespaces)
         query = newQuery
         let needle = newQuery.trimmingCharacters(in: .whitespaces)

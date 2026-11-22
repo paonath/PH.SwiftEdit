@@ -9,6 +9,8 @@ public enum MarkdownSyntaxKind: Equatable, Sendable {
     case blockquote, tableRow, thematicBreak
     /// YAML key (grey, lighter weight), value (canvas text), structural punctuation and comment (`UI-002`, `REQ-010`).
     case yamlKey, yamlValue, yamlPunctuation, yamlComment
+    /// Log tokens (`.log` tabs): severity word, timestamp, GUID, quoted string, exception name or stack frame.
+    case logLevel(LogLevel), logTimestamp, logGuid, logString, logException
 
     /// `true` for the four YAML kinds emitted by `YAMLSyntaxHighlighter`.
     public var isYAML: Bool {
@@ -394,6 +396,7 @@ public enum MarkdownSyntaxHighlighter {
         var noCloseAngle = false
         var noLinkCloseBracket = false
         var noLinkCloseParen = false
+        var failedCloseBracketIndex = -1
 
         func find(_ unit: UInt16, from: Int) -> Int? {
             var k = from
@@ -407,13 +410,18 @@ public enum MarkdownSyntaxHighlighter {
         }
         func linkEndLinear(openBracket: Int) -> Int? {
             guard !noLinkCloseBracket && !noLinkCloseParen else { return nil }
+            // Any '[' before a previously failed ']' (not followed by '(') hits the same non-link ']': skip in O(1).
+            if openBracket < failedCloseBracketIndex { return nil }
             var k = openBracket + 1
             while k < end, line[k] != 0x5D { k += 1 }
             guard k < end else {
                 noLinkCloseBracket = true
                 return nil
             }
-            guard k + 1 < end, line[k + 1] == 0x28 else { return nil }
+            guard k + 1 < end, line[k + 1] == 0x28 else {
+                failedCloseBracketIndex = k
+                return nil
+            }
             var m = k + 2
             while m < end, line[m] != 0x29 { m += 1 }
             if m < end { return m }

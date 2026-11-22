@@ -18,6 +18,43 @@ public enum MarkdownLintRuleID: String, Codable, Sendable, CaseIterable {
     // YAML structural rules (`YML001`..`YML005`) for `.yaml` tabs and Markdown frontmatter (`REQ-004`).
     case yamlTabIndentation, yamlDuplicateKey, yamlInconsistentIndent, yamlUnterminatedFrontmatter, yamlNestingTooDeep
 
+    /// One-sentence English explanation shown when hovering a gutter lint badge.
+    public var explanation: String {
+        switch self {
+        case .missingHeadingSpace: return "ATX headings need a space between the # markers and the text, otherwise they render as plain text."
+        case .emptyLinkTarget: return "A link or image without a destination does nothing when clicked; add a URL or a relative path."
+        case .unsafeLinkScheme: return "Links using schemes such as javascript: or data: can run code; only http, https, mailto and relative links are allowed."
+        case .unbalancedFencedCodeBlock: return "A code fence that is never closed turns the rest of the document into code."
+        case .nonStandardOutlineMarker: return "Markers like a. or 1.1 are not CommonMark list items; use -, *, + or 1. instead."
+        case .headingIncrement: return "Heading levels should increase one at a time (for example # then ##), so the outline stays consistent."
+        case .multipleSpacesAfterHash: return "Use exactly one space after the # markers of a heading."
+        case .blanksAroundHeadings: return "Surround headings with blank lines so every renderer recognizes them."
+        case .listMarkerStyle: return "Use one bullet marker style consistently throughout a list."
+        case .inconsistentListIndent: return "Items of the same list level should share the same indentation."
+        case .listIndentStep: return "Nested list items should be indented in consistent steps (four spaces in this editor)."
+        case .orderedListPrefix: return "Ordered list numbers should follow a consistent sequence."
+        case .listMarkerSpacing: return "Put exactly one space after a list marker."
+        case .blanksAroundLists: return "Surround lists with blank lines so they are not merged with paragraphs."
+        case .malformedTaskCheckbox: return "Task items must use [ ] or [x] right after the list marker."
+        case .tablePipeStyle: return "Table rows should consistently start and end with a pipe character."
+        case .tableColumnCountMismatch: return "Every table row should have the same number of cells as the header."
+        case .blanksAroundTables: return "Surround tables with blank lines so they render as tables."
+        case .missingImageAltText: return "Images need alternative text so screen readers can describe them."
+        case .unsafeImagePath: return "Image paths must stay inside the document folder and must not traverse with .. or use remote or SVG sources."
+        case .blanksAroundFences: return "Surround code fences with blank lines so they are not merged with surrounding text."
+        case .missingFenceLanguage: return "Add a language after the opening fence (for example ```swift) to enable syntax highlighting."
+        case .multipleSpacesAfterBlockquote: return "Use a single space after the > marker of a blockquote."
+        case .trailingSpaces: return "Trailing spaces are invisible and can create unintended line breaks."
+        case .hardTabs: return "Tabs render differently across editors; indent with spaces instead."
+        case .multipleBlankLines: return "Use a single blank line between blocks."
+        case .yamlTabIndentation: return "YAML forbids tab characters for indentation; use spaces."
+        case .yamlDuplicateKey: return "A key appears twice in the same mapping; most parsers keep only the last value."
+        case .yamlInconsistentIndent: return "Indentation steps should be consistent so nesting is unambiguous."
+        case .yamlUnterminatedFrontmatter: return "The frontmatter block opened with --- must be closed with --- before the body."
+        case .yamlNestingTooDeep: return "Nesting deeper than 32 levels is not inspected."
+        }
+    }
+
     /// Stable short code for YAML rules (`YML00x`); Markdown rules keep their case name.
     public var code: String {
         switch self {

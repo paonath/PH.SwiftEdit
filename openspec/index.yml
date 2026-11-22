@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "019-log-tail-terminal-panel-lint-hover-and-help"
+    status: "implemented"
+    date: "2026-11-22"
+    capabilities: ["log-tail-terminal-panel-lint-hover-and-help"]
+    path: "openspec/specs/log-tail-terminal-panel-lint-hover-and-help/spec.md"
+    summary: "Live Log Tail (direct/inverse), Cmd+J Terminal Panel, Lint Hover Explanations, Navigator Jump, In-App Help"
   - id: "018-swiftedit-branding-settings-lint-updates-build"
     status: "implemented"
     date: "2026-11-21"

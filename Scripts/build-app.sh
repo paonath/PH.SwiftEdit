@@ -123,7 +123,16 @@ main() {
         -scheme "$readonly_scheme"
         -configuration "$configuration"
         -destination "$readonly_destination"
+        -skipPackagePluginValidation
     )
+    if [[ "$configuration" == "Release" ]]; then
+        xcodebuild_base_args+=(
+            "SWIFT_OPTIMIZATION_LEVEL=-Osize"
+            "GCC_OPTIMIZATION_LEVEL=s"
+            "DEAD_CODE_STRIPPING=YES"
+            "LLVM_LTO=YES_THIN"
+        )
+    fi
     if [[ -n "$derived_data" ]]; then
         xcodebuild_base_args+=(-derivedDataPath "$derived_data")
     fi

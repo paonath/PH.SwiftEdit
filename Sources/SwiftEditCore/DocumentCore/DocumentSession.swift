@@ -82,7 +82,7 @@ public struct DocumentSession: Equatable, Sendable {
     public mutating func applyEdit(replacing range: TextRange, with replacement: String) throws -> DomainEvent {
         try ensureEditable()
         let effectiveReplacement = normalizedReplacementIfNeeded(replacement)
-        if range.location == 0 && range.length == text.utf16.count {
+        if range.location == 0 && (text.isEmpty ? range.length == 0 : (range.length > 0 && range.length == text.utf16.count)) {
             text = effectiveReplacement
         } else {
             let stringRange = try resolveStringRange(for: range)

@@ -85,14 +85,6 @@ public enum DocumentSearchEngine {
             guard m > 0 && m <= n else { return .completed([]) }
 
             if !isCaseSensitive {
-                // Verify buffer is pure ASCII so ASCII case folding matches Unicode case-insensitive literal semantics 100%.
-                var hasNonASCII = false
-                for idx in 0..<n where textBase[idx] >= 0x80 {
-                    hasNonASCII = true
-                    break
-                }
-                if hasNonASCII { return nil }
-
                 var qLower = qBytes
                 for idx in 0..<m {
                     let b = qLower[idx]
@@ -100,82 +92,102 @@ public enum DocumentSearchEngine {
                 }
                 let firstLower = qLower[0]
                 let firstUpper: UInt8 = (firstLower >= 0x61 && firstLower <= 0x7A) ? (firstLower & ~0x20) : firstLower
+                let lastLower = qLower[m - 1]
+                let lastUpper: UInt8 = (lastLower >= 0x61 && lastLower <= 0x7A) ? (lastLower & ~0x20) : lastLower
 
                 var matches: [TextRange] = []
+                matches.reserveCapacity(min(32, maxMatches))
                 let limit = n - m
                 var i = 0
                 while i <= limit {
                     let b = textBase[i]
+                    if b >= 0x80 { return nil }
                     if b == firstLower || b == firstUpper {
-                        var matched = true
-                        var j = 1
-                        while j < m {
-                            var tb = textBase[i + j]
-                            if tb >= 0x41 && tb <= 0x5A { tb |= 0x20 }
-                            if tb != qLower[j] {
-                                matched = false
-                                break
+                        let tail = textBase[i + m - 1]
+                        if tail >= 0x80 { return nil }
+                        if m == 1 || tail == lastLower || tail == lastUpper {
+                            var matched = true
+                            var j = 1
+                            let innerEnd = m - 1
+                            while j < innerEnd {
+                                var tb = textBase[i + j]
+                                if tb >= 0x80 { return nil }
+                                if tb >= 0x41 && tb <= 0x5A { tb |= 0x20 }
+                                if tb != qLower[j] {
+                                    matched = false
+                                    break
+                                }
+                                j += 1
                             }
-                            j += 1
-                        }
-                        if matched {
-                            if matches.count >= maxMatches {
-                                return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
+                            if matched {
+                                if matches.count >= maxMatches {
+                                    return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
+                                }
+                                matches.append(TextRange(location: i, length: m))
+                                i += m
+                                continue
                             }
-                            matches.append(TextRange(location: i, length: m))
-                            i += m
-                            continue
                         }
                     }
+                    i += 1
+                }
+                while i < n {
+                    if textBase[i] >= 0x80 { return nil }
                     i += 1
                 }
                 return .completed(matches)
             } else {
                 // Case-sensitive ASCII query: works on ANY UTF-8 buffer (ASCII or Unicode) because ASCII bytes never occur inside multi-byte sequences.
                 let firstByte = qBytes[0]
+                let lastByte = qBytes[m - 1]
                 var matches: [TextRange] = []
+                matches.reserveCapacity(min(32, maxMatches))
                 let limit = n - m
                 var i = 0
                 var utf16Offset = 0
 
-                while i <= limit {
-                    let b = textBase[i]
-                    if b == firstByte {
-                        var matched = true
-                        var j = 1
-                        while j < m {
-                            if textBase[i + j] != qBytes[j] {
+                return qBytes.withUnsafeBufferPointer { qBuf in
+                    guard let qBase = qBuf.baseAddress else { return .completed([]) }
+                    while i <= limit {
+                        let b = textBase[i]
+                        if b == firstByte {
+                            let matched: Bool
+                            if m == 1 {
+                                matched = true
+                            } else if textBase[i + m - 1] != lastByte {
                                 matched = false
-                                break
+                            } else if m == 2 {
+                                matched = true
+                            } else {
+                                matched = memcmp(textBase.advanced(by: i + 1), qBase.advanced(by: 1), m - 2) == 0
                             }
-                            j += 1
-                        }
-                        if matched {
-                            if matches.count >= maxMatches {
-                                return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
+                            if matched {
+                                if matches.count >= maxMatches {
+                                    return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
+                                }
+                                matches.append(TextRange(location: utf16Offset, length: m))
+                                i += m
+                                utf16Offset += m
+                                continue
                             }
-                            matches.append(TextRange(location: utf16Offset, length: m))
-                            i += m
-                            utf16Offset += m
-                            continue
+                            utf16Offset += 1
+                            i += 1
+                        } else if b < 0x80 {
+                            utf16Offset += 1
+                            i += 1
+                        } else if b < 0xE0 {
+                            utf16Offset += 1
+                            i += 2
+                        } else if b < 0xF0 {
+                            utf16Offset += 1
+                            i += 3
+                        } else {
+                            utf16Offset += 2
+                            i += 4
                         }
-                        utf16Offset += 1
-                        i += 1
-                    } else if b < 0x80 {
-                        utf16Offset += 1
-                        i += 1
-                    } else if b < 0xE0 {
-                        utf16Offset += 1
-                        i += 2
-                    } else if b < 0xF0 {
-                        utf16Offset += 1
-                        i += 3
-                    } else {
-                        utf16Offset += 2
-                        i += 4
                     }
+                    return .completed(matches)
                 }
-                return .completed(matches)
             }
         } ?? nil
     }

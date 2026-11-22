@@ -294,3 +294,27 @@ public struct MacOSWorkspaceAdapter: DesktopWorkspaceIntegrating {
         #endif
     }
 }
+
+/// One session of the bottom Terminal panel (`Cmd+J`): an external allowlisted terminal opened in `directory`.
+public struct TerminalPanelSession: Identifiable, Equatable, Sendable {
+    public enum State: Equatable, Sendable {
+        case pending
+        case running(appName: String, since: Date)
+        /// Launch or runtime failure reported in the panel instead of crashing SwiftEdit.
+        case failed(message: String)
+    }
+
+    public let id: UUID
+    public let title: String
+    public var directory: URL
+    public var state: State
+    /// Bundle identifier of the launched terminal (used to detect when that app quits or crashes).
+    public var bundleIdentifier: String?
+
+    public init(id: UUID = UUID(), title: String, directory: URL, state: State = .pending) {
+        self.id = id
+        self.title = title
+        self.directory = directory
+        self.state = state
+    }
+}

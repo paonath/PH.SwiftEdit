@@ -2,19 +2,21 @@ import Foundation
 
 /// Editing language of a tab, resolved once from its filename and cached on `TabDescriptor` (`BC-001`, `AR-009`).
 ///
-/// A closed `enum` (not a language-plugin protocol) because only two variants carry behavior; dispatch stays an explicit,
+/// A closed `enum` (not a language-plugin protocol) with a handful of variants; dispatch stays an explicit,
 /// allocation-free `switch` at each engine entry point.
 public enum DocumentLanguage: String, Codable, Sendable, CaseIterable {
-    case markdown, yaml, plainText
+    case markdown, yaml, log, plainText
 
     private static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd"]
     private static let yamlExtensions: Set<String> = ["yml", "yaml"]
+    private static let logExtensions: Set<String> = ["log"]
 
     /// Status-bar label (`UI-001`).
     public var statusBarLabel: String {
         switch self {
         case .markdown: return "Markdown"
         case .yaml: return "YAML"
+        case .log: return "Log"
         case .plainText: return "Plain Text"
         }
     }
@@ -32,6 +34,7 @@ public enum DocumentLanguage: String, Codable, Sendable, CaseIterable {
         if ext.isEmpty { return filename.hasPrefix("Untitled") ? .markdown : .plainText }
         if markdownExtensions.contains(ext) { return .markdown }
         if yamlExtensions.contains(ext) { return .yaml }
+        if logExtensions.contains(ext) { return .log }
         return .plainText
     }
 }

@@ -22,8 +22,8 @@ struct ConstitutionFitnessTests {
         // WHEN validating the constitutional root manifest and area mini-indexes
         let summary = try ConstitutionGovernanceValidator.validateConstitutionRoot(at: openspecRoot)
 
-        // THEN version is 1.5.0, Single-Reference Lock is enabled, and zero governance violations exist
-        #expect(summary.version == "1.5.0")
+        // THEN version is 1.6.0, Single-Reference Lock is enabled, and zero governance violations exist
+        #expect(summary.version == "1.6.0")
         #expect(summary.singleReferenceLock == true)
         #expect(summary.violations.isEmpty)
     }
@@ -62,7 +62,7 @@ struct ConstitutionFitnessTests {
         // THEN violations flag stale version (SDD-006), missing 1.4.0/1.5.0 sync rows (SDD-006), and line-cap overflows (SDD-004)
         #expect(summary.version == "1.3.0")
         #expect(summary.violations.count >= 5)
-        #expect(summary.violations.contains { $0.ruleID == "SDD-006" && $0.reason.contains("Expected version 1.5.0") })
+        #expect(summary.violations.contains { $0.ruleID == "SDD-006" && $0.reason.contains("Expected version 1.6.0") })
         #expect(summary.violations.contains { $0.ruleID == "SDD-006" && $0.reason.contains("1.4.0 Sync Impact Report row citing UI-002") })
         #expect(summary.violations.contains { $0.ruleID == "SDD-006" && $0.reason.contains("1.5.0 Sync Impact Report row citing SEC-001") })
         #expect(summary.violations.contains { $0.ruleID == "SDD-004" && $0.filePath == "Constitution.md" })

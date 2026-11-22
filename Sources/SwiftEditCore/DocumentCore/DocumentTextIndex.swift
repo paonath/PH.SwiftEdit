@@ -92,6 +92,33 @@ public struct DocumentTextIndex: Sendable, Equatable {
         let lineStart = (!isCRLF.isEmpty && isCRLF[k - 1] && b + 1 < caret) ? b + 2 : b + 1
         return (k + 1, caret - lineStart + 1)
     }
+
+    /// Returns the UTF-16 content range (excluding trailing line break) of the line containing `caret` in `O(log L)` without `NSString` bridging.
+    public func lineContentRange(atUTF16Offset caret: Int) -> TextRange {
+        let clamped = min(max(0, caret), utf16Count)
+        let k = breaksBefore(clamped)
+        let lineStart: Int
+        if k == 0 {
+            lineStart = 0
+        } else {
+            let prevBreak = breakStarts[k - 1]
+            let prevStep = (!isCRLF.isEmpty && isCRLF[k - 1]) ? 2 : 1
+            if prevStep == 2 && clamped == prevBreak + 1 {
+                // Caret between \r and \n belongs to the preceding line (matches NSString.lineRange semantics).
+                if k == 1 {
+                    lineStart = 0
+                } else {
+                    let prevPrev = breakStarts[k - 2]
+                    let prevPrevStep = (!isCRLF.isEmpty && isCRLF[k - 2]) ? 2 : 1
+                    lineStart = prevPrev + prevPrevStep
+                }
+                return TextRange(location: lineStart, length: max(0, prevBreak - lineStart))
+            }
+            lineStart = prevBreak + prevStep
+        }
+        let lineEnd = (k < breakStarts.count) ? breakStarts[k] : utf16Count
+        return TextRange(location: lineStart, length: max(0, lineEnd - lineStart))
+    }
 }
 
 /// Single-entry cache keyed strictly by `(DocumentID, BufferRevision)`: a same-length edit always produces a new
