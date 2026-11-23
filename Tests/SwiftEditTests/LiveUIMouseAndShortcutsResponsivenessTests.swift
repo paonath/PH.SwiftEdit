@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuartzCore
 import SwiftUI
 import Testing
 @testable import SwiftEditCore
@@ -252,6 +253,7 @@ struct LiveUIMouseAndShortcutsResponsivenessTests {
         - Press `Cmd+D` to duplicate the current line or selection.
         - duplicate
         - Press `Cmd++` / `Cmd+-` / `Cmd+0` to scale Editor Zoom (`50%..300%`).
+        - Open a sandboxed folder on the left to inspect hidden dotfiles (`.env`, `.gitignore`).
         - Try `#HeadingWithoutSpace` or `[XSS](javascript:alert(1))` to test live AST linting.
         - Try `#HeadingWithoutSpace` or `[XSS](javascript:alert(1))` to test live AST linting.
         """
@@ -341,7 +343,54 @@ struct LiveUIMouseAndShortcutsResponsivenessTests {
         hostingView.layoutSubtreeIfNeeded()
 
         #expect(model.activeHighlightProjection.wordOccurrenceRanges.contains(SwiftEditCore.TextRange(location: h2.location, length: h2.length)))
+        #expect(textView.liveWordOccurrenceRanges.contains(SwiftEditCore.TextRange(location: h2.location, length: h2.length)))
         let h2Rect = rectForUTF16Range(h2)
         #expect(bitmapHasSoftPurpleHighlight(in: h2Rect), "Expected line 9 '#HeadingWithoutSpace' inside backticks to render with wordOccurrenceBackground (#DDD6FE)")
+
+        // Case 3: Exact user repro from -beta5 screenshot:
+        // Start from default Welcome.md, place caret on "sandboxed" line, press Cmd+D twice, then select "sandboxed" on line 8 via Shift+RightArrow (moveRightAndModifySelection:)!
+        let welcomeText = model.activeDocumentSession?.text ?? ""
+        let sandboxedFirst = (welcomeText as NSString).range(of: "sandboxed")
+        textView.setSelectedRange(NSRange(location: sandboxedFirst.location, length: 0))
+        Self.pumpMainRunLoop(milliseconds: 20)
+        hostingView.layoutSubtreeIfNeeded()
+
+        // Press Cmd+D twice
+        model.performCommandD()
+        Self.pumpMainRunLoop(milliseconds: 30)
+        hostingView.layoutSubtreeIfNeeded()
+        model.performCommandD()
+        Self.pumpMainRunLoop(milliseconds: 30)
+        hostingView.layoutSubtreeIfNeeded()
+
+        // Now find the 2nd "sandboxed" (line 8) and select it character-by-character with Shift+RightArrow (moveRightAndModifySelection:)
+        let afterCmdD = textView.string as NSString
+        let sb1 = afterCmdD.range(of: "sandboxed")
+        let sb2 = afterCmdD.range(of: "sandboxed", range: NSRange(location: NSMaxRange(sb1), length: afterCmdD.length - NSMaxRange(sb1)))
+        let sb3 = afterCmdD.range(of: "sandboxed", range: NSRange(location: NSMaxRange(sb2), length: afterCmdD.length - NSMaxRange(sb2)))
+        #expect(sb1.location != NSNotFound && sb2.location != NSNotFound && sb3.location != NSNotFound)
+
+        textView.setSelectedRange(NSRange(location: sb2.location, length: 0))
+        Self.pumpMainRunLoop(milliseconds: 20)
+        window.displayIfNeeded()
+        CATransaction.flush()
+
+        for _ in 0..<sb2.length {
+            textView.moveRightAndModifySelection(nil)
+        }
+        // Notice: EVEN BEFORE pumpMainRunLoop / SwiftUI updateNSView, SwiftEditNSTextView.liveWordOccurrenceRanges is ALREADY populated synchronously!
+        #expect(textView.liveWordOccurrenceRanges == [
+            SwiftEditCore.TextRange(location: sb1.location, length: sb1.length),
+            SwiftEditCore.TextRange(location: sb3.location, length: sb3.length),
+        ])
+
+        window.displayIfNeeded()
+        CATransaction.flush()
+        #expect(bitmapHasSoftPurpleHighlight(in: rectForUTF16Range(sb1)))
+        #expect(bitmapHasSoftPurpleHighlight(in: rectForUTF16Range(sb3)))
+
+        // And deselecting clears liveWordOccurrenceRanges immediately:
+        textView.setSelectedRange(NSRange(location: sb2.location, length: 0))
+        #expect(textView.liveWordOccurrenceRanges.isEmpty)
     }
 }
