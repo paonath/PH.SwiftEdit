@@ -55,6 +55,8 @@ final class SwiftEditNSTextView: NSTextView {
     var onWordOccurrencesUpdated: (([SwiftEditCore.TextRange]) -> Void)?
     /// ESC hook (navigator / distraction-free); returns `true` when consumed.
     var onEscape: (() -> Bool)?
+    /// Context-menu hook invoked by right-click "Send to Terminal" when text is selected.
+    var onSendSelectionToTerminal: ((NSRange, String) -> Void)?
     private var lastHighlightedLineRect: NSRect?
     private(set) var liveWordOccurrenceRanges: [SwiftEditCore.TextRange] = []
     private var lastScannedSelection = NSRange(location: NSNotFound, length: 0)
@@ -71,6 +73,33 @@ final class SwiftEditNSTextView: NSTextView {
     override func cancelOperation(_ sender: Any?) {
         if onEscape?() == true { return }
         super.cancelOperation(sender)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let selectionBeforeMenu = selectedRange()
+        let baseMenu = super.menu(for: event) ?? NSMenu()
+        if selectionBeforeMenu.length > 0, onSendSelectionToTerminal != nil {
+            if selectedRange() != selectionBeforeMenu {
+                setSelectedRange(selectionBeforeMenu)
+            }
+            let item = NSMenuItem(
+                title: "Send to Terminal",
+                action: #selector(handleSendSelectionToTerminalMenuAction(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = NSValue(range: selectionBeforeMenu)
+            baseMenu.insertItem(NSMenuItem.separator(), at: 0)
+            baseMenu.insertItem(item, at: 0)
+        }
+        return baseMenu
+    }
+
+    @objc private func handleSendSelectionToTerminalMenuAction(_ sender: Any?) {
+        let captured = (sender as? NSMenuItem)?.representedObject as? NSValue
+        let sel = captured?.rangeValue ?? selectedRange()
+        guard sel.length > 0 else { return }
+        onSendSelectionToTerminal?(sel, textStorage?.string ?? string)
     }
 
     override func didChangeText() {
@@ -422,6 +451,7 @@ struct TextKit2EditorView: NSViewRepresentable {
     var editorFocusRequestToken: Int = 0
     var onViewportMetricsChange: ((GutterViewportMetrics) -> Void)? = nil
     var onEscape: () -> Bool = { false }
+    var onSendSelectionToTerminal: ((SwiftEditCore.TextRange, String) -> Void)? = nil
     /// Font resolver and its change counter (`REQ-008`); a new generation restyles the canvas and GFM/YAML faces.
     var typography: AppTypography = AppTypography.fallback
     var typographyGeneration: Int = 0
@@ -452,6 +482,11 @@ struct TextKit2EditorView: NSViewRepresentable {
         context.coordinator.activeBufferRevision = bufferRevision
         textView.delegate = context.coordinator
         textView.onEscape = onEscape
+        textView.onSendSelectionToTerminal = onSendSelectionToTerminal.map { handler in
+            { nsRange, text in
+                handler(SwiftEditCore.TextRange(location: nsRange.location, length: nsRange.length), text)
+            }
+        }
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -513,6 +548,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         if let textView = scrollView.documentView as? SwiftEditNSTextView {
             textView.delegate = nil
             textView.onEscape = nil
+            textView.onSendSelectionToTerminal = nil
             textView.onWordOccurrencesUpdated = nil
             textView.textLayoutManager?.renderingAttributesValidator = nil
         }
@@ -533,6 +569,11 @@ struct TextKit2EditorView: NSViewRepresentable {
         coordinator.undoRegistry = undoRegistry
         coordinator.activeBufferRevision = bufferRevision
         coordinator.syntaxLanguage = documentLanguage
+        textView.onSendSelectionToTerminal = onSendSelectionToTerminal.map { handler in
+            { nsRange, text in
+                handler(SwiftEditCore.TextRange(location: nsRange.location, length: nsRange.length), text)
+            }
+        }
         textView.isWordOccurrenceHighlightEnabled = isWordOccurrenceHighlightEnabled
         textView.externalWordOccurrenceRanges = highlightProjection.wordOccurrenceRanges
         coordinator.wordOccurrenceRanges = textView.effectiveWordOccurrenceRanges

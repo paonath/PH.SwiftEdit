@@ -21,6 +21,8 @@
 
 SwiftEdit is a lightweight native document editor built with Apple frameworks (SwiftUI, AppKit, and TextKit 2). It launches into full screen by default, persists user preferences as human-readable JSON in `~/.SwiftEdit/settings.json`, works completely offline while editing, and keeps your files on your Mac with zero telemetry and no accounts.
 
+Read the complete, chapter-by-chapter **[SwiftEdit User Guide](docs/guide/00-index.md)** (also bundled offline inside the app under **Help → SwiftEdit Help**, `Shift+Cmd+?`).
+
 ## Features
 
 ### Editing
@@ -28,8 +30,9 @@ SwiftEdit is a lightweight native document editor built with Apple frameworks (S
 - **TextKit 2 engine** with line-number gutter, current-line highlight, nested bracket matching, `Cmd+W` Word Wrap toggle, and `50%`–`300%` zoom that scales tabs, the folder navigator, and the gutter together.
 - **Multi-level highlighting** with WCAG-verified contrast in Light and Black modes:
   - Antique parchment-yellow highlighting for inline and fenced backtick code spans.
-  - High-contrast purple selection with soft secondary highlighting and non-color-only underlines for all other whole-word occurrences of the selected word.
-- **Tabs and sessions** with pinning, reordering, dynamic untitled tab names, unsaved-change prompts, and automatic crash recovery.
+  - High-contrast purple selection with synchronous soft secondary highlighting and non-color-only underlines for all other occurrences of the selected word or token (in both the editor and the integrated log viewer).
+- **Inline ghost-text completion & contextual actions**: in-memory per-document word completion (`Tab` accepts, `Esc` dismisses), repeated double-click cycle (`word → token → caret`), `Cmd+Return` contextual palette (Surround With, **Send to Terminal** without auto-Return and with multiline confirmation warning, and Duplicate Document), plus right-click **Send to Terminal** on any selection in the editor or log viewer.
+- **Clean startup, tabs & sessions**: opens onto a clean empty workspace on first launch, automatically reopens pinned documents on restart, supports tab pinning/reordering, dynamic untitled tab names, unsaved-change prompts, and automatic crash recovery.
 - **Explicit save** preserving text encoding (`UTF-8`, `UTF-16`) and line endings (`LF`, `CRLF`, `CR`).
 - **Literal Find & Replace**, Go to Line (`Cmd+G`), and duplicate line or selection (`Cmd+D`).
 - **Typography and themes**: choose interface and editor fonts in Settings (`Cmd+,`) from system fonts, bundled OpenDyslexic, or default monospaced; Light, Black, and Auto appearance modes with WCAG 2.2 AA contrast.
@@ -57,9 +60,9 @@ SwiftEdit is a lightweight native document editor built with Apple frameworks (S
 ### Workspace, Embedded Terminal, and Updates
 
 - **Drag & Drop**: drop files onto SwiftEdit to open them in tabs; drop folders to open them in the left Folder Navigator.
-- **Folder Navigator** (`Cmd+B`) with file operations, Finder reveal, path copy, and external terminal handoff (Terminal, iTerm2, Warp, Ghostty, and others configured in **Settings → Terminal**).
+- **Folder Navigator** (`Cmd+B`) with file operations, Finder reveal, path copy, and external terminal handoff configured in **Settings → Terminal**.
 - **Embedded Terminal (`Cmd+J`)**: resizable VT100/xterm-256color terminal emulator built directly inside SwiftEdit (`SwiftTerm`) with GPU Metal rendering, multi-session tabs, and automatic clean process teardown on close.
-- **Side-by-side diff** against the last saved version.
+- **Side-by-side File Compare (`Shift+Cmd+D`)** against the last saved version or any other open tab.
 - **In-app Updates (`Check for Updates…`)**: checks GitHub Releases (`paonath/PH.SwiftEdit`), verifies SHA-256 checksums, quits the running instance, swaps `SwiftEdit.app` atomically, preserves quarantine-free status if previously unquarantined, and relaunches automatically.
 
 ## Requirements
@@ -145,6 +148,7 @@ Release builds apply `-Osize`, whole-module compilation, ThinLTO, dead-code stri
 
 | Document | Scope |
 | :--- | :--- |
+| **[SwiftEdit User Guide](docs/guide/00-index.md)** | Complete chapter-by-chapter documentation (also bundled offline in **Help → SwiftEdit Help**) |
 | [Color schemes and layout](docs/design/color-schemes-and-zed-layout.md) | Color tokens, editor canvas, and layout |
 | [App icons](docs/design/assets/app-icons-riepilogo.md) | Logo master and icon sets for macOS and iOS |
 | [Constitution](openspec/Constitution.md) | Architecture, security, and testing rules of the project |

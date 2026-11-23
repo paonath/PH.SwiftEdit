@@ -1,5 +1,5 @@
 ---
-title: "Specifica Pre-Sviluppo: Brand Logo Concept E2, Icone App (macOS + iPhone), Schemi Colori Viola, Contrasto Editor Puro B/W & Layout Zed-Minimal"
+title: "Specifica Pre-Sviluppo: Brand Logo Concept E2, Icone App (macOS + iPhone), Schemi Colori Viola, Contrasto Editor Puro B/W & Layout Minimal"
 project: "PH.SwiftEdit"
 version: "1.2.0"
 created_at: "2026-11-17 15:14:00 UTC"
@@ -17,7 +17,7 @@ target_docs_path: "docs/design/color-schemes-and-zed-layout.md"
 
 Il brand visivo di `PH.SwiftEdit` è ancorato al **Logo Concept E2** ([logo-e2-refined.svg](assets/logo-e2-refined.svg) / [logo-e2-refined-512.png](assets/logo-e2-refined-512.png)) e documentato in [app-icons-riepilogo.md](assets/app-icons-riepilogo.md):
 - **Geometria SVG (`viewBox="0 0 512 512"`)**:
-  - **Sfondo (`logo-ground`)**: squircle `512×512 px` (`rx="96"`) in **Obsidian Violet `#0B0614`** (quasi nero con sottotono viola profondo).
+  - **Sfondo (`logo-ground`)**: squircle `512×512 px` (`rx="96"`) in **Deep Violet `#0B0614`** (quasi nero con sottotono viola profondo).
   - **Triangolo Rovesciato (`M56 96 H456 L256 460 Z`)**: base superiore orizzontale di `400 px` (`x: 56..456`, `y: 96`) e vertice inferiore a `(256, 460)` (altezza `364 px`, lati obliqui `~415.4 px`, scarto `~4%` dall'equilatero matematico, con `stroke="#A78BFA"`, `stroke-width="16"`, `stroke-linejoin="round"`).
   - **Piuma Stilizzata (`Swift` + `Edit`)**: piuma con punta ricurva superiore destra e stelo posizionato a `~14 px` dal lato sinistro del triangolo (`transform="translate(262 250) scale(0.74) translate(-300 -305)"`), riempita con gradiente verticale lineare **`#C4B5FD` (`offset="0"`) → `#7C3AED` (`offset="1"`)** e intagliata in negativo (`#0B0614`) da rachide centrale (`stroke-width="7"`) e **19 barbe** (`11` a sinistra, `8` a destra, `stroke-width="9"`).
 
@@ -83,31 +83,31 @@ flowchart TD
 | `brand.logo.featherGradient` | Gradiente verticale piuma (`#C4B5FD` → `#7C3AED`) | `#C4B5FD` → `#7C3AED` | `#C4B5FD` → `#7C3AED` | Badge brand, spilla Pin Tab, highlight |
 | `chrome.window.background` | Barra titolo e sfondo principale del guscio app | `#F3E8FF` *(Purple 100)* | `#0B0614` *(Esatto `logo-ground` SVG)* | Continuità totale tra icona macOS e finestra Dark |
 | `chrome.sidebar.background` | Sidebar Folder Navigator collassabile (con file nascosti) | `#EDE0FF` *(Purple 150)* | `#140A24` *(Deep Violet 950)* | Distinto dall'editor centrale `#000000` |
-| `chrome.tabbar.background` | Striscia Tab stile Notepad++ | `#E9D5FF` *(Purple 200)* | `#180C2C` *(Deep Violet 925)* | Ospita tab aperti, `Untitled` e `Pinned` |
+| `chrome.tabbar.background` | Striscia Tab con supporto Pin | `#E9D5FF` *(Purple 200)* | `#180C2C` *(Deep Violet 925)* | Ospita tab aperti, `Untitled` e `Pinned` |
 | `chrome.tab.active.background` | Tab attivo selezionato | `#FFFFFF` *(Bianco puro)* | `#000000` *(Nero puro)* | Si fonde senza cuciture con l'editor |
 | `chrome.tab.pinned.badge` | Icona spilla (`Pin`) e indicatore tab modificato (`*`) | `#7C3AED` *(Esatto stop finale piuma SVG)* | `#C4B5FD` *(Esatto stop iniziale piuma SVG)* | Evidenziazione immediata stato Pin |
 | `chrome.statusbar.background` | Barra di stato inferiore (Encoding, CRLF/LF, Lint, Zoom %) | `#7C3AED` *(Esatto stop finale piuma SVG)* | `#2E1065` *(Violet 950)* | Testo `#FFFFFF` (`>= 7:1` WCAG AAA) |
 | `chrome.accent.primary` | Focus ring, pulsanti attivi, cursore ricerca, badge Zoom | `#7C3AED` *(Esatto `#7C3AED` SVG)* | `#A78BFA` *(Esatto `#A78BFA` SVG)* | Armonia 1:1 con `logo-e2-refined.svg` |
-| `chrome.border.hairline` | Separatori `1pt` tra sidebar, tab bar ed editor | `#C4B5FD` *(Esatto `#C4B5FD` SVG)* | `#3B1D6E` *(Violet 800)* | Griglia `4pt` minimale stile Zed |
+| `chrome.border.hairline` | Separatori `1pt` tra sidebar, tab bar ed editor | `#C4B5FD` *(Esatto `#C4B5FD` SVG)* | `#3B1D6E` *(Violet 800)* | Griglia `4pt` minimale |
 | **`editor.canvas.background`** | **Sfondo area centrale di editing del file** | **`#FFFFFF` *(Bianco Puro)*** | **`#000000` *(Nero Puro)*** | **Inversione obbligatoria Light/Dark (`UI-002`)** |
 | **`editor.canvas.foreground`** | **Carattere principale del testo nell'editor** | **`#000000` *(Nero Puro)*** | **`#FFFFFF` *(Bianco Puro)*** | **Rapporto di contrasto `21:1` assoluto** |
 | `editor.gutter.foreground` | Numeri di riga e indicatori folding Markdown | `#5B21B6` *(Violet 800)* | `#A78BFA` *(Esatto `#A78BFA` SVG)* | Leggibile su `#FFFFFF` e `#000000` (`>= 4.8:1`) |
 | `editor.selection.background` | Selezione testo attiva (inclusa duplicazione `Cmd+D`) | `#DDD6FE` *(Violet 200)* | `#3B0764` *(Purple 950)* | Mantiene leggibile il testo selezionato |
 | `editor.bracket.match` | Evidenziazione parentesi bilanciate `(){}[]` | `#EDE9FE` + bordo `#7C3AED` | `#2E1065` + bordo `#A78BFA` | Rettangolo `1pt` attorno a apertura/chiusura |
 | `editor.bracket.unbalanced` | Parentesi spaiata / non bilanciata | `#FEE2E2` + bordo `#DC2626` | `#450A0A` + bordo `#F87171` | Segnalazione immediata errore `(){}[]` |
-| `editor.diff.inserted` | Righe/token aggiunti in **File Compare** | `#DCFCE7` (testo `#000000`) | `#052E16` (testo `#FFFFFF`) | Stile VS Code Side-by-Side / Inline |
-| `editor.diff.removed` | Righe/token rimossi in **File Compare** | `#FEE2E2` (testo `#000000`) | `#450A0A` (testo `#FFFFFF`) | Stile VS Code Side-by-Side / Inline |
+| `editor.diff.inserted` | Righe/token aggiunti in **File Compare** | `#DCFCE7` (testo `#000000`) | `#052E16` (testo `#FFFFFF`) | Vista Side-by-Side / Inline |
+| `editor.diff.removed` | Righe/token rimossi in **File Compare** | `#FEE2E2` (testo `#000000`) | `#450A0A` (testo `#FFFFFF`) | Vista Side-by-Side / Inline |
 | `banner.binary.warning` | Banner file binario aperto in sola lettura testo | `#FEF3C7` + bordo `#D97706` | `#451A03` + bordo `#F59E0B` | **Save & Pin disabilitati, zero persistenza** |
 
 ---
 
-## 4. Anatomia del Layout Minimal (Zed + Notepad++ + VS Code) & Modalità Zoom
+## 4. Anatomia del Layout Minimal & Modalità Zoom
 
 ```
 +--------------------------------------------------------------------------------------------------+
 | [● ● ●] [🪶] [Sidebar ◧] PH.SwiftEdit — workspace/                  [Light|Black|Auto] [Zoom 125%]| <- Chrome Viola (#0B0614 / #F3E8FF)
 +----------------------+---------------------------------------------------------------------------+
-| FOLDER NAVIGATOR     | [📌 Constitution.md] [README.md *] [Untitled-1 *] [⚠️ payload.bin (RO)] [+] | <- Tab Bar Notepad++
+| FOLDER NAVIGATOR     | [📌 Constitution.md] [README.md *] [Untitled-1 *] [⚠️ payload.bin (RO)] [+] | <- Tab Bar con Pin
 | ▾ PH.SwiftEdit       +---------------------------------------------------------------------------+
 |   📄 .gitignore    • | ⚠️ FILE BINARIO: Vista ispettiva testo sola-lettura (Salvataggio e Pin    | <- Solo su binari
 |   📄 .env          • |    disabilitati; il file non verrà mantenuto in memoria/tab alla chiusura)|
@@ -130,8 +130,8 @@ flowchart TD
    - Il file vettoriale master `logo-e2-refined.svg` viene preservato in `docs/design/assets/logo-e2-refined.svg` (e usato anche per l'header About Box di `PH.SwiftEdit`).
 2. **Modalità Zoom dell'Editor (`UI-004`)**:
    - **Text/Viewport Zoom (`50%..300%`, step `10%`)**: `Cmd++` / `Cmd+-` / `Cmd+0` (reset `100%`) e pinch-to-zoom su trackpad senza alterare il file salvato.
-   - **Editor Pane Focus Zoom (`Ctrl+Cmd+Z`, stile Zed `ToggleZoom`)**: collassa temporaneamente Folder Navigator e pannelli secondari portando il canvas Bianco/Nero a tutto schermo dentro la cornice Viola.
-3. **Gestione Tab stile Notepad++ & Quarantena File Binari (`BC-008`, `DATA-003..006`, `UI-008`)**:
+   - **Editor Pane Focus Zoom (`Option+1`, Distraction-Free)**: collassa temporaneamente Folder Navigator e pannelli secondari portando il canvas Bianco/Nero a tutto schermo.
+3. **Gestione Tab con Pin & Quarantena File Binari (`BC-008`, `DATA-003..006`, `UI-008`)**:
    - Pin Tab (`📌`), ripristino automatico allo startup e autosave atomico in `Application Support/PH.SwiftEdit/SessionRecovery/` con unlink immediato alla chiusura del tab e GC all'avvio.
    - I **file binari** (inclusi i `.png` se cliccati nel Folder Navigator!) vengono mostrati in vista ispettiva testo **sola-lettura** con banner d'avviso: **mai salvabili (`DomainError.binaryFileSaveForbidden`)**, **mai pinnabili** e **mai mantenuti in memoria/tab/sessione**.
 

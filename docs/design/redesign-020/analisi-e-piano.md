@@ -1,6 +1,6 @@
 ---
-title: "Rivisitazione grafica PH.SwiftEdit ispirata a Zed: inventario visivo, correzioni integrate e set icone"
-summary: "Inventario di tutte le superfici visive dell'app in Light e Dark, confronto prima/dopo con i mockup Zed, correzioni V-01..V-03 e R-01..R-10 integrate, nuovo set di icone a linea AppIcon (50 icone) con logo Concept E2 invariato, emendamento Constitution UI-001 v1.7.0."
+title: "Rivisitazione grafica PH.SwiftEdit: chrome neutro minimale, inventario visivo, correzioni integrate e set icone"
+summary: "Inventario di tutte le superfici visive dell'app in Light e Dark, confronto prima/dopo con i mockup di riferimento, correzioni V-01..V-03 e R-01..R-10 integrate, nuovo set di icone a linea AppIcon (50 icone) con logo Concept E2 invariato, emendamento Constitution UI-001 v1.7.0."
 commit: "7fad5f1"
 date: "2026-11-23"
 branch: "feature/contaxtual_actions"
@@ -13,7 +13,7 @@ review_date: "2026-12-23"
 
 - **Tutte le correzioni sono integrate**: bug visivi V-01..V-03 e migliorie R-01..R-10, compreso il set di icone.
 - **Il logo Concept E2 non è cambiato** (`SwiftEditBrandLogoView`, `AppIcon.appiconset`, schermata About).
-- **Constitution v1.7.0**: UI-001 passa da "Purple chrome" a "chrome neutro stile Zed con accenti viola" e cita il set `AppIcon`.
+- **Constitution v1.7.0**: UI-001 passa da "Purple chrome" a "chrome neutro minimale con accenti viola" e cita il set `AppIcon`.
 - Verifica: 379 test verdi, 32 snapshot "dopo" (16 stati × Light e Dark).
 
 ## Functional: Mockup di riferimento
@@ -77,7 +77,7 @@ Le superfici seguenti non sono negli snapshot, ma usano gli stessi token e icone
 
 ## Technical: Set icone `AppIcon`
 
-- **Implementazione:** [AppIcons.swift](../../../Sources/SwiftEditUI/Theme/AppIcons.swift). Sono 50 icone a linea originali, disegnate nel codice su griglia 24×24 con tratto di 2 unità (≈ 1,33 pt a 16 pt), cap e join arrotondati, nello stile Lucide/Zed.
+- **Implementazione:** [AppIcons.swift](../../../Sources/SwiftEditUI/Theme/AppIcons.swift). Sono 50 icone a linea originali, disegnate nel codice su griglia 24×24 con tratto di 2 unità (≈ 1,33 pt a 16 pt), cap e join arrotondati.
 - **Nessun asset né dipendenza:** niente download, niente licenze di terze parti, niente asset catalog.
 - **Uso:** `AppIconView(.folder, size: 14)`. È decorativa per default; `label:` la rende leggibile da VoiceOver.
 - **Core:** le azioni di `SwiftEditCore` (es. `ElementContextualAction.iconName`) referenziano le icone per nome semantico (`rawValue`).

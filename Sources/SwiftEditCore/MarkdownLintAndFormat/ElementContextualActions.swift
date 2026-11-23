@@ -5,8 +5,93 @@ import Foundation
 /// New action families are added as new cases plus one `ElementContextualActionCatalog` group, without touching the UI.
 public enum ElementContextualActionKind: Hashable, Sendable {
     case surround(SurroundStyle)
+    /// Workbench action (not a text edit): send the selected text into the embedded terminal without pressing Return.
+    case sendToTerminal
     /// Workbench action (not a text edit): duplicate the active document next to itself (`REQ-021-05`).
     case duplicateDocument
+}
+
+/// Sanitized selection payload ready to be written into an embedded PTY without automatic execution (`CWE-78`, `CWE-150`, `CWE-400`).
+public struct TerminalSelectionPayload: Equatable, Sendable {
+    /// Upper bound on text sent to the embedded terminal (64 KiB) to avoid PTY stalls (`CWE-400`).
+    public static let maxUTF16Length = 65_536
+
+    /// Sanitized text with normalized `\n` line breaks, trailing line breaks removed, and unsafe control/ESC bytes stripped.
+    public let text: String
+    /// Number of lines in `text` (`>= 1`).
+    public let lineCount: Int
+    /// `true` when `text` spans more than one line (triggers explicit multiline warning before delivery).
+    public var isMultiline: Bool { lineCount > 1 }
+
+    /// Wire representation for PTY delivery: single-line text is sent as-is (no trailing Return);
+    /// multiline text is framed with ANSI Bracketed Paste (`ESC[200~ ... ESC[201~`) when `bracketedPaste` is enabled.
+    public func wireText(bracketedPaste: Bool) -> String {
+        (isMultiline && bracketedPaste) ? "\u{1B}[200~\(text)\u{1B}[201~" : text
+    }
+
+    public init(text: String, lineCount: Int) {
+        self.text = text
+        self.lineCount = max(1, lineCount)
+    }
+
+    /// Extracts and sanitizes `selection` from `sourceText`, returning `nil` for binary, empty, overlong, or invalid ranges.
+    public static func prepare(
+        selection: TextRange,
+        in sourceText: String,
+        isBinaryReadOnly: Bool = false
+    ) -> TerminalSelectionPayload? {
+        guard !isBinaryReadOnly,
+              selection.location >= 0,
+              selection.length > 0,
+              selection.length <= maxUTF16Length else {
+            return nil
+        }
+        let utf16 = sourceText.utf16
+        guard let start = utf16.index(utf16.startIndex, offsetBy: selection.location, limitedBy: utf16.endIndex),
+              let end = utf16.index(start, offsetBy: selection.length, limitedBy: utf16.endIndex),
+              let scalarStart = start.samePosition(in: sourceText.unicodeScalars),
+              let scalarEnd = end.samePosition(in: sourceText.unicodeScalars) else {
+            return nil
+        }
+
+        var sanitized = String()
+        sanitized.reserveCapacity(selection.length)
+        var previousWasCR = false
+        for scalar in sourceText.unicodeScalars[scalarStart..<scalarEnd] {
+            let v = scalar.value
+            if v == 0x0D { // CR
+                sanitized.unicodeScalars.append(UnicodeScalar(0x0A)!)
+                previousWasCR = true
+                continue
+            }
+            if v == 0x0A { // LF
+                if !previousWasCR {
+                    sanitized.unicodeScalars.append(scalar)
+                }
+                previousWasCR = false
+                continue
+            }
+            previousWasCR = false
+            // Strip C0 control characters (including ESC 0x1B to prevent terminal escape/bracketed-paste breakout)
+            // and DEL (0x7F), preserving horizontal tab (0x09).
+            if (v < 0x20 && v != 0x09) || v == 0x7F {
+                continue
+            }
+            sanitized.unicodeScalars.append(scalar)
+        }
+
+        // Never append or forward trailing line breaks so sending text to the terminal NEVER auto-executes Return.
+        while sanitized.last == "\n" {
+            sanitized.removeLast()
+        }
+        guard !sanitized.isEmpty else { return nil }
+
+        var lines = 1
+        for byte in sanitized.utf8 where byte == 0x0A {
+            lines += 1
+        }
+        return TerminalSelectionPayload(text: sanitized, lineCount: lines)
+    }
 }
 
 /// Delimiter pairs offered by the "Surround With…" group.
@@ -74,6 +159,22 @@ public enum ElementContextualActionCatalog {
         ]
     )
 
+    public static let terminalGroup = ElementContextualActionGroup(
+        id: "terminal",
+        title: "Terminal",
+        iconName: "terminal",
+        actions: [
+            ElementContextualAction(
+                id: "terminal.sendSelection",
+                title: "Send to Terminal",
+                preview: "paste (no ↩)",
+                iconName: "terminal",
+                kind: .sendToTerminal
+            ),
+        ],
+        requiresSelection: true
+    )
+
     public static let documentGroup = ElementContextualActionGroup(
         id: "document",
         title: "Document",
@@ -85,7 +186,7 @@ public enum ElementContextualActionCatalog {
     )
 
     /// All groups in display order. Append new groups here to extend the menu.
-    public static let groups: [ElementContextualActionGroup] = [surroundGroup, documentGroup]
+    public static let groups: [ElementContextualActionGroup] = [surroundGroup, terminalGroup, documentGroup]
 
     /// Groups available for the current caret: selection-only groups disappear when nothing is selected (`REQ-021-05`).
     public static func groups(hasSelection: Bool) -> [ElementContextualActionGroup] {
@@ -105,7 +206,7 @@ public enum ElementContextualActionCatalog {
         switch kind {
         case .surround(let style):
             return surround(style, in: snapshot.text, range: scalarStart..<scalarEnd, selection: selection)
-        case .duplicateDocument:
+        case .sendToTerminal, .duplicateDocument:
             return nil
         }
     }

@@ -137,6 +137,7 @@ struct GFMEditorPipelineWiringTests {
 
         // GIVEN a Markdown tab holding a table and a list, with the preview untouched
         let text = "| a | b |\n|---|---|\n| 1 | 2 |\n\n- one\n- two\n"
+        model.newUntitledTab()
         model.handleEditorTextChanged(text)
         #expect(model.showMarkdownPreview == false)
         #expect(model.markdownPreviewDocument == nil)
