@@ -10,7 +10,7 @@ struct TranslucentHeaderBrandSubmenuTests {
     func p1ClickOnlyStickyNavigationAndZeroLayoutShift() {
         // GIVEN a closed click-only state machine and command catalog
         var click = HeaderSubmenuStateMachine()
-        let items = HeaderCommandCatalog.items(canSave: true, canFormat: true, showMarkdownPreview: false, showDiffPane: false)
+        let items = HeaderCommandCatalog.items(canSave: true, canFormat: true, showMarkdownPreview: false)
 
         // WHEN clicking to open, moving pointer across trigger/outside/trailingControls, waiting >= 1000 ms, and navigating items with keyboard helpers
         click.clickToggle()
@@ -117,10 +117,10 @@ struct TranslucentHeaderBrandSubmenuTests {
         let previewInitially = model.showMarkdownPreview
 
         // WHEN reading the catalog, toggling preview, and formatting the selected section
-        let items = HeaderCommandCatalog.items(canSave: true, canFormat: true, showMarkdownPreview: model.showMarkdownPreview, showDiffPane: false)
+        let items = HeaderCommandCatalog.items(canSave: true, canFormat: true, showMarkdownPreview: model.showMarkdownPreview)
         model.toggleMarkdownPreview()
         let previewAfter = model.showMarkdownPreview
-        let hideItem = HeaderCommandCatalog.items(canSave: true, canFormat: true, showMarkdownPreview: true, showDiffPane: false)
+        let hideItem = HeaderCommandCatalog.items(canSave: true, canFormat: true, showMarkdownPreview: true)
             .first { $0.id == .toggleMarkdownPreview }
         model.formatActiveSection()
         let session = try #require(model.activeDocumentSession)
@@ -191,8 +191,7 @@ struct TranslucentHeaderBrandSubmenuTests {
         let items = HeaderCommandCatalog.items(
             canSave: model.safetyBanner.canSave,
             canFormat: model.safetyBanner.canFormat,
-            showMarkdownPreview: false,
-            showDiffPane: false
+            showMarkdownPreview: false
         )
         model.saveActiveDocument()
         model.saveActiveDocumentAsViaPanel()

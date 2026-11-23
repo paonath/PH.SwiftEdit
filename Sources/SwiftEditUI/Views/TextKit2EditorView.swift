@@ -55,6 +55,46 @@ final class SwiftEditNSTextView: NSTextView {
         super.cancelOperation(sender)
     }
 
+    /// Selection that existed before the current click sequence started (read by the double-click cycle).
+    private var selectionBeforeClick = NSRange(location: 0, length: 0)
+
+    /// Repeated double-click cycle (`REQ-022-05`): word -> whitespace-free token -> no selection.
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 1 {
+            selectionBeforeClick = selectedRange()
+        } else if event.clickCount == 2 {
+            let point = convert(event.locationInWindow, from: nil)
+            let index = characterIndexForInsertion(at: point)
+            switch doubleClickOutcome(atCharacterIndex: index, previous: selectionBeforeClick) {
+            case .selectToken(let token):
+                setSelectedRange(NSRange(location: token.location, length: token.length))
+                return
+            case .deselect(let caret):
+                setSelectedRange(NSRange(location: caret, length: 0))
+                return
+            case .selectWord:
+                break
+            }
+        }
+        super.mouseDown(with: event)
+    }
+
+    /// Outcome of a double-click at `index` given the selection before the click (headless-testable).
+    func doubleClickOutcome(atCharacterIndex index: Int, previous: NSRange) -> DoubleClickSelectionCycle.Outcome {
+        let text = (textStorage?.string ?? "") as NSString
+        guard index >= 0, index <= text.length, text.length > 0 else { return .selectWord }
+        let probe = min(index, text.length - 1)
+        let word = selectionRange(forProposedRange: NSRange(location: probe, length: 0), granularity: .selectByWord)
+        guard word.length > 0 else { return .selectWord }
+        let wordRange = SwiftEditCore.TextRange(location: word.location, length: word.length)
+        let token = DoubleClickSelectionCycle.token(around: wordRange, in: text)
+        return DoubleClickSelectionCycle.outcome(
+            previous: SwiftEditCore.TextRange(location: previous.location, length: previous.length),
+            word: wordRange,
+            token: token
+        )
+    }
+
     override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
         let previousRange = selectedRange()
         super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
@@ -147,6 +187,42 @@ final class SwiftEditNSTextView: NSTextView {
     }
 }
 
+/// Inline ghost-text completion drawn right after the caret (`REQ-020-01`).
+///
+/// A non-interactive overlay subview of the text view: it never touches `NSTextContentStorage`, so the document, undo
+/// stack and `BufferRevision` stay untouched until `Tab` accepts it (`UI-006`). Opaque canvas background keeps it legible.
+@MainActor
+final class GhostCompletionView: NSView {
+    private(set) var suffix: String = ""
+    private var attributes: [NSAttributedString.Key: Any] = [:]
+    private var canvasColor: NSColor = .clear
+
+    override var isFlipped: Bool { true }
+
+    func configure(suffix: String, font: NSFont, textColor: NSColor, canvasColor: NSColor) {
+        self.suffix = suffix
+        self.canvasColor = canvasColor
+        attributes = [.font: font, .foregroundColor: textColor]
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel("Completion suggestion: \(suffix). Press Tab to accept.")
+        needsDisplay = true
+    }
+
+    var preferredWidth: CGFloat {
+        ceil((suffix as NSString).size(withAttributes: attributes).width) + 2
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        canvasColor.setFill()
+        bounds.fill()
+        (suffix as NSString).draw(at: .zero, withAttributes: attributes)
+    }
+
+    /// Clicks always reach the text view underneath.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// `@MainActor` TextKit 2 `NSTextView` wrapper enforcing `#FFFFFF`/`#000000` inverted canvas colors, current-line highlight, non-mutating nested bracket and backtick highlights, Markdown smart Enter continuation, `50%..300%` monospaced zoom, and read-only binary protection (`UI-002..008`, `UI-012`).
 @MainActor
 struct TextKit2EditorView: NSViewRepresentable {
@@ -180,6 +256,8 @@ struct TextKit2EditorView: NSViewRepresentable {
     var typographyGeneration: Int = 0
     /// Shared per-revision line index owned by the workbench (`PERF-017-B3`).
     var lineIndexProvider: ((DocumentID, BufferRevision) -> MarkdownLineIndex?)? = nil
+    /// Word-cache lookup returning the suffix that completes a typed prefix (`REQ-020-01`); `nil` disables ghost text.
+    var completionProvider: ((String) -> String?)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -226,6 +304,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         scrollView.contentView.postsBoundsChangedNotifications = true
         context.coordinator.onViewportMetricsChange = onViewportMetricsChange
         context.coordinator.lineIndexProvider = lineIndexProvider
+        context.coordinator.completionProvider = completionProvider
         context.coordinator.observeScrollBounds(of: scrollView, textView: textView)
         installGFMValidator(on: textView, coordinator: context.coordinator)
         return scrollView
@@ -252,6 +331,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         coordinator.onTableTab = onTableTab
         coordinator.onViewportMetricsChange = onViewportMetricsChange
         coordinator.lineIndexProvider = lineIndexProvider
+        coordinator.completionProvider = isEditable ? completionProvider : nil
         coordinator.undoRegistry = undoRegistry
         coordinator.activeBufferRevision = bufferRevision
         coordinator.syntaxLanguage = documentLanguage
@@ -264,6 +344,9 @@ struct TextKit2EditorView: NSViewRepresentable {
         )
 
         let stylingChanged = applyStylingIfNeeded(to: textView, in: scrollView, coordinator: coordinator, force: false)
+        if stylingChanged || coordinator.activeDocumentID != documentID {
+            coordinator.hideGhostCompletion()
+        }
 
         var textMutated = false
         let needsTextSyncCheck = coordinator.activeDocumentID != documentID
@@ -765,6 +848,12 @@ struct TextKit2EditorView: NSViewRepresentable {
         var activeDocumentID: DocumentID?
         var activeBufferRevision: BufferRevision?
         var hadNonMutatingHighlights = false
+        var completionProvider: ((String) -> String?)?
+        /// Visible ghost suggestion: caret location it belongs to and the suffix `Tab` inserts.
+        private(set) var ghostSuggestion: (location: Int, suffix: String)?
+        private var ghostView: GhostCompletionView?
+        /// Replacement string of the edit in flight, captured in `shouldChangeTextIn` (insertions only).
+        private var pendingInsertedString: String?
         var onViewportMetricsChange: ((GutterViewportMetrics) -> Void)?
         private var lastEmittedViewportMetrics: GutterViewportMetrics?
         private var scrollBoundsObserver: (any NSObjectProtocol)?
@@ -1204,16 +1293,100 @@ struct TextKit2EditorView: NSViewRepresentable {
             hasPendingLocalEdit = true
             updateNativeTextMirror(textView.string)
             onTextChange(nativeTextMirror?.text ?? textView.string)
+            let inserted = pendingInsertedString
+            pendingInsertedString = nil
+            refreshGhostCompletion(in: textView, inserted: inserted)
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            pendingInsertedString = affectedCharRange.length == 0 ? replacementString : nil
+            return true
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !isApplyingProgrammaticUpdate,
                   let textView = notification.object as? NSTextView else { return }
             let range = textView.selectedRange()
+            if let ghost = ghostSuggestion, range.length != 0 || range.location != ghost.location {
+                hideGhostCompletion()
+            }
             onSelectionChange(SwiftEditCore.TextRange(location: range.location, length: range.length))
         }
 
+        // MARK: Ghost-text completion (`REQ-020-01`)
+
+        /// Shows a suggestion only right after a single typed character that ends a word prefix of `>= 2` units.
+        func refreshGhostCompletion(in textView: NSTextView, inserted: String?) {
+            guard let provider = completionProvider, textView.isEditable, !textView.hasMarkedText(),
+                  let inserted, inserted.count == 1 else {
+                hideGhostCompletion()
+                return
+            }
+            let selection = textView.selectedRange()
+            let text = (textView.textStorage?.string ?? "") as NSString
+            guard selection.length == 0,
+                  let match = WordCompletionIndex.wordPrefix(endingAt: selection.location, in: text),
+                  let suffix = provider(match.prefix) else {
+                hideGhostCompletion()
+                return
+            }
+            showGhostCompletion(suffix, at: selection.location, in: textView)
+        }
+
+        private func showGhostCompletion(_ suffix: String, at location: Int, in textView: NSTextView) {
+            guard let window = textView.window else { return }
+            let screenRect = textView.firstRect(forCharacterRange: NSRange(location: location, length: 0), actualRange: nil)
+            guard screenRect != .zero else {
+                hideGhostCompletion()
+                return
+            }
+            let caretRect = textView.convert(window.convertFromScreen(screenRect), from: nil)
+            let view = ghostView ?? GhostCompletionView()
+            if view.superview !== textView {
+                textView.addSubview(view)
+            }
+            ghostView = view
+            view.configure(
+                suffix: suffix,
+                font: cachedRegularFont,
+                textColor: gfmPalette.editorCanvasText.nsColor.withAlphaComponent(0.42),
+                canvasColor: gfmPalette.editorCanvasBackground.nsColor
+            )
+            view.frame = NSRect(x: caretRect.minX + 1, y: caretRect.minY, width: view.preferredWidth, height: max(caretRect.height, cachedRegularFont.boundingRectForFont.height))
+            view.isHidden = false
+            ghostSuggestion = (location, suffix)
+        }
+
+        func hideGhostCompletion() {
+            ghostSuggestion = nil
+            ghostView?.isHidden = true
+        }
+
+        /// Inserts the visible suggestion as one undoable `insertText` (one `BufferRevision`); `false` when none applies.
+        func acceptGhostCompletion(in textView: NSTextView) -> Bool {
+            guard let ghost = ghostSuggestion, textView.isEditable else { return false }
+            let selection = textView.selectedRange()
+            guard selection.length == 0, selection.location == ghost.location else {
+                hideGhostCompletion()
+                return false
+            }
+            hideGhostCompletion()
+            textView.insertText(ghost.suffix, replacementRange: selection)
+            return true
+        }
+
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertTab(_:)), acceptGhostCompletion(in: textView) {
+                return true
+            }
+            if ghostSuggestion != nil,
+               commandSelector == #selector(NSResponder.cancelOperation(_:)) || commandSelector == #selector(NSTextView.complete(_:)) {
+                hideGhostCompletion()
+                return true
+            }
+            if ghostSuggestion != nil {
+                hideGhostCompletion()
+            }
             if commandSelector == #selector(NSResponder.insertTab(_:)) || commandSelector == #selector(NSResponder.insertBacktab(_:)) {
                 return handleListIndent(in: textView, outdent: commandSelector == #selector(NSResponder.insertBacktab(_:)))
             }

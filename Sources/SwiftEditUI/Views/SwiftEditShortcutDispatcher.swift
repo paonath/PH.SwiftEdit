@@ -179,6 +179,10 @@ public enum SwiftEditShortcutDispatcher {
             guard !isEditingOverlayTextField else { return false }
             if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.link) }
             return true
+        case "\r", "\u{3}":
+            // Cmd+Return / Cmd+Enter: contextual action palette, with or without a selection (`REQ-020-04`, `REQ-021-05`).
+            guard !isEditingOverlayTextField else { return false }
+            return model.presentElementContextualMenu()
         default:
             if key.keyCode == numpadPlusKeyCode {
                 model.zoomController.zoomIn()
@@ -218,6 +222,9 @@ public enum SwiftEditShortcutDispatcher {
         switch charsIgnored {
         case "w":
             model.requestCloseActiveTab()
+            return true
+        case "d":
+            model.toggleDiffPane()
             return true
         case "o":
             model.openFolderViaPanel()
@@ -272,6 +279,9 @@ public enum SwiftEditShortcutDispatcher {
         isEditingOverlayTextField: Bool
     ) -> Bool {
         switch charsIgnored {
+        case "/", "÷":
+            model.toggleShortcutsPanel()
+            return true
         case "f":
             model.presentFindBar(mode: .findAndReplace)
             return true

@@ -124,6 +124,10 @@ public struct SwiftEditCommands: Commands {
             Button("Go to Line…") { model?.presentFindBar(mode: .goToLine) }
                 .keyboardShortcut("g", modifiers: .command)
                 .disabled(model == nil)
+            Divider()
+            Button("Contextual Actions…") { model?.presentElementContextualMenu() }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(model?.canPresentElementContextualMenu != true)
         }
     }
 
@@ -159,6 +163,9 @@ public struct SwiftEditCommands: Commands {
             }
             .keyboardShortcut("w", modifiers: .command)
             .disabled(model == nil)
+            Button(model?.showDiffPane == true ? "Hide File Compare" : "Show File Compare") { model?.toggleDiffPane() }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(model == nil)
             Divider()
             Button("Toggle Terminal Panel") { model?.toggleTerminalPanel() }
                 .keyboardShortcut("j", modifiers: .command)
@@ -234,6 +241,11 @@ public struct SwiftEditCommands: Commands {
                 model?.isCheatSheetPresented = true
             }
             .keyboardShortcut("/", modifiers: .command)
+            .disabled(model == nil)
+            Button(model?.isShortcutsPanelVisible == true ? "Hide Keyboard Shortcuts Panel" : "Show Keyboard Shortcuts Panel") {
+                model?.toggleShortcutsPanel()
+            }
+            .keyboardShortcut("/", modifiers: [.command, .option])
             .disabled(model == nil)
             Divider()
             Button("About SwiftEdit") {

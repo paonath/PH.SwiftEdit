@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - 2026-11-23 UTC
+Branch: feature/contaxtual_actions | Base commit: 7fad5f1
+
+### Added
+- Added inline ghost-text word completion from words already in the document (in-memory per-document cache of words longer than 3 characters, rebuilt off the main thread); `Tab` accepts, `Esc` dismisses, and `Tab` keeps its list/table behaviour when no suggestion is shown (`openspec/specs/integrations-autocomplete-contextual-menu-and-redesign-plan/spec.md`).
+- Added the `Cmd+Return` contextual action palette (`ElementContextualMenu`): extensible groups, filter, keyboard navigation and VoiceOver labels; "Surround With…" (backticks, code fence, parentheses) on a selection and "Duplicate Document" with or without a selection; it closes like `Esc` on any outside click.
+- Added Duplicate Document: file-backed tabs are copied, including unsaved edits, to `name copy.ext` (then `name copy 2.ext` …, never overwriting) in the same folder and opened right after the source tab; untitled tabs are duplicated in memory only.
+- Added two-tab File Compare: the tab it is opened from is the source, a "Compare with" picker selects another open tab, and its X returns to comparing the saved version with the current buffer.
+- Added a searchable, clickable keyboard shortcuts list (title, description or shortcut in symbol or word form) to the floating `Cmd+/` sheet and as a right side panel (`Option+Cmd+/`); clicking a row runs the command on the editor caret or the workbench.
+- Added Light, Dark and Auto to the SwiftEdit menu, and a repeated double-click cycle: word, then the whole whitespace-free token (e.g. `contextual-menu`), then no selection.
+- Added `SwiftEdit Line`, an in-code set of 50 minimal line icons (`AppIcon`) replacing every SF Symbol in the interface, and the opt-in offscreen visual audit (`SWIFTEDIT_VISUAL_AUDIT_DIR`, 34 Light/Dark snapshots in `docs/design/redesign-020/`).
+
+### Changed
+- Redesigned the interface in a Zed-inspired neutral style (Constitution `v1.7.0`, `UI-001`): neutral header, tab strip, sidebar and status bar with purple reserved for caret, focus, active tab and toggles; flat tabs; header with the SwiftEdit menu followed by the command icons and the `folder / file` breadcrumb on the right; zoom and theme moved to the status bar; header and SwiftEdit menu scale with the editor zoom; the Concept E2 logo is unchanged.
+- Restyled the Properties panel (collapsed by default, compact disclosure aligned with the text), Preview, Find bar, Document Navigator, sidebar empty state and header menu; the editor gutter now has a grey surface with numbers at 85% of the text size.
+- Moved File Compare out of the header menu to `Shift+Cmd+D`.
+- Reduced the Debug app bundle from 25 MB to 7.5 MB: Debug now dead-strips and keeps symbols in a dSYM beside the app, and `Scripts/build-app.sh -c Debug` builds a compact `-Osize` Debug in `.build/xcode-compact` (`--debuggable` keeps `-Onone`); the staging script also copies the dSYM.
+
+### Fixed
+- Fixed selection occurrence highlighting for partial words and symbol groups (e.g. `->`), which previously highlighted only whole words.
+- Fixed the duplicated warning glyph in the status-bar lint label and lint markers overlapping two-digit line numbers in the gutter.
+- Fixed purple separators under Reduce Transparency (now neutral, at least 3:1) and the CheatSheet listing `Cmd+W` for Close Document (now `Shift+Cmd+W`; Word Wrap `Cmd+W` added).
+
+### Security
+- Duplicate Document writes only through the confined atomic save, never overwrites existing files and is refused for binary, binary-inspection and live-tail tabs; no new entitlements, processes or network access.
+
 ## [Unreleased] - 2026-11-22 UTC
 Branch: feature/logging | Commit: 2d5f011
 

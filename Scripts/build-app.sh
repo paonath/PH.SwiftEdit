@@ -6,7 +6,13 @@
 # inside local build/<FULL_VERSION>/SwiftEdit.app (gitignored).
 #
 # Usage:
-#   ./Scripts/build-app.sh [--configuration <Debug|Release>] [--clean] [--derived-data <path>] [--dry-run] [--help]
+#   ./Scripts/build-app.sh [--configuration <Debug|Release>] [--debuggable] [--clean] [--derived-data <path>] [--dry-run] [--help]
+#
+# Size policy:
+#   Release            -Osize + whole-module + thin LTO + dead-strip; symbols in a dSYM beside the app.
+#   Debug (default)    compact: same -Osize code generation for every module (SwiftTerm included) in a separate
+#                      DerivedData (.build/xcode-compact) so Xcode's -Onone Debug cache is untouched; DEBUG flag kept.
+#   Debug --debuggable -Onone code for step-by-step debugging and assert(); still dead-stripped with a dSYM.
 #
 # Exit Codes:
 #   0 - Info.plist stamped, application built, and staged into build/<FULL_VERSION>/
@@ -21,6 +27,7 @@ Usage: build-app.sh [options]
 
 Options:
   -c, --configuration <Debug|Release>  Xcode build configuration (default: Release)
+      --debuggable                     Debug only: keep -Onone code (bigger app) instead of the compact -Osize Debug
       --clean                          Run clean before building
       --derived-data <path>            Custom DerivedData path for xcodebuild
       --dry-run                        Print commands without executing them
@@ -57,6 +64,7 @@ main() {
 
     local configuration="Release"
     local do_clean="false"
+    local debuggable="false"
     local derived_data=""
     local dry_run="false"
 
@@ -72,6 +80,10 @@ main() {
                 ;;
             --clean)
                 do_clean="true"
+                shift
+                ;;
+            --debuggable)
+                debuggable="true"
                 shift
                 ;;
             --derived-data)
@@ -125,13 +137,20 @@ main() {
         -destination "$readonly_destination"
         -skipPackagePluginValidation
     )
-    if [[ "$configuration" == "Release" ]]; then
+    if [[ "$configuration" == "Release" || "$debuggable" == "false" ]]; then
+        xcodebuild_base_args+=(
+            "SWIFT_COMPILATION_MODE=wholemodule"
+        )
         xcodebuild_base_args+=(
             "SWIFT_OPTIMIZATION_LEVEL=-Osize"
             "GCC_OPTIMIZATION_LEVEL=s"
             "DEAD_CODE_STRIPPING=YES"
             "LLVM_LTO=YES_THIN"
         )
+    fi
+    if [[ -z "$derived_data" && "$configuration" == "Debug" && "$debuggable" == "false" ]]; then
+        # Compact Debug uses its own DerivedData so Xcode's -Onone Debug products are never rebuilt or replaced.
+        derived_data="${repo_root}/.build/xcode-compact"
     fi
     if [[ -n "$derived_data" ]]; then
         xcodebuild_base_args+=(-derivedDataPath "$derived_data")
@@ -169,9 +188,17 @@ main() {
     printf '==> Step 3/3: Staging %s into %s/%s...\n' "$product_name" "$stage_dir" "$product_name"
     local staged_app="${stage_dir}/${product_name}"
     mkdir -p "$stage_dir"
-    rm -rf "$staged_app"
+    rm -rf -- "${staged_app:?}"
     ditto "${target_dir}/${product_name}" "$staged_app"
-    printf '==> Build complete (%s): %s\n' "$configuration" "$staged_app"
+
+    # Symbols live in a dSYM beside (never inside) the app so the bundle stays compact yet debuggable.
+    local source_dsym="${target_dir}/${product_name}.dSYM"
+    local staged_dsym="${staged_app}.dSYM"
+    rm -rf -- "${staged_dsym:?}"
+    if [[ -d "$source_dsym" ]]; then
+        ditto "$source_dsym" "$staged_dsym"
+    fi
+    printf '==> Build complete (%s): %s (%s)\n' "$configuration" "$staged_app" "$(du -sh "$staged_app" | awk '{print $1}')"
 }
 
 main "$@"

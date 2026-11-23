@@ -11,9 +11,8 @@ struct LogTailPanelView: View {
     var body: some View {
         let palette = model.palette
         HStack(spacing: 10) {
-            Image(systemName: tail.isRunning ? "dot.radiowaves.left.and.right" : "pause.circle")
+            AppIconView(tail.isRunning ? .live : .pause, size: 14)
                 .foregroundStyle((tail.isRunning ? palette.logInfoForeground : palette.secondaryForeground).swiftUIColor)
-                .accessibilityHidden(true)
             Text(tail.isRunning ? "Log · live" : "Log · stopped")
                 .appFont(.caption, weight: .semibold)
                 .foregroundStyle(palette.chromeForeground.swiftUIColor)
@@ -48,7 +47,7 @@ struct LogTailPanelView: View {
             }
             .accessibilityLabel(tail.isRunning ? "Stop log tail" : "Resume log tail")
             if !model.logTailOnlyTabIDs.contains(tail.tabID) {
-                Button { model.closeLogTail() } label: { Image(systemName: "xmark").minimumHitTarget() }
+                Button { model.closeLogTail() } label: { AppIconView(.close, size: 12).minimumHitTarget() }
                     .buttonStyle(.plain)
                     .help("Close the Log panel and return to the editor")
                     .accessibilityLabel("Close log panel")

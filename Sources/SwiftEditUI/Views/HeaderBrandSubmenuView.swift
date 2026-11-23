@@ -108,7 +108,8 @@ public struct HeaderSubmenuStateMachine: Equatable, Sendable {
 public enum HeaderCommandID: String, Equatable, Sendable, CaseIterable {
     case newDocument, openFile, openFolder, saveDocument, saveDocumentAs
     case duplicateLineOrSelection, formatDocument, formatSection
-    case toggleMarkdownPreview, toggleDiffPane, showCheatSheet
+    case toggleMarkdownPreview, showCheatSheet
+    case appearanceLight, appearanceDark, appearanceAuto
 }
 
 /// Descriptor of one submenu row: descriptive verb-noun title, monospaced shortcut badge, and quarantine-aware enablement (`UI-008`, `UI-009`).
@@ -117,7 +118,9 @@ public struct HeaderCommandItem: Equatable, Sendable {
     public let title: String
     public let shortcutBadge: String?
     public let isEnabled: Bool
-    public let symbolName: String
+    public let icon: AppIcon
+    /// Shows a check instead of a shortcut badge (current appearance mode, `REQ-022-03`).
+    public var isChecked: Bool = false
 }
 
 /// Stateless factory projecting submenu rows from workbench state.
@@ -125,20 +128,28 @@ public struct HeaderCommandItem: Equatable, Sendable {
 /// Mutating commands (`Save`, `Save As…`, `Duplicate`, both `Format` commands) follow `canSave` / `canFormat`, so binary read-only tabs disable them (`DATA-003`, `SEC-012`).
 /// Shortcut badges are display-only; the actual key bindings live exclusively in `SwiftEditCommands` (`UI-009`).
 public enum HeaderCommandCatalog {
-    public static func items(canSave: Bool, canFormat: Bool, showMarkdownPreview: Bool, showDiffPane: Bool) -> [HeaderCommandItem] {
-        [
-            HeaderCommandItem(id: .newDocument, title: "New Document", shortcutBadge: "⌘N", isEnabled: true, symbolName: "doc.badge.plus"),
-            HeaderCommandItem(id: .openFile, title: "Open File…", shortcutBadge: "⌘O", isEnabled: true, symbolName: "doc"),
-            HeaderCommandItem(id: .openFolder, title: "Open Folder…", shortcutBadge: "⇧⌘O", isEnabled: true, symbolName: "folder"),
-            HeaderCommandItem(id: .saveDocument, title: "Save Document", shortcutBadge: "⌘S", isEnabled: canSave, symbolName: "square.and.arrow.down"),
-            HeaderCommandItem(id: .saveDocumentAs, title: "Save Document As…", shortcutBadge: "⇧⌘S", isEnabled: canSave, symbolName: "square.and.arrow.down.on.square"),
-            HeaderCommandItem(id: .duplicateLineOrSelection, title: "Duplicate Line or Selection", shortcutBadge: "⌘D", isEnabled: canSave, symbolName: "plus.square.on.square"),
-            HeaderCommandItem(id: .formatDocument, title: "Format Markdown Document", shortcutBadge: "⇧⌘F", isEnabled: canFormat, symbolName: "text.alignleft"),
-            HeaderCommandItem(id: .formatSection, title: "Format Markdown Section", shortcutBadge: "⌥⇧⌘F", isEnabled: canFormat, symbolName: "text.line.first.and.arrowtriangle.forward"),
-            HeaderCommandItem(id: .toggleMarkdownPreview, title: showMarkdownPreview ? "Hide Markdown Preview" : "Show Markdown Preview", shortcutBadge: "⌘P", isEnabled: true, symbolName: "doc.richtext"),
-            HeaderCommandItem(id: .toggleDiffPane, title: showDiffPane ? "Hide File Compare Diff" : "Show File Compare Diff", shortcutBadge: nil, isEnabled: true, symbolName: "rectangle.split.2x1"),
-            HeaderCommandItem(id: .showCheatSheet, title: "Keyboard Shortcuts CheatSheet", shortcutBadge: "⌘/", isEnabled: true, symbolName: "keyboard"),
+    /// File Compare is intentionally absent: it is reached only via `Shift+Cmd+D` / the View menu (`REQ-020-03`).
+    public static func items(canSave: Bool, canFormat: Bool, showMarkdownPreview: Bool, appearanceMode: AppearanceMode? = nil) -> [HeaderCommandItem] {
+        var items: [HeaderCommandItem] = [
+            HeaderCommandItem(id: .newDocument, title: "New Document", shortcutBadge: "⌘N", isEnabled: true, icon: .filePlus),
+            HeaderCommandItem(id: .openFile, title: "Open File…", shortcutBadge: "⌘O", isEnabled: true, icon: .file),
+            HeaderCommandItem(id: .openFolder, title: "Open Folder…", shortcutBadge: "⇧⌘O", isEnabled: true, icon: .folder),
+            HeaderCommandItem(id: .saveDocument, title: "Save Document", shortcutBadge: "⌘S", isEnabled: canSave, icon: .save),
+            HeaderCommandItem(id: .saveDocumentAs, title: "Save Document As…", shortcutBadge: "⇧⌘S", isEnabled: canSave, icon: .saveAs),
+            HeaderCommandItem(id: .duplicateLineOrSelection, title: "Duplicate Line or Selection", shortcutBadge: "⌘D", isEnabled: canSave, icon: .duplicate),
+            HeaderCommandItem(id: .formatDocument, title: "Format Markdown Document", shortcutBadge: "⇧⌘F", isEnabled: canFormat, icon: .alignLeft),
+            HeaderCommandItem(id: .formatSection, title: "Format Markdown Section", shortcutBadge: "⌥⇧⌘F", isEnabled: canFormat, icon: .indent),
+            HeaderCommandItem(id: .toggleMarkdownPreview, title: showMarkdownPreview ? "Hide Markdown Preview" : "Show Markdown Preview", shortcutBadge: "⌘P", isEnabled: true, icon: .eye),
         ]
+        if let appearanceMode {
+            items += [
+                HeaderCommandItem(id: .appearanceLight, title: "Light", shortcutBadge: nil, isEnabled: true, icon: .sun, isChecked: appearanceMode == .light),
+                HeaderCommandItem(id: .appearanceDark, title: "Dark", shortcutBadge: nil, isEnabled: true, icon: .moon, isChecked: appearanceMode == .black),
+                HeaderCommandItem(id: .appearanceAuto, title: "Auto (System)", shortcutBadge: nil, isEnabled: true, icon: .monitor, isChecked: appearanceMode == .auto),
+            ]
+        }
+        items.append(HeaderCommandItem(id: .showCheatSheet, title: "Keyboard Shortcuts CheatSheet", shortcutBadge: "⌘/", isEnabled: true, icon: .keyboard))
+        return items
     }
 }
 
@@ -156,6 +167,8 @@ public struct HeaderBrandSubmenuView: View {
     public var onSelectFirst: (() -> Void)?
     public var onSelectLast: (() -> Void)?
     public var onDismiss: (() -> Void)?
+    /// Zoom factor applied to fonts, icons and width so the menu follows the editor zoom (`REQ-021-03`).
+    public var scale: CGFloat = 1
     @State private var hoveredID: HeaderCommandID?
     @FocusState private var isSubmenuFocused: Bool
 
@@ -167,8 +180,10 @@ public struct HeaderBrandSubmenuView: View {
         onMoveSelection: ((Int) -> Void)? = nil,
         onSelectFirst: (() -> Void)? = nil,
         onSelectLast: (() -> Void)? = nil,
-        onDismiss: (() -> Void)? = nil
+        onDismiss: (() -> Void)? = nil,
+        scale: CGFloat = 1
     ) {
+        self.scale = scale
         self.items = items
         self.palette = palette
         self.selectedID = selectedID
@@ -182,33 +197,36 @@ public struct HeaderBrandSubmenuView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(items, id: \.id) { item in
+                if item.id == .appearanceLight || item.id == .showCheatSheet {
+                    Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(height: 1).padding(.vertical, 3)
+                }
                 let isHighlighted = item.isEnabled && (hoveredID == item.id || selectedID == item.id)
                 Button(action: { onSelect(item.id) }) {
                     HStack(spacing: 10) {
-                        Image(systemName: item.symbolName)
-                            .frame(width: 18)
-                            .accessibilityHidden(true)
-                            .foregroundStyle(item.isEnabled ? palette.chromeAccent.swiftUIColor : palette.secondaryForeground.swiftUIColor)
+                        AppIconView(item.icon, size: 14 * scale)
+                            .frame(width: 18 * scale)
+                            .foregroundStyle(isHighlighted ? palette.chromeAccent.swiftUIColor : palette.secondaryForeground.swiftUIColor)
                         Text(item.title)
+                            .appFont(size: 13 * scale)
                             .foregroundStyle(item.isEnabled ? palette.chromeForeground.swiftUIColor : palette.secondaryForeground.swiftUIColor)
                         Spacer(minLength: 12)
+                        if item.isChecked {
+                            AppIconView(.check, size: 12 * scale, label: "Selected")
+                                .foregroundStyle(palette.chromeAccent.swiftUIColor)
+                        }
                         if let badge = item.shortcutBadge {
                             Text(badge)
-                                .appFont(.caption, weight: .semibold, monospaced: true)
-                                .foregroundStyle(palette.chromeForeground.swiftUIColor)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
+                                .appFont(size: 10 * scale, weight: .medium, monospaced: true)
+                                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                                .padding(.horizontal, 6 * scale)
+                                .padding(.vertical, 2 * scale)
                                 .background(palette.badgeSurface.swiftUIColor)
                                 .clipShape(RoundedRectangle(cornerRadius: 4))
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(isHighlighted ? palette.selectionBackground.swiftUIColor : Color.clear)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 5)
-                            .stroke(selectedID == item.id && item.isEnabled ? palette.chromeAccent.swiftUIColor : Color.clear, lineWidth: 1)
-                    )
+                    .padding(.horizontal, 10 * scale)
+                    .padding(.vertical, 5 * scale)
+                    .background(isHighlighted ? palette.accentSoftSurface.swiftUIColor : Color.clear)
                     .clipShape(RoundedRectangle(cornerRadius: 5))
                     .contentShape(Rectangle())
                 }
@@ -218,10 +236,11 @@ public struct HeaderBrandSubmenuView: View {
                     hoveredID = hovering ? item.id : (hoveredID == item.id ? nil : hoveredID)
                 }
                 .accessibilityLabel(item.title)
+                .accessibilityAddTraits(item.isChecked ? .isSelected : [])
             }
         }
         .padding(6)
-        .frame(width: 312)
+        .frame(width: 312 * scale)
         .background(.ultraThinMaterial)
         .background(palette.submenuTranslucentSurface.swiftUIColor)
         .overlay(
@@ -229,6 +248,7 @@ public struct HeaderBrandSubmenuView: View {
                 .stroke(palette.hairlineBorder.swiftUIColor, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .shadow(color: .black.opacity(palette.mode == .black ? 0.45 : 0.12), radius: 14, y: 6)
         .focusable()
         .focused($isSubmenuFocused)
         .focusEffectDisabled()

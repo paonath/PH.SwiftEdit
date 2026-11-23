@@ -236,8 +236,8 @@ struct LintBadge: View {
     var body: some View {
         Circle()
             .fill(color)
-            .frame(width: 8, height: 8)
-            .frame(width: 16, height: 16)
+            .frame(width: 6, height: 6)
+            .frame(width: 12, height: 16)
             .contentShape(Rectangle())
             .onHover { isHovering = $0 }
             .popover(isPresented: $isHovering, arrowEdge: .trailing) {
@@ -291,7 +291,6 @@ public struct LineNumberGutterView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(.horizontal, 8)
                 }
                 .clipped()
             } else {
@@ -302,13 +301,11 @@ public struct LineNumberGutterView: View {
                         }
                     }
                     .padding(.vertical, 16)
-                    .padding(.horizontal, 8)
                 }
             }
         }
         .frame(width: width)
         .background(palette.gutterSurface.swiftUIColor)
-        .purpleHairlineBorder(palette: palette, edge: .trailing)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Line Number Gutter")
     }
@@ -319,30 +316,38 @@ public struct LineNumberGutterView: View {
         let severity = severityByLine[lineNumber]
         let token = isActive ? palette.gutterActiveForeground : palette.gutterForeground
         let severityColor = severity.map { ($0 == .error ? palette.unbalancedBracketHighlight : palette.bidiWarningForeground).swiftUIColor }
-        HStack(spacing: 4) {
-            if let severityColor, let severity {
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(severityColor)
-                    .frame(width: 3, height: max(12, projection.fontSizePoints * 0.95))
-                    .accessibilityHidden(true)
-                LintBadge(
-                    color: severityColor,
-                    details: lintDetailsByLine[lineNumber] ?? (severity == .error ? "Markdown lint error on this line" : "Markdown lint warning on this line"),
-                    isError: severity == .error
-                )
+        // Number right-aligned in its own column; diagnostics live in a separate left column so they can never
+        // overlap or wrap the number (V-02, R-05).
+        // Numbers are slightly smaller than the text (`numberScale`) and nudged down so their baseline matches the
+        // editor line; both follow the zoomed editor font size (`REQ-022-02`).
+        Text("\(lineNumber)")
+            .appFont(size: projection.fontSizePoints * Self.numberScale, weight: isActive ? .semibold : .regular, monospaced: true, role: .editor)
+            .padding(.top, projection.fontSizePoints * (1 - Self.numberScale) * 0.8)
+            .foregroundStyle(token.swiftUIColor)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.trailing, Self.numberTrailingPadding)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .overlay(alignment: .leading) {
+                if let severityColor, let severity {
+                    HStack(spacing: 1) {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(severityColor)
+                            .frame(width: 3, height: max(12, projection.fontSizePoints * 0.95))
+                            .accessibilityHidden(true)
+                        LintBadge(
+                            color: severityColor,
+                            details: lintDetailsByLine[lineNumber] ?? (severity == .error ? "Markdown lint error on this line" : "Markdown lint warning on this line"),
+                            isError: severity == .error
+                        )
+                    }
+                }
             }
-            Text("\(lineNumber)")
-                .appFont(size: projection.fontSizePoints, weight: (isActive || severity != nil) ? .semibold : .regular, monospaced: true, role: .editor)
-                .foregroundStyle(token.swiftUIColor)
-        }
-        .padding(.horizontal, severity == nil ? 0 : 2)
-        .background(
-            severityColor.map { color in
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(color.opacity(severity == .error ? 0.16 : 0.12))
-            }
-        )
-        .frame(minWidth: 36, alignment: .trailing)
     }
+
+    /// Gap between the number column and the text canvas.
+    static let numberTrailingPadding: CGFloat = 10
+    /// Line numbers render at 85% of the editor font size.
+    static let numberScale: CGFloat = 0.85
 }
 #endif

@@ -13,8 +13,8 @@ struct BacktickWordOccurrenceAndAccessibilityTests {
 
         #expect(light.backtickInlineBackground.hex == "#F7F0D4")
         #expect(light.backtickMultilineBackground.hex == "#FBF6E2")
-        #expect(black.backtickInlineBackground.hex == "#2B2412")
-        #expect(black.backtickMultilineBackground.hex == "#1F1A0D")
+        #expect(black.backtickInlineBackground.hex == "#24221C")
+        #expect(black.backtickMultilineBackground.hex == "#17150F")
 
         let lightInlineRatio = light.backtickForeground.contrastRatio(against: light.backtickInlineBackground)
         let lightMultiRatio = light.backtickForeground.contrastRatio(against: light.backtickMultilineBackground)
@@ -76,15 +76,30 @@ struct BacktickWordOccurrenceAndAccessibilityTests {
         #expect(punctOccurrences.count == 2)
     }
 
-    @Test("N-OCC1: WordOccurrenceScanner ignores single-char, whitespace, partial-word, and binary selections")
+    @Test("P-OCC3: Partial-word and symbol character groups highlight case-sensitive literal occurrences (REQ-020-05)")
+    func pLiteralCharacterGroupOccurrences() {
+        let snap = DocumentSession(text: "a ab abc ab cd AB x->y z->w").snapshot
+        // Partial word "ab" inside "abc" matches every literal "ab" except itself, never the uppercase "AB"
+        let partial = WordOccurrenceScanner.scan(selection: TextRange(location: 5, length: 2), in: snap)
+        #expect(partial == [TextRange(location: 2, length: 2), TextRange(location: 9, length: 2)])
+        // Symbol group "->" matches the other arrow
+        let arrow = WordOccurrenceScanner.scan(selection: TextRange(location: 19, length: 2), in: snap)
+        #expect(arrow == [TextRange(location: 24, length: 2)])
+        // Group containing an inner space ("ab c") still matches literally
+        let spaced = WordOccurrenceScanner.scan(selection: TextRange(location: 7, length: 4), in: DocumentSession(text: "x ab c ab cd").snapshot)
+        #expect(spaced == [TextRange(location: 2, length: 4)])
+    }
+
+    @Test("N-OCC1: WordOccurrenceScanner ignores single-char, whitespace-only, multi-line, and binary selections")
     func nWordOccurrenceGuards() {
         let snap = DocumentSession(text: "a ab abc ab cd").snapshot
         // Single char
         #expect(WordOccurrenceScanner.scan(selection: TextRange(location: 0, length: 1), in: snap).isEmpty)
-        // Contains whitespace
-        #expect(WordOccurrenceScanner.scan(selection: TextRange(location: 2, length: 4), in: snap).isEmpty)
-        // Partial word ("ab" inside "abc")
-        #expect(WordOccurrenceScanner.scan(selection: TextRange(location: 5, length: 2), in: snap).isEmpty)
+        // Whitespace only
+        #expect(WordOccurrenceScanner.scan(selection: TextRange(location: 1, length: 1), in: DocumentSession(text: "a  b  c").snapshot).isEmpty)
+        #expect(WordOccurrenceScanner.scan(selection: TextRange(location: 1, length: 2), in: DocumentSession(text: "a  b  c").snapshot).isEmpty)
+        // Multi-line selection
+        #expect(WordOccurrenceScanner.scan(selection: TextRange(location: 0, length: 4), in: DocumentSession(text: "ab\ncd ab\ncd").snapshot).isEmpty)
 
         let binary = DocumentSnapshot(
             id: DocumentID(),

@@ -2,9 +2,11 @@ import Foundation
 
 /// Linear, zero-regex whole-word occurrence scanner for editor selection highlighting (`UI-002`, `CWE-400`, `SEC-012`).
 ///
-/// When the user selects (e.g. double-clicks) a single whole word (`2...128` UTF-16 units), returns all *other*
-/// whole-word occurrences in the document (sorted in ascending UTF-16 offset order, excluding the primary selection)
-/// so the editor can highlight them with a softer, accessible secondary tint.
+/// When the user selects a single whole word (`2...128` UTF-16 units), returns all *other* whole-word occurrences in the
+/// document; when the selection is any other single-line character group (a partial word, `->`, `a, b`), returns all
+/// *other* case-sensitive literal occurrences instead (`REQ-020-05`). Results are sorted in ascending UTF-16 offset order,
+/// never overlap the primary selection, and drive a softer, accessible secondary tint.
+/// Whitespace-only and multi-line selections never highlight anything.
 public enum WordOccurrenceScanner {
     public static let minWordUTF16Length = 2
     public static let maxWordUTF16Length = 128
@@ -37,22 +39,32 @@ public enum WordOccurrenceScanner {
             return []
         }
 
-        // Verify selection is bounded on both sides as a whole word.
-        if selStart > text.startIndex {
-            let prev = text.unicodeScalars.index(before: selStart)
-            if isWordScalar(text.unicodeScalars[prev]) { return [] }
-        }
-        if selEnd < text.endIndex {
-            if isWordScalar(text.unicodeScalars[selEnd]) { return [] }
-        }
-
         let wordSlice = text[selStart..<selEnd]
         guard !wordSlice.isEmpty else { return [] }
 
+        // Single-line, non-blank character groups only: whitespace-only or multi-line selections never highlight.
+        var isAllWordScalars = true
         var isAllASCII = true
+        var hasVisibleScalar = false
         for scalar in wordSlice.unicodeScalars {
-            if !isWordScalar(scalar) { return [] }
+            if scalar == "\n" || scalar == "\r" || scalar == "\u{2028}" || scalar == "\u{2029}" { return [] }
+            if !scalar.properties.isWhitespace { hasVisibleScalar = true }
+            if !isWordScalar(scalar) { isAllWordScalars = false }
             if !scalar.isASCII { isAllASCII = false }
+        }
+        guard hasVisibleScalar else { return [] }
+
+        // A selection bounded on both sides as a whole word keeps whole-word semantics; anything else is a literal group.
+        var isWholeWord = isAllWordScalars
+        if isWholeWord, selStart > text.startIndex {
+            let prev = text.unicodeScalars.index(before: selStart)
+            if isWordScalar(text.unicodeScalars[prev]) { isWholeWord = false }
+        }
+        if isWholeWord, selEnd < text.endIndex, isWordScalar(text.unicodeScalars[selEnd]) {
+            isWholeWord = false
+        }
+        guard isWholeWord else {
+            return scanLiteral(String(wordSlice), in: text, excluding: selection, maxMatches: maxMatches)
         }
 
         if isAllASCII {
@@ -83,7 +95,7 @@ public enum WordOccurrenceScanner {
     }
 
     @inline(__always)
-    private static func isWordScalar(_ scalar: Unicode.Scalar) -> Bool {
+    static func isWordScalar(_ scalar: Unicode.Scalar) -> Bool {
         if scalar.isASCII {
             return isASCIIWordByte(UInt8(scalar.value))
         }
@@ -214,6 +226,33 @@ public enum WordOccurrenceScanner {
             }
             return matches
         } ?? nil
+    }
+
+    /// Case-sensitive, non-overlapping literal occurrences of an arbitrary character group, skipping any match that
+    /// overlaps the primary selection (`REQ-020-05`). Uses `NSString` literal search (no regex, `CWE-400`).
+    private static func scanLiteral(
+        _ needle: String,
+        in text: String,
+        excluding selection: TextRange,
+        maxMatches: Int
+    ) -> [TextRange] {
+        let nsText = text as NSString
+        let totalLength = nsText.length
+        var searchRange = NSRange(location: 0, length: totalLength)
+        var matches: [TextRange] = []
+        while searchRange.length > 0 {
+            let found = nsText.range(of: needle, options: [.literal], range: searchRange)
+            guard found.location != NSNotFound, found.length > 0 else { break }
+            let candidate = TextRange(location: found.location, length: found.length)
+            let overlapsSelection = candidate.location < selection.upperBound && selection.location < candidate.upperBound
+            if !overlapsSelection {
+                matches.append(candidate)
+                if matches.count >= maxMatches { break }
+            }
+            let nextStart = found.location + found.length
+            searchRange = NSRange(location: nextStart, length: totalLength - nextStart)
+        }
+        return matches
     }
 
     /// Unicode-aware whole-word literal fallback for accented / non-ASCII identifiers.

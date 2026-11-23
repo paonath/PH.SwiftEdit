@@ -19,11 +19,11 @@ public enum SettingsSection: String, CaseIterable, Identifiable, Equatable, Send
         }
     }
 
-    public var systemImage: String {
+    public var icon: AppIcon {
         switch self {
-        case .fonts: return "textformat"
-        case .terminal: return "terminal"
-        case .updates: return "arrow.down.circle"
+        case .fonts: return .typography
+        case .terminal: return .terminal
+        case .updates: return .download
         }
     }
 }
@@ -226,11 +226,9 @@ private struct SettingsSidebarView: View {
                     }
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: section.systemImage)
-                            .appFont(.callout, weight: .medium)
+                        AppIconView(section.icon, size: 15)
                             .foregroundStyle((isSelected ? settings.palette.chromeAccent : settings.palette.secondaryForeground).swiftUIColor)
                             .frame(width: 18)
-                            .accessibilityHidden(true)
                         Text(section.title)
                             .appFont(.callout, weight: isSelected ? .semibold : .regular)
                             .foregroundStyle(settings.palette.chromeForeground.swiftUIColor)
@@ -275,9 +273,8 @@ private struct FontPickerColumn: View {
                         Text(row.title).font(settings.previewFont(for: row.choice))
                         Spacer()
                         if row.isSelected {
-                            Image(systemName: "checkmark")
+                            AppIconView(.check, size: 13)
                                 .foregroundStyle(settings.palette.chromeAccent.swiftUIColor)
-                                .accessibilityHidden(true)
                         }
                     }
                     .contentShape(Rectangle())
@@ -318,8 +315,7 @@ private struct TerminalSettingsPane: View {
                 Button {
                     settings.refreshInstalledTerminals()
                 } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                        .appFont(.caption, weight: .medium)
+                    Label { Text("Refresh").appFont(.caption, weight: .medium) } icon: { AppIconView(.refresh, size: 12) }
                 }
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Refresh installed terminals")
@@ -377,9 +373,8 @@ private struct TerminalSettingsPane: View {
                 }
                 Spacer()
                 if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
+                    AppIconView(.checkCircle, size: 15)
                         .foregroundStyle(settings.palette.chromeAccent.swiftUIColor)
-                        .accessibilityHidden(true)
                 }
             }
             .contentShape(Rectangle())
