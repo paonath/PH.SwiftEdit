@@ -251,22 +251,22 @@ public struct DocumentSession: Equatable, Sendable {
                 for idx in 0..<sortedEdits.count {
                     let (startByte, endByte) = byteRanges[idx]
                     let unchangedLen = startByte - srcPos
-                    if unchangedLen > 0, let base {
-                        (dst.baseAddress! + dstPos).update(from: base + srcPos, count: unchangedLen)
+                    if unchangedLen > 0, let base, let dstBase = dst.baseAddress {
+                        (dstBase + dstPos).initialize(from: base + srcPos, count: unchangedLen)
                         dstPos += unchangedLen
                     }
                     let rep = sortedEdits[idx].replacement
                     if !rep.isEmpty {
                         if let copied = rep.utf8.withContiguousStorageIfAvailable({ repBuf -> Int in
-                            if !repBuf.isEmpty, let repBase = repBuf.baseAddress {
-                                (dst.baseAddress! + dstPos).update(from: repBase, count: repBuf.count)
+                            if !repBuf.isEmpty, let repBase = repBuf.baseAddress, let dstBase = dst.baseAddress {
+                                (dstBase + dstPos).initialize(from: repBase, count: repBuf.count)
                             }
                             return repBuf.count
                         }) {
                             dstPos += copied
                         } else {
                             for b in rep.utf8 {
-                                dst[dstPos] = b
+                                dst.initializeElement(at: dstPos, to: b)
                                 dstPos += 1
                             }
                         }
@@ -274,8 +274,8 @@ public struct DocumentSession: Equatable, Sendable {
                     srcPos = endByte
                 }
                 let tailLen = byteCount - srcPos
-                if tailLen > 0, let base {
-                    (dst.baseAddress! + dstPos).update(from: base + srcPos, count: tailLen)
+                if tailLen > 0, let base, let dstBase = dst.baseAddress {
+                    (dstBase + dstPos).initialize(from: base + srcPos, count: tailLen)
                     dstPos += tailLen
                 }
                 return dstPos

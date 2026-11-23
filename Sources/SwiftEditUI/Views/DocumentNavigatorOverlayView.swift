@@ -39,10 +39,15 @@ struct DocumentNavigatorOverlayView: View {
     }
 
     private var searchField: some View {
-        TextField("Go to heading…", text: queryBinding)
-            .textFieldStyle(.plain)
-            .appFont(size: 20)
-            .padding(14)
+        HStack(spacing: 8) {
+            AppIconView(.search, size: 14)
+                .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+            TextField("Go to heading…", text: queryBinding)
+                .textFieldStyle(.plain)
+                .appFont(size: 15)
+        }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
             .focused($queryFocused)
             .onSubmit { model.confirmDocumentNavigator() }
             .onKeyPress(.return) { model.confirmDocumentNavigator(); return .handled }
@@ -72,16 +77,18 @@ struct DocumentNavigatorOverlayView: View {
                 if state.filtered.indices.contains(newValue) { proxy.scrollTo(state.filtered[newValue].id) }
             }
         }
-        .frame(maxHeight: 360)
+        // Height follows the content (no empty well), capped at 360 pt.
+        .frame(height: min(360, state.filtered.reduce(CGFloat(8)) { $0 + Self.fontSize(forLevel: $1.level) + 14 }))
     }
 
     @ViewBuilder
     private func applyOverlayChrome<Content: View>(to content: Content) -> some View {
         content
             .frame(width: 560)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(model.palette.strokeLavender.swiftUIColor))
-            .shadow(radius: 24)
+            .background(model.palette.submenuTranslucentSurface.swiftUIColor, in: RoundedRectangle(cornerRadius: 10))
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(model.palette.hairlineBorder.swiftUIColor))
+            .shadow(color: .black.opacity(model.palette.mode == .black ? 0.45 : 0.14), radius: 18, y: 8)
             .padding(.top, 90)
             .onAppear {
                 queryFocused = true
@@ -110,9 +117,10 @@ struct DocumentNavigatorOverlayView: View {
                 .padding(.leading, CGFloat(heading.level - 1) * Self.indentPerLevel)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(selected ? model.palette.primaryAccent.swiftUIColor.opacity(0.25) : Color.clear)
+        .background(selected ? model.palette.accentSoftSurface.swiftUIColor : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 4)
         .contentShape(Rectangle())
     }
 }

@@ -246,7 +246,7 @@ public struct PurpleThemePalette: Equatable, Sendable {
     public let backtickForeground: RGBAColorToken
     /// Muted disabled foreground for quarantined binary files in the left sidebar (`#52525B` Light, `#9CA3AF` Black) (`DATA-003`, `UI-008`).
     public let sidebarBinaryDisabledText: RGBAColorToken
-    /// Top header bar surface (`#F3E8FF` Light, `#0B0614` Black).
+    /// Top header bar surface (`#F6F5F9` Light, `#100E14` Black; Zed-neutral, v1.7.0).
     public let topBarSurface: RGBAColorToken
     /// Modal dialog surface for `AboutSheetView` and `KeyboardShortcutsCheatSheetView` (`#F3E8FF` Light, `#0B0614` Black).
     public let sheetSurface: RGBAColorToken
@@ -268,9 +268,9 @@ public struct PurpleThemePalette: Equatable, Sendable {
     public let gutterForeground: RGBAColorToken
     /// Active caret-line number foreground (`#1E1035` Light, `#EDE9FE` Black, `>= 15.0:1`).
     public let gutterActiveForeground: RGBAColorToken
-    /// Bottom status-bar surface (`#7C3AED` Light, `#2E1065` Black).
+    /// Bottom status-bar surface, same neutral as the header (`#F6F5F9` Light, `#100E14` Black, v1.7.0).
     public let statusBarSurface: RGBAColorToken
-    /// Bottom status-bar text and control foreground (`#FFFFFF`, `>= 5.70:1`).
+    /// Bottom status-bar muted foreground (`#5E5A6B` Light, `#A29EAE` Black, `>= 4.5:1`).
     public let statusBarForeground: RGBAColorToken
     /// Secondary chrome text and muted label foreground (`#5B21B6` Light, `#C4B5FD` Black, `>= 6.6:1`).
     public let secondaryForeground: RGBAColorToken
@@ -282,12 +282,14 @@ public struct PurpleThemePalette: Equatable, Sendable {
     public let activeControlForeground: RGBAColorToken
     /// Shortcut-badge and selector-track container surface (`#E9D5FF` Light, `#2E1065` Black).
     public let badgeSurface: RGBAColorToken
-    /// `1pt` chrome separator token (`#C4B5FD` / `#3B1D6E`, stepped up to `#7C3AED` / `#A78BFA` `>= 3.0:1` under `reduceTransparency` or `increasedContrast`).
+    /// `1pt` neutral chrome separator (`#E3E0EA` / `#25212D`), stepped up to neutral `#858191` / `#6F6A7E` (`>= 3.0:1`) under `reduceTransparency` or `increasedContrast` (v1.7.0).
     public let hairlineBorder: RGBAColorToken
     /// High-contrast active text-selection background inside `TextKit2EditorView` (`#6D28D9` Light, `#A78BFA` Black).
     public let selectionBackground: RGBAColorToken
     /// High-contrast foreground text paired with `selectionBackground` (`#FFFFFF` Light 8.9:1, `#000000` Black 7.1:1, WCAG AAA).
     public let selectionForeground: RGBAColorToken
+    /// Soft accent surface for highlighted menu/palette rows and active toggles (`#EDE7FD` Light, `#241B3A` Black, v1.7.0).
+    public let accentSoftSurface: RGBAColorToken
     /// Soft secondary highlight background for other whole-word occurrences of the selected word (`#EDE9FE` Light, `#23173D` Black).
     public let wordOccurrenceBackground: RGBAColorToken
     /// Subtle underline cue paired with `wordOccurrenceBackground` so matches never rely on color alone (WCAG 1.4.1).
@@ -366,8 +368,8 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 primaryAccent: primaryAccent,
                 strokeLavender: strokeLavender,
                 featherHighlight: featherHighlight,
-                chromeSurface: RGBAColorToken(hex: "#F5F3FF"),
-                chromeForeground: RGBAColorToken(hex: "#1E1035"),
+                chromeSurface: RGBAColorToken(hex: "#F6F5F9"),
+                chromeForeground: RGBAColorToken(hex: "#1C1A22"),
                 editorCanvasBackground: RGBAColorToken(hex: "#FFFFFF"),
                 editorCanvasText: RGBAColorToken(hex: "#000000"),
                 currentLineHighlight: RGBAColorToken(hex: "#F3F0FA"),
@@ -393,27 +395,28 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 backtickMultilineBackground: RGBAColorToken(hex: "#FBF6E2"),
                 backtickForeground: RGBAColorToken(hex: "#3F2E00"),
                 sidebarBinaryDisabledText: RGBAColorToken(hex: "#52525B"),
-                topBarSurface: RGBAColorToken(hex: "#F3E8FF"),
-                sheetSurface: RGBAColorToken(hex: "#F3E8FF"),
-                sidebarSurface: RGBAColorToken(hex: "#EDE0FF"),
-                tabBarSurface: RGBAColorToken(hex: "#E9D5FF"),
+                topBarSurface: RGBAColorToken(hex: "#F6F5F9"),
+                sheetSurface: RGBAColorToken(hex: "#F8F7FA"),
+                sidebarSurface: RGBAColorToken(hex: "#F3F2F7"),
+                tabBarSurface: RGBAColorToken(hex: "#EFEDF4"),
                 tabActiveSurface: RGBAColorToken(hex: "#FFFFFF"),
                 pinnedTabBadge: RGBAColorToken(hex: "#7C3AED"),
-                findBarSurface: RGBAColorToken(hex: "#F3E8FF", alpha: clampOpaque ? 1.0 : 0.96),
-                submenuTranslucentSurface: RGBAColorToken(hex: "#F3E8FF", alpha: clampOpaque ? 1.0 : 0.90),
-                gutterSurface: RGBAColorToken(hex: "#F5F3FF"),
-                gutterForeground: RGBAColorToken(hex: "#5B21B6"),
-                gutterActiveForeground: RGBAColorToken(hex: "#1E1035"),
-                statusBarSurface: RGBAColorToken(hex: "#7C3AED"),
-                statusBarForeground: RGBAColorToken(hex: "#FFFFFF"),
-                secondaryForeground: RGBAColorToken(hex: "#5B21B6"),
+                findBarSurface: RGBAColorToken(hex: "#F6F5F9", alpha: clampOpaque ? 1.0 : 0.96),
+                submenuTranslucentSurface: RGBAColorToken(hex: "#FFFFFF", alpha: clampOpaque ? 1.0 : 0.94),
+                gutterSurface: RGBAColorToken(hex: "#F1F0F4"),
+                gutterForeground: RGBAColorToken(hex: "#6E6A7A"),
+                gutterActiveForeground: RGBAColorToken(hex: "#1C1A22"),
+                statusBarSurface: RGBAColorToken(hex: "#F6F5F9"),
+                statusBarForeground: RGBAColorToken(hex: "#5E5A6B"),
+                secondaryForeground: RGBAColorToken(hex: "#5E5A6B"),
                 chromeAccent: RGBAColorToken(hex: "#7C3AED"),
                 activeControlFill: RGBAColorToken(hex: "#7C3AED"),
                 activeControlForeground: RGBAColorToken(hex: "#FFFFFF"),
-                badgeSurface: RGBAColorToken(hex: "#E9D5FF"),
-                hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#7C3AED" : "#C4B5FD"),
+                badgeSurface: RGBAColorToken(hex: "#ECEAF1"),
+                hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#858191" : "#E3E0EA"),
                 selectionBackground: RGBAColorToken(hex: "#6D28D9"),
                 selectionForeground: RGBAColorToken(hex: "#FFFFFF"),
+                accentSoftSurface: RGBAColorToken(hex: "#EDE7FD"),
                 wordOccurrenceBackground: RGBAColorToken(hex: "#DDD6FE"),
                 wordOccurrenceUnderline: RGBAColorToken(hex: "#7C3AED", alpha: clampOpaque ? 1.0 : 0.75),
                 diffInsertedBackground: RGBAColorToken(hex: "#DCFCE7"),
@@ -438,8 +441,8 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 primaryAccent: primaryAccent,
                 strokeLavender: strokeLavender,
                 featherHighlight: featherHighlight,
-                chromeSurface: darkGround,
-                chromeForeground: RGBAColorToken(hex: "#EDE9FE"),
+                chromeSurface: RGBAColorToken(hex: "#100E14"),
+                chromeForeground: RGBAColorToken(hex: "#ECEAF2"),
                 editorCanvasBackground: RGBAColorToken(hex: "#000000"),
                 editorCanvasText: RGBAColorToken(hex: "#FFFFFF"),
                 currentLineHighlight: RGBAColorToken(hex: "#161224"),
@@ -461,31 +464,32 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 inertHTMLWarningForeground: RGBAColorToken(hex: "#FECACA"),
                 inertHTMLWarningBackground: RGBAColorToken(hex: "#450A0A"),
                 inertHTMLWarningBorder: RGBAColorToken(hex: "#EF4444"),
-                backtickInlineBackground: RGBAColorToken(hex: "#2B2412"),
-                backtickMultilineBackground: RGBAColorToken(hex: "#1F1A0D"),
+                backtickInlineBackground: RGBAColorToken(hex: "#24221C"),
+                backtickMultilineBackground: RGBAColorToken(hex: "#17150F"),
                 backtickForeground: RGBAColorToken(hex: "#F6E5A8"),
                 sidebarBinaryDisabledText: RGBAColorToken(hex: "#9CA3AF"),
-                topBarSurface: darkGround,
-                sheetSurface: darkGround,
-                sidebarSurface: RGBAColorToken(hex: "#140A24"),
-                tabBarSurface: RGBAColorToken(hex: "#180C2C"),
+                topBarSurface: RGBAColorToken(hex: "#100E14"),
+                sheetSurface: RGBAColorToken(hex: "#121017"),
+                sidebarSurface: RGBAColorToken(hex: "#0C0B10"),
+                tabBarSurface: RGBAColorToken(hex: "#16131C"),
                 tabActiveSurface: RGBAColorToken(hex: "#000000"),
                 pinnedTabBadge: RGBAColorToken(hex: "#C4B5FD"),
-                findBarSurface: RGBAColorToken(hex: "#140A24", alpha: clampOpaque ? 1.0 : 0.96),
-                submenuTranslucentSurface: RGBAColorToken(hex: "#140A24", alpha: clampOpaque ? 1.0 : 0.90),
-                gutterSurface: darkGround,
-                gutterForeground: RGBAColorToken(hex: "#A78BFA"),
-                gutterActiveForeground: RGBAColorToken(hex: "#EDE9FE"),
-                statusBarSurface: RGBAColorToken(hex: "#2E1065"),
-                statusBarForeground: RGBAColorToken(hex: "#FFFFFF"),
-                secondaryForeground: RGBAColorToken(hex: "#C4B5FD"),
+                findBarSurface: RGBAColorToken(hex: "#121017", alpha: clampOpaque ? 1.0 : 0.96),
+                submenuTranslucentSurface: RGBAColorToken(hex: "#16131C", alpha: clampOpaque ? 1.0 : 0.94),
+                gutterSurface: RGBAColorToken(hex: "#121117"),
+                gutterForeground: RGBAColorToken(hex: "#8A8597"),
+                gutterActiveForeground: RGBAColorToken(hex: "#FFFFFF"),
+                statusBarSurface: RGBAColorToken(hex: "#100E14"),
+                statusBarForeground: RGBAColorToken(hex: "#A29EAE"),
+                secondaryForeground: RGBAColorToken(hex: "#A29EAE"),
                 chromeAccent: RGBAColorToken(hex: "#A78BFA"),
                 activeControlFill: RGBAColorToken(hex: "#7C3AED"),
                 activeControlForeground: RGBAColorToken(hex: "#FFFFFF"),
-                badgeSurface: RGBAColorToken(hex: "#2E1065"),
-                hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#A78BFA" : "#3B1D6E"),
+                badgeSurface: RGBAColorToken(hex: "#221E2A"),
+                hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#6F6A7E" : "#25212D"),
                 selectionBackground: RGBAColorToken(hex: "#A78BFA"),
                 selectionForeground: RGBAColorToken(hex: "#000000"),
+                accentSoftSurface: RGBAColorToken(hex: "#241B3A"),
                 wordOccurrenceBackground: RGBAColorToken(hex: "#3B1D6E"),
                 wordOccurrenceUnderline: RGBAColorToken(hex: "#C4B5FD", alpha: clampOpaque ? 1.0 : 0.75),
                 diffInsertedBackground: RGBAColorToken(hex: "#052E16"),

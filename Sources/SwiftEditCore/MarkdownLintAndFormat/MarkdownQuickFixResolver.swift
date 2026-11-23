@@ -114,7 +114,7 @@ public enum ActiveLintStatus: Equatable, Sendable {
         switch self {
         case .off: return "Lint: Off"
         case .paused: return "Lint: Paused"
-        case .active(let count): return count == 0 ? "✓ Lint: 0" : "⚠ Lint: \(count)"
+        case .active(let count): return "Lint: \(count)" // plain text; the status bar draws the icon (V-01)
         }
     }
 

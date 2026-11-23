@@ -4,6 +4,24 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "022-two-tab-compare-gutter-theme-menu-and-dblclick"
+    status: "implemented"
+    date: "2026-11-23"
+    capabilities: ["two-tab-compare-gutter-theme-menu-and-dblclick"]
+    path: "openspec/specs/two-tab-compare-gutter-theme-menu-and-dblclick/spec.md"
+    summary: "Two-Tab Compare, Grey Gutter, Theme Menu, Palette Outside Click, Double-Click Cycle"
+  - id: "021-bundle-size-header-shortcuts-panel-and-duplicate"
+    status: "implemented"
+    date: "2026-11-23"
+    capabilities: ["bundle-size-header-shortcuts-panel-and-duplicate", "integrations-autocomplete-contextual-menu-and-redesign-plan"]
+    path: "openspec/specs/bundle-size-header-shortcuts-panel-and-duplicate/spec.md"
+    summary: "Compact Bundles, Zoom-Scaled Header, Searchable Clickable Shortcuts Panel, Duplicate Document"
+  - id: "020-integrations-autocomplete-contextual-menu-and-redesign-plan"
+    status: "implemented"
+    date: "2026-11-23"
+    capabilities: ["integrations-autocomplete-contextual-menu-and-redesign-plan", "constitution-v1-3-governance-and-fitness"]
+    path: "openspec/specs/integrations-autocomplete-contextual-menu-and-redesign-plan/spec.md"
+    summary: "Ghost-Text Completion, Cmd+Return Palette, Literal Occurrences, Zed-Neutral Redesign and AppIcon Line Set"
   - id: "019-log-tail-terminal-panel-lint-hover-and-help"
     status: "implemented"
     date: "2026-11-22"

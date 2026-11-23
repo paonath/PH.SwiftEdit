@@ -42,17 +42,86 @@ public final class PerTabUndoManagerRegistry {
     }
 }
 
-/// Custom TextKit 2 `NSTextView` painting a full-width subtle current-line background highlight (`UI-002`, `UI-012`).
+/// Custom TextKit 2 `NSTextView` painting a full-width subtle current-line background highlight and synchronous secondary word-occurrence highlights (`UI-002`, `UI-012`).
 @MainActor
 final class SwiftEditNSTextView: NSTextView {
     var currentLineHighlightColor: NSColor = .clear
+    var primarySelectionBackgroundColor: NSColor = .clear
+    var wordOccurrenceBackgroundColor: NSColor = .clear
+    var wordOccurrenceUnderlineColor: NSColor = .clear
+    var isWordOccurrenceHighlightEnabled: Bool = true
+    var externalWordOccurrenceRanges: [SwiftEditCore.TextRange] = []
+    /// Synchronous callback invoked whenever `liveWordOccurrenceRanges` changes so TextKit 2 rendering attributes update immediately without waiting for a SwiftUI render cycle.
+    var onWordOccurrencesUpdated: (([SwiftEditCore.TextRange]) -> Void)?
     /// ESC hook (navigator / distraction-free); returns `true` when consumed.
     var onEscape: (() -> Bool)?
     private var lastHighlightedLineRect: NSRect?
+    private(set) var liveWordOccurrenceRanges: [SwiftEditCore.TextRange] = []
+    private var lastScannedSelection = NSRange(location: NSNotFound, length: 0)
+    private var lastScannedStorageLength: Int = -1
+    private var lastScannedMutationToken: UInt64 = 0
+    private var textMutationToken: UInt64 = 1
+
+    var effectiveWordOccurrenceRanges: [SwiftEditCore.TextRange] {
+        selectedRange().length >= WordOccurrenceScanner.minWordUTF16Length
+            ? liveWordOccurrenceRanges
+            : []
+    }
 
     override func cancelOperation(_ sender: Any?) {
         if onEscape?() == true { return }
         super.cancelOperation(sender)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        textMutationToken &+= 1
+        updateLiveWordOccurrencesAndInvalidate(force: true)
+    }
+
+    func notifyProgrammaticTextOrStyleMutation() {
+        textMutationToken &+= 1
+        updateLiveWordOccurrencesAndInvalidate(force: true)
+    }
+
+    /// Selection that existed before the current click sequence started (read by the double-click cycle).
+    private var selectionBeforeClick = NSRange(location: 0, length: 0)
+
+    /// Repeated double-click cycle (`REQ-022-05`): word -> whitespace-free token -> no selection.
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 1 {
+            selectionBeforeClick = selectedRange()
+        } else if event.clickCount == 2 {
+            let point = convert(event.locationInWindow, from: nil)
+            let index = characterIndexForInsertion(at: point)
+            switch doubleClickOutcome(atCharacterIndex: index, previous: selectionBeforeClick) {
+            case .selectToken(let token):
+                setSelectedRange(NSRange(location: token.location, length: token.length))
+                return
+            case .deselect(let caret):
+                setSelectedRange(NSRange(location: caret, length: 0))
+                return
+            case .selectWord:
+                break
+            }
+        }
+        super.mouseDown(with: event)
+    }
+
+    /// Outcome of a double-click at `index` given the selection before the click (headless-testable).
+    func doubleClickOutcome(atCharacterIndex index: Int, previous: NSRange) -> DoubleClickSelectionCycle.Outcome {
+        let text = (textStorage?.string ?? "") as NSString
+        guard index >= 0, index <= text.length, text.length > 0 else { return .selectWord }
+        let probe = min(index, text.length - 1)
+        let word = selectionRange(forProposedRange: NSRange(location: probe, length: 0), granularity: .selectByWord)
+        guard word.length > 0 else { return .selectWord }
+        let wordRange = SwiftEditCore.TextRange(location: word.location, length: word.length)
+        let token = DoubleClickSelectionCycle.token(around: wordRange, in: text)
+        return DoubleClickSelectionCycle.outcome(
+            previous: SwiftEditCore.TextRange(location: previous.location, length: previous.length),
+            word: wordRange,
+            token: token
+        )
     }
 
     override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
@@ -60,6 +129,7 @@ final class SwiftEditNSTextView: NSTextView {
         super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
         if previousRange != charRange {
             invalidateCurrentLineHighlightRect()
+            updateLiveWordOccurrencesAndInvalidate()
         }
     }
 
@@ -68,6 +138,75 @@ final class SwiftEditNSTextView: NSTextView {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
         if previousRange != selectedRange() {
             invalidateCurrentLineHighlightRect()
+            updateLiveWordOccurrencesAndInvalidate()
+        }
+    }
+
+    /// Synchronously scans for other occurrences of the currently selected word/token and invalidates both the canvas background and TextKit 2 fragment subviews.
+    func updateLiveWordOccurrencesAndInvalidate(force: Bool = false) {
+        let sel = selectedRange()
+        let totalLength = textStorage?.length ?? 0
+        if !force,
+           sel == lastScannedSelection,
+           totalLength == lastScannedStorageLength,
+           textMutationToken == lastScannedMutationToken {
+            return
+        }
+        let previousSelection = lastScannedSelection
+        let selectionLengthChanged = (previousSelection.length > 0 || sel.length > 0) && previousSelection != sel
+        lastScannedSelection = sel
+        lastScannedStorageLength = totalLength
+        lastScannedMutationToken = textMutationToken
+
+        let newRanges: [SwiftEditCore.TextRange]
+        if isWordOccurrenceHighlightEnabled,
+           sel.location >= 0,
+           sel.length >= WordOccurrenceScanner.minWordUTF16Length,
+           sel.length <= WordOccurrenceScanner.maxWordUTF16Length,
+           NSMaxRange(sel) <= totalLength {
+            let currentString = textStorage?.string ?? string
+            let snap = DocumentSnapshot(
+                id: DocumentID(),
+                revision: BufferRevision(textMutationToken),
+                text: currentString,
+                encoding: .utf8,
+                lineEnding: .lf,
+                isDegradedPlainText: false,
+                isBinaryReadOnly: false
+            )
+            newRanges = WordOccurrenceScanner.scan(
+                selection: SwiftEditCore.TextRange(location: sel.location, length: sel.length),
+                in: snap
+            )
+        } else {
+            newRanges = []
+        }
+
+        let changed = (newRanges != liveWordOccurrenceRanges)
+        liveWordOccurrenceRanges = newRanges
+        if changed || selectionLengthChanged || (force && (!newRanges.isEmpty || sel.length > 0)) {
+            onWordOccurrencesUpdated?(newRanges)
+            needsDisplay = true
+            Self.markSubviewsAndLayersNeedsDisplay(self)
+        }
+    }
+
+    static func markSubviewsAndLayersNeedsDisplay(_ view: NSView) {
+        view.needsDisplay = true
+        if let layer = view.layer {
+            markLayerTreeNeedsDisplay(layer)
+        }
+        for subview in view.subviews {
+            markSubviewsAndLayersNeedsDisplay(subview)
+        }
+    }
+
+    private static func markLayerTreeNeedsDisplay(_ layer: CALayer) {
+        layer.setNeedsDisplay()
+        if let sublayers = layer.sublayers {
+            for sub in sublayers {
+                markLayerTreeNeedsDisplay(sub)
+            }
         }
     }
 
@@ -85,14 +224,85 @@ final class SwiftEditNSTextView: NSTextView {
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        guard currentLineHighlightColor.alphaComponent > 0 else { return }
-
-        if let lineRect = currentLineFullWidthRect(onlyIfInViewport: true) {
+        if currentLineHighlightColor.alphaComponent > 0,
+           let lineRect = currentLineFullWidthRect(onlyIfInViewport: true) {
             lastHighlightedLineRect = lineRect
             if lineRect.intersects(rect) {
                 currentLineHighlightColor.setFill()
                 lineRect.fill()
             }
+        }
+        drawWordOccurrencesBackground(in: rect)
+    }
+
+    /// Paints rounded secondary occurrence boxes and non-color-only bottom underlines directly on the `NSTextView` background canvas for all occurrences intersecting `rect`.
+    private func drawWordOccurrencesBackground(in rect: NSRect) {
+        let activeOccurrences = effectiveWordOccurrenceRanges
+        guard !activeOccurrences.isEmpty,
+              wordOccurrenceBackgroundColor.alphaComponent > 0,
+              let textLayoutManager,
+              let contentManager = textLayoutManager.textContentManager else {
+            return
+        }
+        let docRange = contentManager.documentRange
+        let totalUTF16 = textStorage?.length ?? 0
+        guard totalUTF16 > 0 else { return }
+
+        let viewportRange = textLayoutManager.textViewportLayoutController.viewportRange ?? docRange
+        let visStart = max(0, contentManager.offset(from: docRange.location, to: viewportRange.location))
+        let visEnd = min(totalUTF16, max(visStart, contentManager.offset(from: docRange.location, to: viewportRange.endLocation)))
+        let rangeStart = max(0, visStart - 256)
+        let rangeEnd = min(totalUTF16, visEnd + 256)
+        let origin = textContainerOrigin
+
+        var lo = 0
+        var hi = activeOccurrences.count
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2
+            if activeOccurrences[mid].upperBound <= rangeStart {
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
+        }
+
+        let hasUnderline = wordOccurrenceUnderlineColor.alphaComponent > 0
+        var idx = lo
+        while idx < activeOccurrences.count {
+            let occ = activeOccurrences[idx]
+            if occ.location >= rangeEnd { break }
+            let startLoc: (any NSTextLocation)? = occ.location >= visStart
+                ? contentManager.location(viewportRange.location, offsetBy: occ.location - visStart)
+                : contentManager.location(docRange.location, offsetBy: occ.location)
+            if let startLoc,
+               let endLoc = contentManager.location(startLoc, offsetBy: occ.length),
+               let nsTextRange = NSTextRange(location: startLoc, end: endLoc) {
+                textLayoutManager.enumerateTextSegments(in: nsTextRange, type: .standard, options: []) { _, segmentFrame, _, _ in
+                    let segRect = NSRect(
+                        x: origin.x + segmentFrame.origin.x,
+                        y: origin.y + segmentFrame.origin.y,
+                        width: segmentFrame.width,
+                        height: segmentFrame.height
+                    )
+                    if segRect.width > 0, segRect.height > 0, segRect.intersects(rect) {
+                        wordOccurrenceBackgroundColor.setFill()
+                        let pill = NSBezierPath(roundedRect: segRect.insetBy(dx: -1.0, dy: 0), xRadius: 2.5, yRadius: 2.5)
+                        pill.fill()
+                        if hasUnderline {
+                            wordOccurrenceUnderlineColor.setFill()
+                            let underlineRect = NSRect(
+                                x: segRect.minX,
+                                y: segRect.maxY - 1.5,
+                                width: segRect.width,
+                                height: 1.5
+                            )
+                            underlineRect.fill()
+                        }
+                    }
+                    return true
+                }
+            }
+            idx += 1
         }
     }
 
@@ -147,6 +357,42 @@ final class SwiftEditNSTextView: NSTextView {
     }
 }
 
+/// Inline ghost-text completion drawn right after the caret (`REQ-020-01`).
+///
+/// A non-interactive overlay subview of the text view: it never touches `NSTextContentStorage`, so the document, undo
+/// stack and `BufferRevision` stay untouched until `Tab` accepts it (`UI-006`). Opaque canvas background keeps it legible.
+@MainActor
+final class GhostCompletionView: NSView {
+    private(set) var suffix: String = ""
+    private var attributes: [NSAttributedString.Key: Any] = [:]
+    private var canvasColor: NSColor = .clear
+
+    override var isFlipped: Bool { true }
+
+    func configure(suffix: String, font: NSFont, textColor: NSColor, canvasColor: NSColor) {
+        self.suffix = suffix
+        self.canvasColor = canvasColor
+        attributes = [.font: font, .foregroundColor: textColor]
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel("Completion suggestion: \(suffix). Press Tab to accept.")
+        needsDisplay = true
+    }
+
+    var preferredWidth: CGFloat {
+        ceil((suffix as NSString).size(withAttributes: attributes).width) + 2
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        canvasColor.setFill()
+        bounds.fill()
+        (suffix as NSString).draw(at: .zero, withAttributes: attributes)
+    }
+
+    /// Clicks always reach the text view underneath.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// `@MainActor` TextKit 2 `NSTextView` wrapper enforcing `#FFFFFF`/`#000000` inverted canvas colors, current-line highlight, non-mutating nested bracket and backtick highlights, Markdown smart Enter continuation, `50%..300%` monospaced zoom, and read-only binary protection (`UI-002..008`, `UI-012`).
 @MainActor
 struct TextKit2EditorView: NSViewRepresentable {
@@ -154,6 +400,7 @@ struct TextKit2EditorView: NSViewRepresentable {
     var bufferRevision: BufferRevision = BufferRevision(1)
     let text: String
     let isEditable: Bool
+    var isWordOccurrenceHighlightEnabled: Bool = true
     var isWordWrapEnabled: Bool = true
     let palette: PurpleThemePalette
     let fontSizePoints: Double
@@ -180,6 +427,8 @@ struct TextKit2EditorView: NSViewRepresentable {
     var typographyGeneration: Int = 0
     /// Shared per-revision line index owned by the workbench (`PERF-017-B3`).
     var lineIndexProvider: ((DocumentID, BufferRevision) -> MarkdownLineIndex?)? = nil
+    /// Word-cache lookup returning the suffix that completes a typed prefix (`REQ-020-01`); `nil` disables ghost text.
+    var completionProvider: ((String) -> String?)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -221,11 +470,38 @@ struct TextKit2EditorView: NSViewRepresentable {
         applyStylingIfNeeded(to: textView, in: scrollView, coordinator: context.coordinator, force: true)
         context.coordinator.applyProgrammaticTextUpdate(text, to: textView, documentID: documentID, isInitialSetup: true)
         context.coordinator.markSynced(documentID: documentID, revision: bufferRevision)
+        textView.externalWordOccurrenceRanges = highlightProjection.wordOccurrenceRanges
+        textView.isWordOccurrenceHighlightEnabled = isWordOccurrenceHighlightEnabled
+        let initLength = textView.textStorage?.length ?? 0
+        if programmaticSelection.location >= 0, programmaticSelection.upperBound <= initLength, programmaticSelection.length > 0 {
+            context.coordinator.isApplyingProgrammaticUpdate = true
+            textView.setSelectedRange(NSRange(location: programmaticSelection.location, length: programmaticSelection.length))
+            context.coordinator.isApplyingProgrammaticUpdate = false
+        }
+        textView.updateLiveWordOccurrencesAndInvalidate(force: true)
+        let coordinatorRef = context.coordinator
+        textView.onWordOccurrencesUpdated = { [weak coordinatorRef, weak textView] ranges in
+            guard let coordinatorRef, let textView else { return }
+            coordinatorRef.wordOccurrenceRanges = ranges
+            coordinatorRef.lastHighlightSnapshot = nil
+            if let layoutManager = textView.textLayoutManager,
+               let contentManager = layoutManager.textContentManager {
+                let docRange = contentManager.documentRange
+                let targetRange = layoutManager.textViewportLayoutController.viewportRange ?? docRange
+                if ranges.isEmpty {
+                    layoutManager.setRenderingAttributes([:], for: targetRange)
+                }
+                layoutManager.invalidateRenderingAttributes(for: targetRange)
+                layoutManager.invalidateLayout(for: targetRange)
+                layoutManager.textViewportLayoutController.layoutViewport()
+            }
+        }
         applyNonMutatingHighlightsIfNeeded(to: textView, coordinator: context.coordinator, force: true)
         scrollView.documentView = textView
         scrollView.contentView.postsBoundsChangedNotifications = true
         context.coordinator.onViewportMetricsChange = onViewportMetricsChange
         context.coordinator.lineIndexProvider = lineIndexProvider
+        context.coordinator.completionProvider = completionProvider
         context.coordinator.observeScrollBounds(of: scrollView, textView: textView)
         installGFMValidator(on: textView, coordinator: context.coordinator)
         return scrollView
@@ -237,6 +513,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         if let textView = scrollView.documentView as? SwiftEditNSTextView {
             textView.delegate = nil
             textView.onEscape = nil
+            textView.onWordOccurrencesUpdated = nil
             textView.textLayoutManager?.renderingAttributesValidator = nil
         }
         coordinator.invalidateLineIndex()
@@ -252,10 +529,13 @@ struct TextKit2EditorView: NSViewRepresentable {
         coordinator.onTableTab = onTableTab
         coordinator.onViewportMetricsChange = onViewportMetricsChange
         coordinator.lineIndexProvider = lineIndexProvider
+        coordinator.completionProvider = isEditable ? completionProvider : nil
         coordinator.undoRegistry = undoRegistry
         coordinator.activeBufferRevision = bufferRevision
         coordinator.syntaxLanguage = documentLanguage
-        coordinator.wordOccurrenceRanges = highlightProjection.wordOccurrenceRanges
+        textView.isWordOccurrenceHighlightEnabled = isWordOccurrenceHighlightEnabled
+        textView.externalWordOccurrenceRanges = highlightProjection.wordOccurrenceRanges
+        coordinator.wordOccurrenceRanges = textView.effectiveWordOccurrenceRanges
         coordinator.updateRenderingTableIfNeeded(
             palette: palette,
             fontSizePoints: fontSizePoints,
@@ -264,15 +544,19 @@ struct TextKit2EditorView: NSViewRepresentable {
         )
 
         let stylingChanged = applyStylingIfNeeded(to: textView, in: scrollView, coordinator: coordinator, force: false)
+        if stylingChanged || coordinator.activeDocumentID != documentID {
+            coordinator.hideGhostCompletion()
+        }
 
         var textMutated = false
         let needsTextSyncCheck = coordinator.activeDocumentID != documentID
             || coordinator.lastSyncedBufferRevision != bufferRevision
             || coordinator.hasPendingLocalEdit
         if needsTextSyncCheck {
-            if coordinator.hasPendingLocalEdit && coordinator.activeDocumentID == documentID {
-                // Local textDidChange already owns the live NSTextStorage contents; re-stamp revision without O(N) full-string compare.
-                coordinator.hasPendingLocalEdit = false
+            let hadPendingLocalEdit = coordinator.hasPendingLocalEdit
+            coordinator.hasPendingLocalEdit = false
+            if hadPendingLocalEdit && coordinator.activeDocumentID == documentID && coordinator.isDisplaying(text, in: textView) {
+                // Local textDidChange already owns the live NSTextStorage contents (O(1) shared-buffer pointer check).
                 coordinator.markSynced(documentID: documentID, revision: bufferRevision)
                 coordinator.retagCachedLineIndexRevision(documentID: documentID, revision: bufferRevision, storageLength: textView.textStorage?.length ?? 0)
             } else if coordinator.activeDocumentID != documentID || !coordinator.isDisplaying(text, in: textView) {
@@ -287,8 +571,14 @@ struct TextKit2EditorView: NSViewRepresentable {
         var selectionChanged = false
         if coordinator.appliedSelectionToken != programmaticSelectionToken {
             coordinator.appliedSelectionToken = programmaticSelectionToken
+            let preserveActiveLogSelection = !isEditable
+                && documentLanguage == .log
+                && programmaticSelection.length == 0
+                && textView.selectedRange().length >= WordOccurrenceScanner.minWordUTF16Length
             let length = textView.textStorage?.length ?? 0
-            if programmaticSelection.location >= 0, programmaticSelection.upperBound <= length {
+            if !preserveActiveLogSelection,
+               programmaticSelection.location >= 0,
+               programmaticSelection.upperBound <= length {
                 coordinator.isApplyingProgrammaticUpdate = true
                 Coordinator.revealSelection(NSRange(location: programmaticSelection.location, length: programmaticSelection.length), in: textView)
                 coordinator.isApplyingProgrammaticUpdate = false
@@ -298,6 +588,12 @@ struct TextKit2EditorView: NSViewRepresentable {
         if coordinator.appliedFocusRequestToken != editorFocusRequestToken {
             coordinator.appliedFocusRequestToken = editorFocusRequestToken
             textView.window?.makeFirstResponder(textView)
+        } else if !isEditable,
+                  documentLanguage == .log,
+                  textView.selectedRange().length >= WordOccurrenceScanner.minWordUTF16Length,
+                  let win = textView.window,
+                  win.firstResponder !== textView {
+            win.makeFirstResponder(textView)
         }
 
         let highlightsChanged = applyNonMutatingHighlightsIfNeeded(
@@ -307,7 +603,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         )
         if stylingChanged || textMutated || highlightsChanged {
             textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
-            textView.needsDisplay = true
+            SwiftEditNSTextView.markSubviewsAndLayersNeedsDisplay(textView)
         }
         if stylingChanged || textMutated || selectionChanged {
             coordinator.emitViewportMetrics(for: scrollView, textView: textView)
@@ -361,6 +657,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             // fragment revalidation during layoutViewport() or scrolling never clears them.
             Self.applyWordOccurrences(
                 coordinator.wordOccurrenceRanges,
+                selectedRange: textView.selectedRange(),
                 in: layoutManager,
                 contentManager: contentManager,
                 docStart: docStart,
@@ -375,6 +672,7 @@ struct TextKit2EditorView: NSViewRepresentable {
 
     private static func applyWordOccurrences(
         _ occurrences: [SwiftEditCore.TextRange],
+        selectedRange: NSRange,
         in layoutManager: NSTextLayoutManager,
         contentManager: NSTextContentManager,
         docStart: any NSTextLocation,
@@ -384,6 +682,21 @@ struct TextKit2EditorView: NSViewRepresentable {
         rangeEnd: Int,
         table: EditorRenderingAttributeTable
     ) {
+        if selectedRange.length > 0,
+           selectedRange.location < rangeEnd,
+           NSMaxRange(selectedRange) > rangeStart,
+           !occurrences.isEmpty {
+            let selStart: (any NSTextLocation)? = selectedRange.location >= anchorOffset
+                ? contentManager.location(anchorLocation, offsetBy: selectedRange.location - anchorOffset)
+                : contentManager.location(docStart, offsetBy: selectedRange.location)
+            if let selStart,
+               let selEnd = contentManager.location(selStart, offsetBy: selectedRange.length),
+               let selTextRange = NSTextRange(location: selStart, end: selEnd) {
+                layoutManager.addRenderingAttribute(.foregroundColor, value: table.primarySelectionBackground, for: selTextRange)
+                layoutManager.addRenderingAttribute(.underlineStyle, value: NSUnderlineStyle.thick.rawValue, for: selTextRange)
+                layoutManager.addRenderingAttribute(.underlineColor, value: table.primarySelectionBackground, for: selTextRange)
+            }
+        }
         guard !occurrences.isEmpty else { return }
         let occurrenceBg = table.wordOccurrenceBackground
         let occurrenceUnderline = table.wordOccurrenceUnderline
@@ -446,6 +759,7 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         textView.usesAdaptiveColorMappingForDarkAppearance = false
         textView.isEditable = isEditable
+        textView.isSelectable = true
         textView.isHorizontallyResizable = !isWordWrapEnabled
         if isWordWrapEnabled {
             let width = max(120, scrollView.contentSize.width)
@@ -468,6 +782,9 @@ struct TextKit2EditorView: NSViewRepresentable {
         textView.textColor = canvasFg
         textView.insertionPointColor = canvasFg
         textView.currentLineHighlightColor = palette.currentLineHighlight.nsColor
+        textView.primarySelectionBackgroundColor = palette.selectionBackground.nsColor
+        textView.wordOccurrenceBackgroundColor = palette.wordOccurrenceBackground.nsColor
+        textView.wordOccurrenceUnderlineColor = palette.wordOccurrenceUnderline.nsColor
         textView.font = editorFont
         textView.selectedTextAttributes = [
             .backgroundColor: palette.selectionBackground.nsColor,
@@ -524,8 +841,11 @@ struct TextKit2EditorView: NSViewRepresentable {
         }
         coordinator.lastHighlightSnapshot = signature
 
+        let effectiveOccurrences = textView.effectiveWordOccurrenceRanges
+        coordinator.wordOccurrenceRanges = effectiveOccurrences
+
         let hasAnyHighlights = !highlightProjection.backtickSpans.isEmpty
-            || !highlightProjection.wordOccurrenceRanges.isEmpty
+            || !effectiveOccurrences.isEmpty
             || !highlightProjection.bracketPairs.isEmpty
             || highlightProjection.activeBracketPair != nil
             || !lintDiagnostics.isEmpty
@@ -546,8 +866,12 @@ struct TextKit2EditorView: NSViewRepresentable {
             clearRange = targetRange
         }
         layoutManager.setRenderingAttributes([:], for: clearRange)
+        layoutManager.invalidateRenderingAttributes(for: clearRange)
         coordinator.hadNonMutatingHighlights = hasAnyHighlights
-        guard hasAnyHighlights else { return true }
+        guard hasAnyHighlights else {
+            layoutManager.invalidateLayout(for: clearRange)
+            return true
+        }
 
         func intersectsVisible(_ loc: Int, _ len: Int) -> Bool {
             let end = loc + len
@@ -599,7 +923,8 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         // 1b. Soft secondary highlights for other whole-word occurrences of the selected word (binary-searched to visible viewport; WCAG 1.4.1 non-color-only underline cue)
         Self.applyWordOccurrences(
-            highlightProjection.wordOccurrenceRanges,
+            effectiveOccurrences,
+            selectedRange: textView.selectedRange(),
             in: layoutManager,
             contentManager: contentManager,
             docStart: docRange.location,
@@ -695,6 +1020,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
         }
 
+        layoutManager.invalidateLayout(for: clearRange)
         return true
     }
 
@@ -765,6 +1091,12 @@ struct TextKit2EditorView: NSViewRepresentable {
         var activeDocumentID: DocumentID?
         var activeBufferRevision: BufferRevision?
         var hadNonMutatingHighlights = false
+        var completionProvider: ((String) -> String?)?
+        /// Visible ghost suggestion: caret location it belongs to and the suffix `Tab` inserts.
+        private(set) var ghostSuggestion: (location: Int, suffix: String)?
+        private var ghostView: GhostCompletionView?
+        /// Replacement string of the edit in flight, captured in `shouldChangeTextIn` (insertions only).
+        private var pendingInsertedString: String?
         var onViewportMetricsChange: ((GutterViewportMetrics) -> Void)?
         private var lastEmittedViewportMetrics: GutterViewportMetrics?
         private var scrollBoundsObserver: (any NSObjectProtocol)?
@@ -999,6 +1331,29 @@ struct TextKit2EditorView: NSViewRepresentable {
             if isSameDocument {
                 let currentLength = textView.textStorage?.length ?? 0
                 let oldText = currentNativeText(of: textView)
+                var preservedLogSelectedToken: String? = nil
+                var preservedLogOccurrenceOrdinal: Int = 0
+                if !textView.isEditable,
+                   previousSelection.location >= 0,
+                   previousSelection.length >= WordOccurrenceScanner.minWordUTF16Length,
+                   previousSelection.length <= WordOccurrenceScanner.maxWordUTF16Length {
+                    let oldNS = oldText as NSString
+                    if NSMaxRange(previousSelection) <= oldNS.length {
+                        let token = oldNS.substring(with: previousSelection)
+                        preservedLogSelectedToken = token
+                        var scanOffset = 0
+                        while scanOffset < previousSelection.location {
+                            let hit = oldNS.range(
+                                of: token,
+                                options: [.literal],
+                                range: NSRange(location: scanOffset, length: previousSelection.location - scanOffset)
+                            )
+                            if hit.location == NSNotFound { break }
+                            preservedLogOccurrenceOrdinal += 1
+                            scanOffset = max(hit.location + 1, NSMaxRange(hit))
+                        }
+                    }
+                }
                 if oldText != newText {
                     // Replace only the differing middle range (common prefix/suffix kept): TextKit 2 re-lays out just the
                     // touched paragraphs, live log tails append in O(delta), and the single undo step stays exact.
@@ -1014,6 +1369,42 @@ struct TextKit2EditorView: NSViewRepresentable {
                         textView.string = newText
                     }
                 }
+                updateNativeTextMirror(newText)
+                let newLength = nativeTextMirror?.utf16Length ?? newText.utf16.count
+                var resolvedLocation = min(max(0, targetLocation), newLength)
+                var resolvedLength = min(max(0, targetLength), newLength - resolvedLocation)
+                if let token = preservedLogSelectedToken, !token.isEmpty {
+                    let newNS = newText as NSString
+                    let candidateRange = NSRange(location: resolvedLocation, length: resolvedLength)
+                    let stillMatchesAtSameOffset = candidateRange.length == (token as NSString).length
+                        && NSMaxRange(candidateRange) <= newNS.length
+                        && newNS.substring(with: candidateRange) == token
+                    if !stillMatchesAtSameOffset {
+                        var matches: [NSRange] = []
+                        var scanOffset = 0
+                        while scanOffset < newNS.length {
+                            let hit = newNS.range(
+                                of: token,
+                                options: [.literal],
+                                range: NSRange(location: scanOffset, length: newNS.length - scanOffset)
+                            )
+                            if hit.location == NSNotFound { break }
+                            matches.append(hit)
+                            scanOffset = max(hit.location + 1, NSMaxRange(hit))
+                        }
+                        if !matches.isEmpty {
+                            let chosen = matches[min(preservedLogOccurrenceOrdinal, matches.count - 1)]
+                            resolvedLocation = chosen.location
+                            resolvedLength = chosen.length
+                        }
+                    }
+                }
+                textView.setSelectedRange(NSRange(location: resolvedLocation, length: resolvedLength))
+                if resolvedLength > 0, let win = textView.window, win.firstResponder !== textView {
+                    win.makeFirstResponder(textView)
+                }
+                (textView as? SwiftEditNSTextView)?.notifyProgrammaticTextOrStyleMutation()
+                return
             } else {
                 isSwappingTabBuffer = true
                 activeDocumentID = documentID
@@ -1023,10 +1414,11 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
 
             updateNativeTextMirror(newText)
-            let newLength = (newText as NSString).length
+            let newLength = nativeTextMirror?.utf16Length ?? newText.utf16.count
             let clampedLocation = min(max(0, targetLocation), newLength)
             let clampedLength = min(max(0, targetLength), newLength - clampedLocation)
             textView.setSelectedRange(NSRange(location: clampedLocation, length: clampedLength))
+            (textView as? SwiftEditNSTextView)?.notifyProgrammaticTextOrStyleMutation()
         }
 
         /// Smallest UTF-16 range of `old` (and its replacement) that turns `old` into `new`, keeping the longest common
@@ -1204,16 +1596,100 @@ struct TextKit2EditorView: NSViewRepresentable {
             hasPendingLocalEdit = true
             updateNativeTextMirror(textView.string)
             onTextChange(nativeTextMirror?.text ?? textView.string)
+            let inserted = pendingInsertedString
+            pendingInsertedString = nil
+            refreshGhostCompletion(in: textView, inserted: inserted)
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            pendingInsertedString = affectedCharRange.length == 0 ? replacementString : nil
+            return true
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !isApplyingProgrammaticUpdate,
                   let textView = notification.object as? NSTextView else { return }
             let range = textView.selectedRange()
+            if let ghost = ghostSuggestion, range.length != 0 || range.location != ghost.location {
+                hideGhostCompletion()
+            }
             onSelectionChange(SwiftEditCore.TextRange(location: range.location, length: range.length))
         }
 
+        // MARK: Ghost-text completion (`REQ-020-01`)
+
+        /// Shows a suggestion only right after a single typed character that ends a word prefix of `>= 2` units.
+        func refreshGhostCompletion(in textView: NSTextView, inserted: String?) {
+            guard let provider = completionProvider, textView.isEditable, !textView.hasMarkedText(),
+                  let inserted, inserted.count == 1 else {
+                hideGhostCompletion()
+                return
+            }
+            let selection = textView.selectedRange()
+            let text = ((nativeTextMirror?.text ?? textView.textStorage?.string) ?? "") as NSString
+            guard selection.length == 0,
+                  let match = WordCompletionIndex.wordPrefix(endingAt: selection.location, in: text),
+                  let suffix = provider(match.prefix) else {
+                hideGhostCompletion()
+                return
+            }
+            showGhostCompletion(suffix, at: selection.location, in: textView)
+        }
+
+        private func showGhostCompletion(_ suffix: String, at location: Int, in textView: NSTextView) {
+            guard let window = textView.window else { return }
+            let screenRect = textView.firstRect(forCharacterRange: NSRange(location: location, length: 0), actualRange: nil)
+            guard screenRect != .zero else {
+                hideGhostCompletion()
+                return
+            }
+            let caretRect = textView.convert(window.convertFromScreen(screenRect), from: nil)
+            let view = ghostView ?? GhostCompletionView()
+            if view.superview !== textView {
+                textView.addSubview(view)
+            }
+            ghostView = view
+            view.configure(
+                suffix: suffix,
+                font: cachedRegularFont,
+                textColor: gfmPalette.editorCanvasText.nsColor.withAlphaComponent(0.42),
+                canvasColor: gfmPalette.editorCanvasBackground.nsColor
+            )
+            view.frame = NSRect(x: caretRect.minX + 1, y: caretRect.minY, width: view.preferredWidth, height: max(caretRect.height, cachedRegularFont.boundingRectForFont.height))
+            view.isHidden = false
+            ghostSuggestion = (location, suffix)
+        }
+
+        func hideGhostCompletion() {
+            ghostSuggestion = nil
+            ghostView?.isHidden = true
+        }
+
+        /// Inserts the visible suggestion as one undoable `insertText` (one `BufferRevision`); `false` when none applies.
+        func acceptGhostCompletion(in textView: NSTextView) -> Bool {
+            guard let ghost = ghostSuggestion, textView.isEditable else { return false }
+            let selection = textView.selectedRange()
+            guard selection.length == 0, selection.location == ghost.location else {
+                hideGhostCompletion()
+                return false
+            }
+            hideGhostCompletion()
+            textView.insertText(ghost.suffix, replacementRange: selection)
+            return true
+        }
+
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertTab(_:)), acceptGhostCompletion(in: textView) {
+                return true
+            }
+            if ghostSuggestion != nil,
+               commandSelector == #selector(NSResponder.cancelOperation(_:)) || commandSelector == #selector(NSTextView.complete(_:)) {
+                hideGhostCompletion()
+                return true
+            }
+            if ghostSuggestion != nil {
+                hideGhostCompletion()
+            }
             if commandSelector == #selector(NSResponder.insertTab(_:)) || commandSelector == #selector(NSResponder.insertBacktab(_:)) {
                 return handleListIndent(in: textView, outdent: commandSelector == #selector(NSResponder.insertBacktab(_:)))
             }
@@ -1286,6 +1762,8 @@ struct EditorRenderingAttributeTable {
     let backtickForeground: NSColor
     let backtickInlineBackground: NSColor
     let backtickMultilineBackground: NSColor
+    let primarySelectionBackground: NSColor
+    let primarySelectionForeground: NSColor
     let wordOccurrenceBackground: NSColor
     let wordOccurrenceUnderline: NSColor
     let nestedBracketColors: [NSColor]
@@ -1326,6 +1804,8 @@ struct EditorRenderingAttributeTable {
         backtickForeground = backtickFg
         backtickInlineBackground = inlineBg
         backtickMultilineBackground = palette.backtickMultilineBackground.nsColor
+        primarySelectionBackground = palette.selectionBackground.nsColor
+        primarySelectionForeground = palette.selectionForeground.nsColor
         wordOccurrenceBackground = palette.wordOccurrenceBackground.nsColor
         wordOccurrenceUnderline = palette.wordOccurrenceUnderline.nsColor
         nestedBracketColors = palette.nestedBracketPalette.isEmpty

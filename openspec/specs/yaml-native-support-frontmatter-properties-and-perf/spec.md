@@ -142,7 +142,7 @@ WHEN the user edits, renames, adds or removes an editable property, the `Frontma
 - **THEN** the value is written as one escaped quoted scalar keeping exactly two `---` delimiters, the three invalid key operations return `.rejected` with no edit, and the stale edit returns `.staleRevision` with no edit
 
 ### Requirement: REQ-009 Collapsible Accessible Properties Panel With Single Undo
-WHILE the active tab is a writable `.markdown` document with a line-1 frontmatter block, `SwiftEditUI` SHALL show a collapsible `PropertiesPanelView` above the editor listing entries with grey key labels and full-color values, apply edits through `DocumentSession.applyTextEdits` as one undo step, show read-only entries as non-editable with a banner, and expose VoiceOver labels and keyboard navigation [UI-005][UI-009][UI-010][DATA-003].
+WHILE the active tab is a writable `.markdown` document with a line-1 frontmatter block, `SwiftEditUI` SHALL show a collapsible `PropertiesPanelView`, collapsed by default (spec 020), above the editor listing entries with grey key labels and full-color values, apply edits through `DocumentSession.applyTextEdits` as one undo step, show read-only entries as non-editable with a banner, and expose VoiceOver labels and keyboard navigation [UI-005][UI-009][UI-010][DATA-003].
 
 #### Scenario: P9 Panel Edit Applies One Undo Step and Advances the Revision
 - **Path**: P9

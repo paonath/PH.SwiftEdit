@@ -4,6 +4,70 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - 2026-11-23 UTC
+Branch: feature/contaxtual_actions | Commit: 4f026b4
+
+### Added
+- Added secondary word and token occurrence highlighting to the integrated log viewer across Plain, Live Direct (`Cmd+L`), Live Inverse (`Shift+Cmd+L`), and tail-only modes while preserving active user selections across live polls and order switches without locking the `.log` file (`TextKit2EditorView`, `SwiftEditRootView`, `LogTailPanelView`).
+- Added live window end-to-end pixel and non-locking (`flock`) tests covering mouse double-click, `Shift+Arrow` selection, backtick-enclosed tokens, and Plain/Direct/Inverse log tail modes (`LiveUIMouseAndShortcutsResponsivenessTests`).
+
+### Fixed
+- Fixed secondary word-occurrence highlights failing to appear in TextKit 2 viewports by scanning occurrences synchronously inside `SwiftEditNSTextView`, painting occurrence pills and underlines directly in `drawBackground(in:)`, and invalidating nested `_NSTextViewportElementView` CoreAnimation sublayers (`TextKit2EditorView`, `a10373f`, `e27b44a`).
+- Fixed read-only log viewer primary selection contrast and focus restoration when interacting with `Log · live` panel controls (`TextKit2EditorView`, `LogTailPanelView`).
+
+## [Unreleased] - 2026-11-23 UTC
+Branch: feature/contaxtual_actions | Commit: 32cd96d
+
+### Added
+- Added live window end-to-end verification covering mouse interactions, TextKit 2 editing, ghost-text completion, double-click cycles, contextual action palette, and all keyboard shortcuts (`LiveUIMouseAndShortcutsResponsivenessTests`, `32cd96d`).
+
+### Changed
+- Restored Swift reflection metadata (`__swift5_fieldmd` and `__swift5_reflstr`) and `LLVM_LTO = YES_THIN` in `XcodeApp/PH.SwiftEdit.xcodeproj/project.pbxproj` and `Scripts/build-app.sh` so SwiftUI `AttributeGraph` property discovery (`@State`, `@FocusState`, `@Environment`, `@FocusedValue`) remains intact (`32cd96d`).
+
+### Fixed
+- Fixed UI unresponsiveness caused by stripping SwiftUI reflection metadata in `c9d9c33`, and fixed `TextKit2EditorView.updateNSView` skipping programmatic text updates (e.g., `Cmd+Return` Surround With, `Cmd+D`, Replace) when `hasPendingLocalEdit` was set (`32cd96d`).
+- Fixed `WordCompletionIndex` background rebuilds discarding valid caches when `BufferRevision` advanced mid-flight, and isolated `SessionRecovery` directories in `ShortcutsFindGutterAndAccessibilityTests` and `UIRenderingCoverageTests` (`32cd96d`).
+
+## [Unreleased] - 2026-11-23 UTC
+Branch: feature/contaxtual_actions | Commit: c9d9c33
+
+### Changed
+- Reduced `Release` macOS `SwiftEdit.app` bundle size by a further 17.1% (`7.6 MB → 6.3 MB`; main executable `6.6 MB → 5.4 MB`, `__LINKEDIT` `983 KB → 295 KB`) by enabling Full LTO (`LLVM_LTO = YES`), `LD_EXPORT_SYMBOLS = NO`, `SWIFT_REFLECTION_METADATA_LEVEL = none`, and `GCC_SYMBOLS_PRIVATE_EXTERN = YES` in `XcodeApp/PH.SwiftEdit.xcodeproj/project.pbxproj` and `Scripts/build-app.sh` (`c9d9c33`).
+- Optimized editor, search, completion, and log-tail hot paths across `WordOccurrenceScanner` (linear UTF-16 cursor for Unicode whole-word matching), `WordCompletionIndex` (ASCII fast path and deferred buffer capture), `TextKit2EditorView` (zero-copy `mutableString` access), `SwiftEditRootView` (`O(log L)` `previewSourceLine` and shared `MarkdownLineIndex`/`BracketTopology`/`BacktickHighlightResult` caches), `LogTailBuffer` (`memchr` newline scanning), `ElementContextualActions`, and `DoubleClickSelectionCycle` (`c9d9c33`).
+
+### Fixed
+- Fixed fenced code block closing detection with trailing spaces in `MarkdownPreviewProjector`, stale `previewTaskTarget` locking across tab switches, `DispatchSourceFileSystemObject` retain cycle and missing `deinit` teardown in `LogTailController`, and `workdir` cleanup when `ditto` launch fails in `AppUpdateInstaller` (`c9d9c33`).
+- Fixed concurrent preference-write race conditions in `JSONPreferencesStore`, uninitialized buffer mutation in `DocumentSession.applyTextEdits`, and `ElementContextualMenuState` Up-Arrow wrapping from an empty highlight and whitespace-only query handling (`c9d9c33`).
+
+### Security
+- Added missing symbolic-link validation on `session-manifest.json` in `SessionRecoveryStore.saveManifest` and rejected UTF-16 surrogate-pair splits in `ElementContextualActionCatalog` (`c9d9c33`).
+
+## [Unreleased] - 2026-11-23 UTC
+Branch: feature/contaxtual_actions | Base commit: 7fad5f1
+
+### Added
+- Added inline ghost-text word completion from words already in the document (in-memory per-document cache of words longer than 3 characters, rebuilt off the main thread); `Tab` accepts, `Esc` dismisses, and `Tab` keeps its list/table behaviour when no suggestion is shown (`openspec/specs/integrations-autocomplete-contextual-menu-and-redesign-plan/spec.md`).
+- Added the `Cmd+Return` contextual action palette (`ElementContextualMenu`): extensible groups, filter, keyboard navigation and VoiceOver labels; "Surround With…" (backticks, code fence, parentheses) on a selection and "Duplicate Document" with or without a selection; it closes like `Esc` on any outside click.
+- Added Duplicate Document: file-backed tabs are copied, including unsaved edits, to `name copy.ext` (then `name copy 2.ext` …, never overwriting) in the same folder and opened right after the source tab; untitled tabs are duplicated in memory only.
+- Added two-tab File Compare: the tab it is opened from is the source, a "Compare with" picker selects another open tab, and its X returns to comparing the saved version with the current buffer.
+- Added a searchable, clickable keyboard shortcuts list (title, description or shortcut in symbol or word form) to the floating `Cmd+/` sheet and as a right side panel (`Option+Cmd+/`); clicking a row runs the command on the editor caret or the workbench.
+- Added Light, Dark and Auto to the SwiftEdit menu, and a repeated double-click cycle: word, then the whole whitespace-free token (e.g. `contextual-menu`), then no selection.
+- Added `SwiftEdit Line`, an in-code set of 50 minimal line icons (`AppIcon`) replacing every SF Symbol in the interface, and the opt-in offscreen visual audit (`SWIFTEDIT_VISUAL_AUDIT_DIR`, 34 Light/Dark snapshots in `docs/design/redesign-020/`).
+
+### Changed
+- Redesigned the interface in a Zed-inspired neutral style (Constitution `v1.7.0`, `UI-001`): neutral header, tab strip, sidebar and status bar with purple reserved for caret, focus, active tab and toggles; flat tabs; header with the SwiftEdit menu followed by the command icons and the `folder / file` breadcrumb on the right; zoom and theme moved to the status bar; header and SwiftEdit menu scale with the editor zoom; the Concept E2 logo is unchanged.
+- Restyled the Properties panel (collapsed by default, compact disclosure aligned with the text), Preview, Find bar, Document Navigator, sidebar empty state and header menu; the editor gutter now has a grey surface with numbers at 85% of the text size.
+- Moved File Compare out of the header menu to `Shift+Cmd+D`.
+- Reduced the Debug app bundle from 25 MB to 7.5 MB: Debug now dead-strips and keeps symbols in a dSYM beside the app, and `Scripts/build-app.sh -c Debug` builds a compact `-Osize` Debug in `.build/xcode-compact` (`--debuggable` keeps `-Onone`); the staging script also copies the dSYM.
+
+### Fixed
+- Fixed selection occurrence highlighting for partial words and symbol groups (e.g. `->`), which previously highlighted only whole words.
+- Fixed the duplicated warning glyph in the status-bar lint label and lint markers overlapping two-digit line numbers in the gutter.
+- Fixed purple separators under Reduce Transparency (now neutral, at least 3:1) and the CheatSheet listing `Cmd+W` for Close Document (now `Shift+Cmd+W`; Word Wrap `Cmd+W` added).
+
+### Security
+- Duplicate Document writes only through the confined atomic save, never overwrites existing files and is refused for binary, binary-inspection and live-tail tabs; no new entitlements, processes or network access.
+
 ## [Unreleased] - 2026-11-22 UTC
 Branch: feature/logging | Commit: 2d5f011
 

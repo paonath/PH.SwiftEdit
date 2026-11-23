@@ -72,8 +72,8 @@ final class LogTailWorker: @unchecked Sendable {
         let fd = open(url.path, O_EVTONLY | O_CLOEXEC)
         guard fd >= 0 else { return }
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .extend, .delete, .rename, .attrib], queue: queue)
-        source.setEventHandler { [weak self] in
-            guard let self else { return }
+        source.setEventHandler { [weak self, weak source] in
+            guard let self, let source else { return }
             let events = source.data
             self.pollLocked(force: false)
             if events.contains(.delete) || events.contains(.rename) { self.armVnodeLocked() } // rotation: watch the new file
@@ -115,7 +115,7 @@ public final class LogTailController {
     /// Monotonic change counter used as the tail view's `BufferRevision`.
     public private(set) var generation: UInt64 = 1
     @ObservationIgnored private var buffer = LogTailBuffer()
-    @ObservationIgnored private var worker: LogTailWorker?
+    @ObservationIgnored nonisolated(unsafe) private var worker: LogTailWorker?
     @ObservationIgnored private let reader: any LogFileReading
 
     public init(tabID: DocumentID, url: URL, mode: LogTailMode, lineCount: Int = LogTailController.defaultLineCount, reader: any LogFileReading = LocalLogFileReader()) {
@@ -124,6 +124,10 @@ public final class LogTailController {
         self.mode = mode
         self.lineCount = Self.clamp(lineCount)
         self.reader = reader
+    }
+
+    deinit {
+        worker?.stop()
     }
 
     static func clamp(_ count: Int) -> Int { min(max(1, count), LogTailBuffer.maxLines) }

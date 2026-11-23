@@ -207,6 +207,81 @@ public final class SwiftEditWorkbenchModel {
         return ranges
     }
 
+    // MARK: Word completion (`REQ-020-01`)
+
+    /// Delay after the last edit before the word cache is rebuilt off the main actor (`UI-012`).
+    public nonisolated static let wordCompletionRebuildDebounce: Duration = .milliseconds(350)
+
+    /// Last built per-document word cache; in memory only, dropped with the document (`SEC-012`).
+    @ObservationIgnored private var wordCompletionCache: (id: DocumentID, revision: BufferRevision, index: WordCompletionIndex)?
+    @ObservationIgnored private var wordCompletionRebuildTask: Task<Void, Never>?
+
+    /// Suffix completing the word prefix typed just before the caret, or `nil` (binary/degraded tabs, log tail, no match).
+    ///
+    /// O(log n) lookup on the last built cache; a cache from another document triggers an immediate rebuild instead.
+    public func wordCompletionSuffix(forPrefix prefix: String) -> String? {
+        guard activeLogTail == nil, let session = activeDocumentSession,
+              !session.isBinaryReadOnly, !session.snapshot.isDegradedPlainText else { return nil }
+        guard let cache = wordCompletionCache, cache.id == session.id else {
+            scheduleWordCompletionRebuild(debounce: .zero)
+            return nil
+        }
+        return cache.index.completionSuffix(forPrefix: prefix)
+    }
+
+    /// Rebuilds the active document's word cache on a background task, excluding the word under the caret.
+    public func scheduleWordCompletionRebuild(debounce: Duration = SwiftEditWorkbenchModel.wordCompletionRebuildDebounce) {
+        guard activeLogTail == nil,
+              let session = activeDocumentSession,
+              !session.isBinaryReadOnly,
+              !session.isDegradedPlainText else { return }
+        if let cache = wordCompletionCache, cache.id == session.id, cache.revision == session.revision { return }
+        let targetID = session.id
+        wordCompletionRebuildTask?.cancel()
+        wordCompletionRebuildTask = Task { @MainActor [weak self] in
+            if debounce > .zero {
+                try? await Task.sleep(for: debounce)
+            }
+            guard !Task.isCancelled,
+                  let self,
+                  self.activeLogTail == nil,
+                  let current = self.activeDocumentSession,
+                  current.id == targetID,
+                  !current.isBinaryReadOnly,
+                  !current.isDegradedPlainText else { return }
+            if let cache = self.wordCompletionCache, cache.id == current.id, cache.revision == current.revision { return }
+            let revision = current.revision
+            let text = current.text
+            let caret = self.currentSelection.location
+            let worker = Task.detached(priority: .utility) {
+                WordCompletionIndex.build(from: text, excluding: SwiftEditCore.TextRange(location: caret, length: 0))
+            }
+            let index = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled,
+                  let latest = self.activeDocumentSession,
+                  latest.id == targetID else { return }
+            self.wordCompletionCache = (targetID, revision, index)
+        }
+    }
+
+    /// Synchronously rebuilds the active word cache (tests and first-open paths).
+    public func rebuildWordCompletionIndexNow() {
+        guard activeLogTail == nil,
+              let session = activeDocumentSession,
+              !session.isBinaryReadOnly,
+              !session.isDegradedPlainText else { return }
+        wordCompletionRebuildTask?.cancel()
+        wordCompletionCache = (
+            session.id,
+            session.revision,
+            WordCompletionIndex.build(from: session.text, excluding: SwiftEditCore.TextRange(location: currentSelection.location, length: 0))
+        )
+    }
+
     /// Synchronizes live macOS system dark/light appearance and refreshes `palette` dynamically when in `.auto` mode without reloading buffers (`UI-003`).
     public func updateSystemColorScheme(prefersDark: Bool) {
         guard appearanceMode == .auto else { return }
@@ -1106,6 +1181,7 @@ public final class SwiftEditWorkbenchModel {
         syncUntitledTabTitleIfNeeded(for: activeID, session: session)
         scheduleRecoveryPersist()
         refreshDiagnosticsForActiveDocument()
+        scheduleWordCompletionRebuild()
     }
 
     public func handleSelectionChanged(_ range: SwiftEditCore.TextRange) {
@@ -1312,9 +1388,7 @@ public final class SwiftEditWorkbenchModel {
             let backticks = BacktickHighlightScanner.scan(in: snap).completedValue
             backtickCache = (snap.id, snap.revision, backticks)
             backtickResult = backticks
-            if showDiffPane, let baseline = savedBaselineByID[session.id] {
-                diffCoordinator.compare(lhs: baseline, rhs: snap)
-            }
+            refreshCompare()
             return
         }
 
@@ -1335,6 +1409,9 @@ public final class SwiftEditWorkbenchModel {
 
         let targetID = snap.id
         let targetRevision = snap.revision
+        let reusableTopology = (bracketTopologyCache?.id == targetID && bracketTopologyCache?.revision == targetRevision) ? bracketTopologyCache?.topology : nil
+        let hasReusableBackticks = (backtickCache?.id == targetID && backtickCache?.revision == targetRevision)
+        let reusableBackticks = hasReusableBackticks ? backtickCache?.result : nil
         diagnosticsTask = Task { @MainActor [weak self] in
             let worker = Task.detached(priority: .userInitiated) { () -> (lint: [MarkdownLintDiagnostic], topology: BracketTopology?, backticks: BacktickHighlightResult?, safety: InspectionSafetyBannerState)? in
                 guard !Task.isCancelled else { return nil }
@@ -1342,9 +1419,9 @@ public final class SwiftEditWorkbenchModel {
                 guard !Task.isCancelled else { return nil }
                 let lint = Self.lintDiagnostics(for: snap, language: language)
                 guard !Task.isCancelled else { return nil }
-                let topology = SearchDiffAndBracketEngine.scanTopology(in: snap).completedValue
+                let topology = reusableTopology ?? SearchDiffAndBracketEngine.scanTopology(in: snap).completedValue
                 guard !Task.isCancelled else { return nil }
-                let backticks = BacktickHighlightScanner.scan(in: snap).completedValue
+                let backticks = hasReusableBackticks ? reusableBackticks : BacktickHighlightScanner.scan(in: snap).completedValue
                 return (lint, topology, backticks, safety)
             }
             let computed = await withTaskCancellationHandler {
@@ -1374,9 +1451,7 @@ public final class SwiftEditWorkbenchModel {
             self.backtickCache = (targetID, targetRevision, computed.backticks)
             self.backtickResult = computed.backticks
         }
-        if showDiffPane, let baseline = savedBaselineByID[session.id] {
-            diffCoordinator.compare(lhs: baseline, rhs: snap)
-        }
+        refreshCompare()
     }
 
     /// Awaits any in-flight background diagnostic pass for deterministic verification (`PERF-006`, `N11`).
@@ -1820,9 +1895,240 @@ public final class SwiftEditWorkbenchModel {
         requestEditorFocus()
     }
 
-    /// ESC layering: header submenu first, then navigator, then distraction-free. Returns `true` when consumed.
+    // MARK: Keyboard shortcuts side panel and clickable commands (`REQ-021-04`)
+
+    /// Right-docked shortcuts panel (`⌥⌘/`, header keyboard icon); independent of the floating `⌘/` sheet.
+    public var isShortcutsPanelVisible: Bool = false
+
+    public func toggleShortcutsPanel() {
+        isShortcutsPanelVisible.toggle()
+        if !isShortcutsPanelVisible { requestEditorFocus() }
+    }
+
+    /// Floating sheet click: close the sheet first, then run the command on the editor once the sheet is gone.
+    public func performCheatSheetCommandFromSheet(_ command: CheatSheetCommand) {
+        isCheatSheetPresented = false
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            self?.performCheatSheetCommand(command)
+        }
+    }
+
+    /// Runs a CheatSheet row at the editor caret/selection (text actions) or on the workbench (everything else).
+    public func performCheatSheetCommand(_ command: CheatSheetCommand) {
+        if command.isTextViewAction {
+            performEditorTextAction(command)
+            return
+        }
+        switch command {
+        case .newDocument: newUntitledTab()
+        case .openFile: openFileViaPanel()
+        case .openFolder: openFolderViaPanel()
+        case .openAllFiles: openAllFilesInFolderViaPanel()
+        case .save: if safetyBanner.canSave { saveActiveDocument() }
+        case .saveAs: if safetyBanner.canSave { saveActiveDocumentAsViaPanel() }
+        case .closeDocument: requestCloseActiveTab()
+        case .quit: NSApp.terminate(nil)
+        case .duplicate: if safetyBanner.canSave { performCommandD() }
+        case .contextualActions: presentElementContextualMenu()
+        case .formatDocument: if safetyBanner.canFormat { formatActiveDocument() }
+        case .formatSection: if safetyBanner.canFormat { formatActiveSection() }
+        case .bold: applyMarkdownCommand(.bold)
+        case .italic: applyMarkdownCommand(.italic)
+        case .inlineCode: applyMarkdownCommand(.inlineCode)
+        case .insertLink: applyMarkdownCommand(.link)
+        case .toggleTask: applyMarkdownCommand(.taskToggle)
+        case .find: presentFindBar(mode: .find)
+        case .findAndReplace: presentFindBar(mode: .findAndReplace)
+        case .goToLine: presentFindBar(mode: .goToLine)
+        case .toggleSidebar: toggleLeftSidebar()
+        case .zoomIn: zoomController.zoomIn()
+        case .zoomOut: zoomController.zoomOut()
+        case .resetZoom: zoomController.resetZoom()
+        case .toggleWordWrap: toggleWordWrap()
+        case .togglePreview: toggleMarkdownPreview()
+        case .toggleCompare: toggleDiffPane()
+        case .toggleDiagnostics: toggleDiagnosticsPopover()
+        case .documentNavigator: toggleDocumentNavigator()
+        case .distractionFree: toggleDistractionFree()
+        case .logTailDirect: startLogTail(mode: .direct)
+        case .logTailInverse: startLogTail(mode: .inverse)
+        case .toggleTerminal: toggleTerminalPanel()
+        case .showCheatSheet: isCheatSheetPresented = true
+        case .toggleShortcutsPanel: toggleShortcutsPanel()
+        case .undo, .redo, .cut, .copy, .paste, .selectAll, .lineStart, .lineEnd: break
+        }
+        if command != .showCheatSheet, command != .toggleShortcutsPanel, command != .find, command != .findAndReplace,
+           command != .goToLine, command != .documentNavigator, command != .contextualActions {
+            requestEditorFocus()
+        }
+    }
+
+    /// Focuses the writable editor text view and sends the standard AppKit action, so undo, clipboard, selection and
+    /// caret moves behave exactly like their keyboard shortcuts on the current caret.
+    private func performEditorTextAction(_ command: CheatSheetCommand) {
+        guard let textView = Self.editableEditorTextView(in: hostWindow?.contentView) else { return }
+        textView.window?.makeFirstResponder(textView)
+        switch command {
+        case .undo: textView.undoManager?.undo()
+        case .redo: textView.undoManager?.redo()
+        case .cut: textView.cut(nil)
+        case .copy: textView.copy(nil)
+        case .paste: textView.paste(nil)
+        case .selectAll: textView.selectAll(nil)
+        case .lineStart: textView.moveToBeginningOfLine(nil)
+        case .lineEnd: textView.moveToEndOfLine(nil)
+        default: break
+        }
+    }
+
+    static func editableEditorTextView(in view: NSView?) -> SwiftEditNSTextView? {
+        guard let view else { return nil }
+        if let textView = view as? SwiftEditNSTextView, textView.isEditable { return textView }
+        for child in view.subviews {
+            if let found = editableEditorTextView(in: child) { return found }
+        }
+        return nil
+    }
+
+    // MARK: Header breadcrumb and appearance cycling (redesign-020)
+
+    /// `[folder, file]` for the active tab: the open workspace folder (or the file's parent) and the tab title.
+    public var headerBreadcrumb: [String] {
+        guard let activeID = tabSession.activeTabID,
+              let tab = tabSession.tabs.first(where: { $0.id == activeID }) else { return [] }
+        let folder = selectedFolderURL?.lastPathComponent ?? tab.fileURL?.deletingLastPathComponent().lastPathComponent
+        return [folder, tab.title].compactMap { $0 }.filter { !$0.isEmpty && $0 != "/" }
+    }
+
+    /// Status-bar theme toggle: Light -> Dark -> Auto -> Light.
+    public func cycleAppearanceMode() {
+        switch appearanceMode {
+        case .light: appearanceMode = .black
+        case .black: appearanceMode = .auto
+        case .auto: appearanceMode = .light
+        }
+    }
+
+    // MARK: ElementContextualMenu (`Cmd+Return`, `REQ-020-04`)
+
+    /// Open contextual action palette for the captured selection, or `nil`.
+    public var elementContextualMenu: ElementContextualMenuState?
+
+    /// `true` for a writable, non-tailing tab; selection-only groups are filtered when nothing is selected (`REQ-021-05`).
+    public var canPresentElementContextualMenu: Bool {
+        guard activeLogTail == nil, safetyBanner.canSave,
+              let session = activeDocumentSession, !session.isBinaryReadOnly else { return false }
+        return currentSelection.upperBound <= session.text.utf16.count
+    }
+
+    /// Opens the palette for the current selection or caret; returns `false` (key not consumed) on binary/log tabs.
+    @discardableResult
+    public func presentElementContextualMenu(anchor: CGPoint? = nil) -> Bool {
+        guard canPresentElementContextualMenu else { return false }
+        headerSubmenu.escapePressed()
+        navigatorState = nil
+        elementContextualMenu = ElementContextualMenuState(selection: currentSelection, anchor: anchor)
+        return true
+    }
+
+    /// Closes the palette and gives focus back to the editor with the original selection.
+    public func closeElementContextualMenu() {
+        guard let menu = elementContextualMenu else { return }
+        elementContextualMenu = nil
+        currentSelection = menu.selection
+        programmaticSelectionToken += 1
+        requestEditorFocus()
+    }
+
+    /// Return / click: toggles a group header or performs an action row (highlighted row when `rowID` is `nil`).
+    public func activateElementContextualMenuRow(rowID: String? = nil) {
+        if let rowID { elementContextualMenu?.highlight(rowID: rowID) }
+        guard let row = elementContextualMenu?.highlightedRow else { return }
+        switch row {
+        case .group(let group, _):
+            elementContextualMenu?.toggleGroup(group.id)
+        case .action(let action, _):
+            performElementContextualAction(action)
+        }
+    }
+
+    /// Applies `action` to the captured selection as one `BufferRevision` (or runs a document action) and closes the palette.
+    @discardableResult
+    public func performElementContextualAction(_ action: ElementContextualAction) -> Bool {
+        guard let menu = elementContextualMenu else { return false }
+        elementContextualMenu = nil
+        defer { requestEditorFocus() }
+        if case .duplicateDocument = action.kind {
+            return duplicateActiveDocument()
+        }
+        guard activeLogTail == nil, safetyBanner.canSave,
+              let activeID = tabSession.activeTabID, !logTailOnlyTabIDs.contains(activeID),
+              var session = sessionsByID[activeID],
+              let edit = ElementContextualActionCatalog.evaluate(action.kind, in: session.snapshot, selection: menu.selection) else {
+            return false
+        }
+        do {
+            _ = try session.applyTextEdits(edit.edits, expectedRevision: session.revision)
+            sessionsByID[activeID] = session
+            try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+            syncUntitledTabTitleIfNeeded(for: activeID, session: session)
+            currentSelection = edit.newSelection
+            programmaticSelectionToken += 1
+            scheduleRecoveryPersist()
+            refreshDiagnosticsForActiveDocument()
+            return true
+        } catch {
+            statusBannerMessage = "Contextual action failed: \(error)"
+            return false
+        }
+    }
+
+    /// Duplicates the active document next to its tab (`REQ-021-05`).
+    ///
+    /// - File-backed: writes the current buffer (unsaved edits included) to `name copy.ext` in the same folder through the
+    ///   confined atomic `DocumentLoader.save`, never overwriting an existing file, then opens it.
+    /// - In-memory (untitled): opens a new untitled tab with the same text; nothing touches the disk.
+    @discardableResult
+    public func duplicateActiveDocument() -> Bool {
+        // A transient binary inspection hides the active tab: never duplicate the document behind it (`DATA-003`).
+        guard activeLogTail == nil, activeBinaryInspection == nil, safetyBanner.canSave,
+              let activeID = tabSession.activeTabID, !logTailOnlyTabIDs.contains(activeID),
+              let session = sessionsByID[activeID], !session.isBinaryReadOnly else {
+            statusBannerMessage = "Duplicate Document is not available for binary or live-tail tabs."
+            return false
+        }
+        let sourceIndex = tabSession.tabs.firstIndex { $0.id == activeID } ?? max(0, tabSession.tabs.count - 1)
+        if let sourceURL = session.fileURL {
+            guard let target = DuplicateDocumentNaming.copyURL(for: sourceURL, exists: { FileManager.default.fileExists(atPath: $0.path) }) else {
+                statusBannerMessage = "Duplicate failed: no free “copy” name next to \(sourceURL.lastPathComponent)."
+                return false
+            }
+            let scope = resolveSaveScope(for: target)
+            let copy = DocumentSession(text: session.text, encoding: session.encoding, lineEnding: session.lineEnding)
+            do {
+                guard !FileManager.default.fileExists(atPath: target.path) else { throw CocoaError(.fileWriteFileExists) }
+                _ = try loader.save(copy, to: target, withinScope: scope)
+            } catch {
+                statusBannerMessage = "Duplicate failed: \(error)"
+                return false
+            }
+            openFile(at: target, withinScope: scope)
+            refreshFolderEntries()
+        } else {
+            newUntitledTab()
+            handleEditorTextChanged(session.text)
+        }
+        guard let newID = tabSession.activeTabID, newID != activeID else { return false }
+        moveTab(id: newID, toIndex: min(sourceIndex + 1, tabSession.tabs.count - 1))
+        statusBannerMessage = "Duplicated as \(tabSession.tabs.first { $0.id == newID }?.title ?? "new tab")."
+        return true
+    }
+
+    /// ESC layering: contextual menu, header submenu, navigator, then distraction-free. Returns `true` when consumed.
     @discardableResult
     public func handleEscape() -> Bool {
+        if elementContextualMenu != nil { closeElementContextualMenu(); return true }
         if headerSubmenu.isOpen { dismissHeaderSubmenu(); return true }
         if navigatorState != nil { closeDocumentNavigator(); return true }
         if isDistractionFree { toggleDistractionFree(); return true }
@@ -1978,11 +2284,13 @@ public final class SwiftEditWorkbenchModel {
         if let existing = logTails[id] {
             existing.setMode(mode)
             existing.start()
+            requestEditorFocus()
             return
         }
         let controller = LogTailController(tabID: id, url: url, mode: mode, reader: logFileReader)
         logTails[id] = controller
         controller.start()
+        requestEditorFocus()
     }
 
     /// Pauses the live tail of the active tab (the last snapshot stays visible).
@@ -2091,7 +2399,11 @@ public final class SwiftEditWorkbenchModel {
             // same document until the current revision settles (scheduled from `refreshDiagnosticsForActiveDocument`).
             return previewCache?.id == session.id ? previewCache?.document : nil
         }
-        let document = MarkdownPreviewProjector.project(snapshot: session.snapshot, showPreview: true)
+        let document = MarkdownPreviewProjector.project(
+            snapshot: session.snapshot,
+            showPreview: true,
+            lineIndex: activeLineIndex()
+        )
         previewCache = (session.id, session.revision, document)
         return document
     }
@@ -2111,20 +2423,24 @@ public final class SwiftEditWorkbenchModel {
         if let target = previewTaskTarget, target.id == session.id, target.revision == session.revision { return }
         previewTask?.cancel()
         let snapshot = session.snapshot
+        let cachedIndex = (lineIndexCache?.id == snapshot.id && lineIndexCache?.revision == snapshot.revision) ? lineIndexCache?.index : nil
         previewTaskTarget = (snapshot.id, snapshot.revision)
         previewTask = Task { @MainActor [weak self] in
             let document = await Task.detached(priority: .userInitiated) {
-                MarkdownPreviewProjector.project(snapshot: snapshot, showPreview: true)
+                MarkdownPreviewProjector.project(snapshot: snapshot, showPreview: true, lineIndex: cachedIndex)
             }.value
-            guard let self, !Task.isCancelled,
+            guard let self else { return }
+            if self.previewTaskTarget?.id == snapshot.id && self.previewTaskTarget?.revision == snapshot.revision {
+                self.previewTaskTarget = nil
+            }
+            guard !Task.isCancelled,
                   let current = self.activeDocumentSession, current.id == snapshot.id, current.revision == snapshot.revision else { return }
             self.previewCache = (snapshot.id, snapshot.revision, document)
-            self.previewTaskTarget = nil
             self.previewGeneration &+= 1
         }
     }
 
-    /// 1-based source line of the caret counting `\r\n`, `\n`, and `\r`, cached per `(DocumentID, BufferRevision, caretLocation)` and used as the single scroll driver of the preview (`BUG-016`, `UI-007`).
+    /// 1-based source line of the caret counting `\r\n`, `\n`, and `\r`, cached per `(DocumentID, BufferRevision, caretLocation)` and answered in `O(log L)` via `textIndexCache` (`BUG-016`, `UI-007`).
     public var previewSourceLine: Int {
         guard let session = activeDocumentSession else { return 0 }
         let caret = currentSelection.location
@@ -2134,74 +2450,13 @@ public final class SwiftEditWorkbenchModel {
            cached.caret == caret {
             return cached.value
         }
-        let line: Int
-        if let fast = session.text.utf8.withContiguousStorageIfAvailable({ buf -> Int in
-            guard let base = buf.baseAddress, !buf.isEmpty, caret > 0 else { return 1 }
-            let count = buf.count
-            var currentLine = 1
-            var utf16Offset = 0
-            var i = 0
-            while i < count && utf16Offset < caret {
-                let b = base[i]
-                if b == 0x0A {
-                    currentLine += 1
-                    utf16Offset += 1
-                    i += 1
-                } else if b == 0x0D {
-                    currentLine += 1
-                    if i + 1 < count && base[i + 1] == 0x0A && utf16Offset + 1 < caret {
-                        utf16Offset += 2
-                        i += 2
-                    } else {
-                        utf16Offset += 1
-                        i += 1
-                    }
-                } else if b < 0x80 {
-                    utf16Offset += 1
-                    i += 1
-                } else if b < 0xE0 {
-                    utf16Offset += 1
-                    i += 2
-                } else if b < 0xF0 {
-                    utf16Offset += 1
-                    i += 3
-                } else {
-                    utf16Offset += 2
-                    i += 4
-                }
-            }
-            return currentLine
-        }) {
-            line = fast
-        } else {
-            let units = session.text.utf16
-            let limit = min(max(0, caret), units.count)
-            var currentLine = 1
-            var idx = units.startIndex
-            var offset = 0
-            while idx < units.endIndex, offset < limit {
-                let u = units[idx]
-                if u == 0x0A {
-                    currentLine += 1
-                    idx = units.index(after: idx)
-                    offset += 1
-                } else if u == 0x0D {
-                    currentLine += 1
-                    let next = units.index(after: idx)
-                    if next < units.endIndex, units[next] == 0x0A, offset + 1 < limit {
-                        idx = units.index(after: next)
-                        offset += 2
-                    } else {
-                        idx = next
-                        offset += 1
-                    }
-                } else {
-                    idx = units.index(after: idx)
-                    offset += 1
-                }
-            }
-            line = currentLine
+        guard caret > 0 else {
+            cachedPreviewSourceLine = (session.id, session.revision, caret, 1)
+            return 1
         }
+        let idx = textIndexCache.index(for: session.snapshot)
+        let clampedCaret = min(caret, idx.utf16Count)
+        let line = idx.cursorLineAndColumn(caret: clampedCaret)?.line ?? 1
         cachedPreviewSourceLine = (session.id, session.revision, caret, line)
         return line
     }
@@ -2271,6 +2526,14 @@ public final class SwiftEditWorkbenchModel {
     public func toggleDiagnosticsPopover() {
         guard case .active = activeLintStatus else { isDiagnosticsPopoverPresented = false; return }
         isDiagnosticsPopoverPresented.toggle()
+    }
+
+    /// Programmatically selects `range` in the active tab and asks the editor to adopt it; out-of-bounds ranges are ignored (`CWE-20`).
+    public func selectRange(_ range: SwiftEditCore.TextRange) {
+        guard let session = activeDocumentSession, range.location >= 0, range.length >= 0,
+              range.upperBound <= session.text.utf16.count else { return }
+        handleSelectionChanged(range)
+        programmaticSelectionToken += 1
     }
 
     /// Moves the selection to `diagnostic.range` (Jump-to-Range) and asks the editor to adopt it.
@@ -2402,7 +2665,7 @@ public final class SwiftEditWorkbenchModel {
             canSave: safetyBanner.canSave,
             canFormat: safetyBanner.canFormat,
             showMarkdownPreview: showMarkdownPreview,
-            showDiffPane: showDiffPane
+            appearanceMode: appearanceMode
         )
     }
 
@@ -2420,17 +2683,77 @@ public final class SwiftEditWorkbenchModel {
         case .formatDocument: formatActiveDocument()
         case .formatSection: formatActiveSection()
         case .toggleMarkdownPreview: toggleMarkdownPreview()
-        case .toggleDiffPane: toggleDiffPane()
         case .showCheatSheet: isCheatSheetPresented = true
+        case .appearanceLight: appearanceMode = .light
+        case .appearanceDark: appearanceMode = .black
+        case .appearanceAuto: appearanceMode = .auto
         }
     }
 
     public func toggleDiffPane() {
         showDiffPane.toggle()
-        if !showDiffPane {
+        if showDiffPane {
+            // The tab the Compare is opened from is the source; no destination = saved vs current (`REQ-022-01`).
+            compareSourceTabID = tabSession.activeTabID
+            compareDestinationTabID = nil
+        } else {
+            compareSourceTabID = nil
+            compareDestinationTabID = nil
             diffCoordinator.clear()
         }
         refreshDiagnosticsForActiveDocument()
+        refreshCompare()
+    }
+
+    // MARK: Compare source / destination (`REQ-022-01`)
+
+    /// Tab the Compare was opened from (left column).
+    public private(set) var compareSourceTabID: DocumentID?
+    /// Optional second open tab compared against the source (right column); `nil` = saved vs current.
+    public private(set) var compareDestinationTabID: DocumentID?
+
+    /// Open text tabs selectable as destination (never the source, binary or tail-only tabs).
+    public var compareDestinationCandidates: [TabDescriptor] {
+        tabSession.tabs.filter { tab in
+            tab.id != compareSourceTabID && !logTailOnlyTabIDs.contains(tab.id)
+                && sessionsByID[tab.id].map { !$0.isBinaryReadOnly } == true
+        }
+    }
+
+    public func title(ofTab id: DocumentID?) -> String? {
+        guard let id else { return nil }
+        return tabSession.tabs.first { $0.id == id }?.title
+    }
+
+    /// Picks the destination tab (`nil` returns to saved vs current); the destination tab itself stays open.
+    public func setCompareDestination(_ id: DocumentID?) {
+        if let id, !compareDestinationCandidates.contains(where: { $0.id == id }) { return }
+        compareDestinationTabID = id
+        diffCoordinator.clear()
+        refreshCompare()
+    }
+
+    /// Recomputes the side-by-side rows for source vs destination, or source saved vs current when no destination.
+    public func refreshCompare() {
+        guard showDiffPane else { return }
+        let openIDs = Set(tabSession.tabs.map(\.id))
+        if let source = compareSourceTabID, !openIDs.contains(source) {
+            compareSourceTabID = tabSession.activeTabID
+            compareDestinationTabID = nil
+        }
+        if compareSourceTabID == nil { compareSourceTabID = tabSession.activeTabID }
+        if let destination = compareDestinationTabID, !openIDs.contains(destination) || destination == compareSourceTabID {
+            compareDestinationTabID = nil
+        }
+        guard let sourceID = compareSourceTabID, let source = sessionsByID[sourceID] else {
+            diffCoordinator.clear()
+            return
+        }
+        if let destinationID = compareDestinationTabID, let destination = sessionsByID[destinationID] {
+            diffCoordinator.compare(lhs: source.snapshot, rhs: destination.snapshot)
+        } else if let baseline = savedBaselineByID[sourceID] {
+            diffCoordinator.compare(lhs: baseline, rhs: source.snapshot)
+        }
     }
 
     /// Toggles the left Folder Navigator sidebar visibility (`Cmd+B`).
@@ -2788,6 +3111,7 @@ public struct SwiftEditRootView: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var model = SwiftEditWorkbenchModel()
     @State private var draggingTabID: DocumentID?
+    @State private var hoveredTabID: DocumentID?
     @State private var isExternalDropTargeted = false
     @State private var dragStartSidebarRatio: Double?
     @State private var presentedDirtyAlertTabID: DocumentID?
@@ -2815,8 +3139,6 @@ public struct SwiftEditRootView: View {
                         sidebarView
                             .frame(width: CGFloat(sidebarWidth))
                         sidebarPercentageDivider(containerWidth: Double(geometry.size.width))
-                    } else {
-                        collapsedSidebarEdgeHandle
                     }
                     VStack(spacing: 0) {
                         if !model.isDistractionFree { tabBar; safetyAndErrorBanners }
@@ -2849,6 +3171,9 @@ public struct SwiftEditRootView: View {
         }
         .overlay(alignment: .top) {
             DocumentNavigatorOverlayView(model: model)
+        }
+        .overlay(alignment: .topLeading) {
+            ElementContextualMenuView(model: model)
         }
         .overlay(alignment: .topLeading) {
             headerSubmenuOverlay
@@ -2966,10 +3291,18 @@ public struct SwiftEditRootView: View {
     private func applySheets<Content: View>(to content: Content) -> some View {
         content
             .sheet(isPresented: $model.isCheatSheetPresented) {
-                KeyboardShortcutsCheatSheetView(palette: model.palette) {
-                    model.isCheatSheetPresented = false
-                    model.requestEditorFocus()
-                }
+                KeyboardShortcutsCheatSheetView(
+                    palette: model.palette,
+                    onClose: {
+                        model.isCheatSheetPresented = false
+                        model.requestEditorFocus()
+                    },
+                    onPerform: { model.performCheatSheetCommandFromSheet($0) },
+                    onDock: {
+                        model.isCheatSheetPresented = false
+                        model.isShortcutsPanelVisible = true
+                    }
+                )
             }
             .sheet(isPresented: $model.isHelpSheetPresented) {
                 HelpDocumentationView(palette: model.palette) {
@@ -3062,6 +3395,7 @@ public struct SwiftEditRootView: View {
             // except Up/Down/Return/Escape when the Document Navigator overlay is open.
             let cmdOrOpt = event.modifierFlags.intersection([.command, .option])
             let isNavigatorControlKey = event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 125 || event.keyCode == 126 || event.keyCode == 53
+                || event.keyCode == 123 || event.keyCode == 124
             if cmdOrOpt.isEmpty && !isNavigatorControlKey {
                 return event
             }
@@ -3073,6 +3407,30 @@ public struct SwiftEditRootView: View {
                     guard eventWindow === ownerWindow else { return false }
                 } else if eventWindow.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" || eventWindow.isSheet {
                     return false
+                }
+                if activeModel.elementContextualMenu != nil, cmdOrOpt.isEmpty {
+                    switch event.keyCode {
+                    case 36, 76: // Return / Numpad Enter
+                        activeModel.activateElementContextualMenuRow()
+                        return true
+                    case 125: // Down Arrow
+                        activeModel.elementContextualMenu?.moveHighlight(1)
+                        return true
+                    case 126: // Up Arrow
+                        activeModel.elementContextualMenu?.moveHighlight(-1)
+                        return true
+                    case 124 where activeModel.elementContextualMenu?.query.isEmpty == true: // Right Arrow expands
+                        activeModel.elementContextualMenu?.setHighlightedGroupExpanded(true)
+                        return true
+                    case 123 where activeModel.elementContextualMenu?.query.isEmpty == true: // Left Arrow collapses
+                        activeModel.elementContextualMenu?.setHighlightedGroupExpanded(false)
+                        return true
+                    case 53: // Escape
+                        activeModel.closeElementContextualMenu()
+                        return true
+                    default:
+                        return false
+                    }
                 }
                 if activeModel.navigatorState != nil, cmdOrOpt.isEmpty {
                     switch event.keyCode {
@@ -3116,10 +3474,28 @@ public struct SwiftEditRootView: View {
                     return false
                 }
                 let isEditingOverlayTextField = (responder is NSTextView) && !(responder is SwiftEditNSTextView)
+                // Cmd+Return on an editor selection opens the contextual palette right under the selection.
+                if let editor = responder as? SwiftEditNSTextView,
+                   event.modifierFlags.intersection(ShortcutKeyEvent.relevantModifierMask) == [.command],
+                   event.keyCode == 36 || event.keyCode == 76 {
+                    return activeModel.presentElementContextualMenu(anchor: Self.selectionAnchor(in: editor))
+                }
                 return SwiftEditShortcutDispatcher.dispatch(event: event, model: activeModel, isEditingOverlayTextField: isEditingOverlayTextField)
             }
             return consumed ? nil : event
         }
+    }
+
+    /// Bottom-left of the selection's first line in window-content coordinates (y down), or `nil`.
+    @MainActor
+    static func selectionAnchor(in textView: NSTextView) -> CGPoint? {
+        guard let window = textView.window, let content = window.contentView else { return nil }
+        let selection = textView.selectedRange()
+        let screenRect = textView.firstRect(forCharacterRange: NSRange(location: selection.location, length: 0), actualRange: nil)
+        guard screenRect != .zero else { return nil }
+        let inContent = content.convert(window.convertFromScreen(screenRect), from: nil)
+        let y = content.isFlipped ? inContent.maxY : content.bounds.height - inContent.minY
+        return CGPoint(x: inContent.minX, y: y)
     }
 
     private func detachKeyDownMonitor() {
@@ -3137,7 +3513,7 @@ public struct SwiftEditRootView: View {
             ZStack(alignment: .topLeading) {
                 Color.clear
                     .contentShape(Rectangle())
-                    .padding(.top, CGFloat(HeaderSubmenuStateMachine.topBarHeight))
+                    .padding(.top, model.chromeMetrics.headerHeight)
                     .onTapGesture { model.dismissHeaderSubmenu() }
                     .zIndex(99)
                 HeaderBrandSubmenuView(
@@ -3148,32 +3524,34 @@ public struct SwiftEditRootView: View {
                     onMoveSelection: { delta in model.headerSubmenu.moveSelection(delta: delta, items: items) },
                     onSelectFirst: { model.headerSubmenu.selectFirst(items: items) },
                     onSelectLast: { model.headerSubmenu.selectLast(items: items) },
-                    onDismiss: { model.dismissHeaderSubmenu() }
+                    onDismiss: { model.dismissHeaderSubmenu() },
+                    scale: model.chromeMetrics.factor
                 )
                 .padding(.leading, 12)
-                .offset(y: CGFloat(HeaderSubmenuStateMachine.topBarHeight))
+                .offset(y: model.chromeMetrics.headerHeight)
                 .zIndex(100)
             }
         }
     }
 
+    /// Zed-style header: unchanged Concept E2 logo menu followed by the command icon cluster on the left, the
+    /// `folder / file` breadcrumb on the right; every size follows the editor zoom (`REQ-021-02`, `REQ-021-03`).
     private var toolbarBar: some View {
-        HStack(spacing: 10) {
+        let metrics = model.chromeMetrics
+        return HStack(spacing: 8 * metrics.factor) {
             Button(action: { model.headerSubmenu.clickToggle() }) {
-                HStack(spacing: 6) {
-                    SwiftEditBrandLogoView(size: CGFloat(SwiftEditBrandLogoGeometry.topBarLogoSize))
+                HStack(spacing: 6 * metrics.factor) {
+                    SwiftEditBrandLogoView(size: metrics.headerLogoSize)
                     Text("SwiftEdit")
-                        .appFont(.headline, weight: .semibold)
+                        .appFont(size: metrics.headerFontSize, weight: .semibold)
                         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
-                    Image(systemName: model.headerSubmenu.isOpen ? "chevron.up" : "chevron.down")
-                        .appFont(.caption2, weight: .semibold)
+                    AppIconView(model.headerSubmenu.isOpen ? .chevronUp : .chevronDown, size: 10 * metrics.factor)
                         .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
-                        .accessibilityHidden(true)
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(model.headerSubmenu.isOpen ? model.palette.selectionBackground.swiftUIColor : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, 6 * metrics.factor)
+                .padding(.vertical, 3 * metrics.factor)
+                .background(model.headerSubmenu.isOpen ? model.palette.accentSoftSurface.swiftUIColor : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 6 * metrics.factor))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -3183,20 +3561,21 @@ public struct SwiftEditRootView: View {
             .accessibilityValue(model.headerSubmenu.isOpen ? "Expanded" : "Collapsed")
             .accessibilityHint("Toggles the SwiftEdit command menu")
 
+            HStack(spacing: 2 * metrics.factor) {
+                headerIconButton(.sidebar, help: "Toggle Folder Navigator (⌘B)", isActive: !model.isLeftSidebarCollapsed) { model.toggleLeftSidebar() }
+                headerIconButton(.search, help: "Find in Document (⌘F)", isActive: model.findReplaceState.mode != .hidden) { model.presentFindBar(mode: .find) }
+                headerIconButton(.eye, help: "Toggle Markdown Preview (⌘P)", isActive: model.showMarkdownPreview) { model.toggleMarkdownPreview() }
+                headerIconButton(.diff, help: "Toggle File Compare (⇧⌘D)", isActive: model.showDiffPane) { model.toggleDiffPane() }
+                headerIconButton(.terminal, help: "Toggle Terminal Panel (⌘J)", isActive: model.isTerminalPanelVisible) { model.toggleTerminalPanel() }
+                headerIconButton(.keyboard, help: "Toggle Keyboard Shortcuts Panel (⌥⌘/)", isActive: model.isShortcutsPanelVisible) { model.toggleShortcutsPanel() }
+            }
+
             Spacer(minLength: 8)
 
-            HStack(spacing: 4) {
-                Button("-") { model.zoomController.zoomOut() }
-                Button("\(model.zoomController.zoomPercent)%") { model.zoomController.resetZoom() }
-                    .monospacedDigit()
-                Button("+") { model.zoomController.zoomIn() }
-            }
-            .fixedSize()
-
-            appearanceSelectorControl
+            headerBreadcrumb
         }
         .padding(.horizontal, 12)
-        .frame(height: CGFloat(HeaderSubmenuStateMachine.topBarHeight))
+        .frame(height: metrics.headerHeight)
         .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
         .tint(model.palette.chromeAccent.swiftUIColor)
         .background(model.palette.topBarSurface.swiftUIColor)
@@ -3211,66 +3590,50 @@ public struct SwiftEditRootView: View {
         }
     }
 
-    /// Always-visible 3-way `Light | Dark | Auto` pill selector replacing the clipped segmented `Picker` (`UI-001`, `UI-003`).
-    private var appearanceSelectorControl: some View {
-        HStack(spacing: 2) {
-            appearanceOptionButton(title: "Light", mode: .light)
-            appearanceOptionButton(title: "Dark", mode: .black)
-            appearanceOptionButton(title: "Auto", mode: .auto)
+    /// `folder / file` breadcrumb of the active tab (muted folder, primary file name).
+    @ViewBuilder
+    private var headerBreadcrumb: some View {
+        let parts = model.headerBreadcrumb
+        if !parts.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
+                    Text(verbatim: "/")
+                        .foregroundStyle(model.palette.hairlineBorder.swiftUIColor)
+                    Text(verbatim: part)
+                        .foregroundStyle((index == parts.count - 1 ? model.palette.chromeForeground : model.palette.secondaryForeground).swiftUIColor)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: (index == parts.count - 1 ? 320 : 180) * model.chromeMetrics.factor, alignment: .trailing)
+                        .fixedSize(horizontal: index == parts.count - 1, vertical: false)
+                }
+            }
+            .appFont(size: model.chromeMetrics.headerFontSize, weight: .medium)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Current file: \(parts.joined(separator: ", "))")
         }
-        .padding(2)
-        .background(model.palette.badgeSurface.swiftUIColor)
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(model.palette.hairlineBorder.swiftUIColor, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .fixedSize()
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Appearance Mode Selector")
     }
 
-    private func appearanceOptionButton(title: String, mode: AppearanceMode) -> some View {
-        let isSelected = model.appearanceMode == mode
-        return Button(action: { model.appearanceMode = mode }) {
-            Text(title)
-                .appFont(.caption, weight: isSelected ? .semibold : .regular)
-                .foregroundStyle(isSelected ? model.palette.activeControlForeground.swiftUIColor : model.palette.secondaryForeground.swiftUIColor)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(isSelected ? model.palette.activeControlFill.swiftUIColor : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+    /// Icon-only toggle in the header cluster; active state uses the soft accent surface and accent glyph.
+    private func headerIconButton(_ icon: AppIcon, help: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+        let metrics = model.chromeMetrics
+        return Button(action: action) {
+            AppIconView(icon, size: metrics.headerIconSize)
+                .foregroundStyle((isActive ? model.palette.chromeAccent : model.palette.secondaryForeground).swiftUIColor)
+                .frame(width: metrics.headerIconButtonWidth, height: metrics.headerIconButtonHeight)
+                .background(isActive ? model.palette.accentSoftSurface.swiftUIColor : Color.clear, in: RoundedRectangle(cornerRadius: 5 * metrics.factor))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    private var collapsedSidebarEdgeHandle: some View {
-        VStack(spacing: 8) {
-            Button(action: { model.toggleSidebarPinCollapse() }) {
-                Image(systemName: "sidebar.left")
-                    .appFont(size: max(12, CGFloat(model.zoomController.sidebarScaledFontSizePoints)))
-                    .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
-            }
-            .buttonStyle(.plain)
-            .help("Expand and Pin Left Navigation Panel (Cmd+B)")
-            .accessibilityLabel("Expand left navigation panel")
-            .padding(.top, 10)
-            Spacer()
-        }
-        .frame(width: 24)
-        .background(model.palette.sidebarSurface.swiftUIColor)
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(model.palette.hairlineBorder.swiftUIColor)
-                .frame(width: 1)
-        }
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 
     private func sidebarPercentageDivider(containerWidth: Double) -> some View {
         Rectangle()
             .fill(model.palette.hairlineBorder.swiftUIColor)
-            .frame(width: 5)
+            .frame(width: 1)
+            .padding(.horizontal, 2.5)
             .contentShape(Rectangle())
             .onHover { hovering in
                 if hovering {
@@ -3300,70 +3663,61 @@ public struct SwiftEditRootView: View {
             .accessibilityLabel("Resize Sidebar Divider")
     }
 
+    /// Flat Zed-style tabs: the active tab merges with the canvas under a 2 pt accent line; close shows on the active or
+    /// hovered tab, a dot marks unsaved tabs, a small pin marks pinned ones; reorder/pin live in drag and context menu (R-03).
     private var tabBar: some View {
         let metrics = model.chromeMetrics
         return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
+            HStack(spacing: 0) {
                 ForEach(model.tabSession.tabs, id: \.id) { tab in
                     let isActive = tab.id == model.tabSession.activeTabID
+                    let isHovered = hoveredTabID == tab.id
                     HStack(spacing: 6) {
-                        Button(action: { model.togglePin(id: tab.id) }) {
-                            Image(systemName: tab.isPinned ? "pin.fill" : "pin")
-                                .appFont(size: metrics.tabBadgeSize)
-                                .foregroundStyle((tab.isPinned ? model.palette.pinnedTabBadge : model.palette.secondaryForeground).swiftUIColor)
-                                .minimumHitTarget(metrics.tabIconTarget)
+                        if tab.isPinned {
+                            AppIconView(.pin, size: metrics.tabBadgeSize)
+                                .foregroundStyle(model.palette.pinnedTabBadge.swiftUIColor)
                         }
-                        .buttonStyle(.plain)
-                        .help(tab.isPinned ? "Unpin Tab" : "Pin Tab")
-                        .accessibilityLabel(tab.isPinned ? "Unpin tab \(tab.title)" : "Pin tab \(tab.title)")
-
                         Button(action: { model.activateTab(id: tab.id) }) {
-                            Text("\(tab.title)\(tab.isDirty ? " •" : "")")
-                                .appFont(size: metrics.tabFontSize, weight: isActive ? .semibold : .regular)
+                            Text(tab.title)
+                                .appFont(size: metrics.tabFontSize, weight: isActive ? .medium : .regular)
                                 .foregroundStyle((isActive ? model.palette.chromeForeground : model.palette.secondaryForeground).swiftUIColor)
                                 .lineLimit(1)
                                 .frame(minWidth: metrics.tabMinWidth, maxWidth: metrics.tabMaxWidth, alignment: .leading)
                         }
                         .buttonStyle(.plain)
-
-                        Button(action: { model.moveTabLeft(id: tab.id) }) {
-                            Image(systemName: "chevron.left")
-                                .appFont(size: metrics.tabBadgeSize * 0.9, weight: .semibold)
-                                .minimumHitTarget(metrics.tabIconTarget)
-                        }
-                        .buttonStyle(.plain)
-                        .opacity(isActive ? 0.85 : 0.65)
-                        .help("Move Tab Left")
-                        .accessibilityLabel("Move tab \(tab.title) left")
-
-                        Button(action: { model.moveTabRight(id: tab.id) }) {
-                            Image(systemName: "chevron.right")
-                                .appFont(size: metrics.tabBadgeSize * 0.9, weight: .semibold)
-                                .minimumHitTarget(metrics.tabIconTarget)
-                        }
-                        .buttonStyle(.plain)
-                        .opacity(isActive ? 0.85 : 0.65)
-                        .help("Move Tab Right")
-                        .accessibilityLabel("Move tab \(tab.title) right")
+                        .accessibilityLabel("\(tab.title)\(tab.isDirty ? ", unsaved" : "")\(tab.isPinned ? ", pinned" : "")")
 
                         Button(action: { model.requestCloseTab(id: tab.id) }) {
-                            Image(systemName: "xmark")
-                                .appFont(size: metrics.tabBadgeSize)
-                                .minimumHitTarget(metrics.tabIconTarget)
+                            Group {
+                                if tab.isDirty && !isActive && !isHovered {
+                                    AppIconView(.dot, size: metrics.tabBadgeSize)
+                                } else {
+                                    AppIconView(.close, size: metrics.tabBadgeSize)
+                                }
+                            }
+                            .minimumHitTarget(metrics.tabIconTarget)
                         }
                         .buttonStyle(.plain)
-                        .help("Close Tab (Cmd+W)")
+                        .opacity(isActive || isHovered || tab.isDirty ? 1 : 0)
+                        .help("Close Tab (⇧⌘W)")
                         .accessibilityLabel("Close tab \(tab.title)")
                     }
-                    .foregroundStyle((isActive ? model.palette.chromeForeground : model.palette.secondaryForeground).swiftUIColor)
-                    .padding(.horizontal, metrics.tabHorizontalPadding)
+                    .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+                    .padding(.horizontal, metrics.tabHorizontalPadding + 4)
                     .frame(minHeight: metrics.tabHeight)
                     .background(isActive ? model.palette.tabActiveSurface.swiftUIColor : Color.clear)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(isActive ? model.palette.chromeAccent.swiftUIColor : model.palette.hairlineBorder.swiftUIColor, lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(isActive ? model.palette.chromeAccent.swiftUIColor : Color.clear)
+                            .frame(height: 2)
+                    }
+                    .overlay(alignment: .trailing) {
+                        Rectangle()
+                            .fill(model.palette.hairlineBorder.swiftUIColor)
+                            .frame(width: 1)
+                    }
+                    .contentShape(Rectangle())
+                    .onHover { inside in hoveredTabID = inside ? tab.id : (hoveredTabID == tab.id ? nil : hoveredTabID) }
                     .onDrag {
                         draggingTabID = tab.id
                         return NSItemProvider(object: tab.id.rawValue.uuidString as NSString)
@@ -3381,8 +3735,6 @@ public struct SwiftEditRootView: View {
                     }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
         }
         .background(model.palette.tabBarSurface.swiftUIColor)
         .overlay(alignment: .bottom) {
@@ -3438,25 +3790,27 @@ public struct SwiftEditRootView: View {
 
         return VStack(alignment: .leading, spacing: rowSpacing) {
             HStack(spacing: 8) {
-                Text(model.selectedFolderURL?.lastPathComponent ?? "No Folder Open")
+                Text((model.selectedFolderURL?.lastPathComponent ?? "No Folder Open").uppercased())
                     .appFont(size: headerFont, weight: .semibold)
+                    .tracking(0.6)
                     .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
                     .lineLimit(1)
                 Spacer()
                 if model.selectedFolderURL != nil {
                     Button(action: { model.navigateToParentFolder() }) {
-                        Label("...", systemImage: "arrow.turn.left.up")
-                            .appFont(size: headerFont, weight: .semibold)
+                        AppIconView(.folderUp, size: headerFont + 3)
                             .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+                            .minimumHitTarget()
                     }
                     .buttonStyle(.plain)
                     .disabled(!model.canNavigateToParentFolder)
                     .help("Go to parent folder (...)")
+                    .accessibilityLabel("Go to parent folder")
                 }
                 Button(action: { model.toggleSidebarPinCollapse() }) {
-                    Image(systemName: model.isLeftSidebarPinned ? "pin.fill" : "pin.slash")
-                        .appFont(size: headerFont, weight: .semibold)
-                        .foregroundStyle(model.palette.chromeAccent.swiftUIColor)
+                    AppIconView(.sidebar, size: headerFont + 3)
+                        .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+                        .minimumHitTarget()
                 }
                 .buttonStyle(.plain)
                 .help("Unpin and Collapse Left Navigation Panel (Cmd+B)")
@@ -3465,14 +3819,15 @@ public struct SwiftEditRootView: View {
             .padding(.horizontal, 10)
             .padding(.top, 8)
 
+            if model.selectedFolderURL == nil {
+                sidebarEmptyState
+            }
             List {
                 if model.canNavigateToParentFolder {
                     Button(action: { model.navigateToParentFolder() }) {
                         HStack(spacing: rowSpacing) {
-                            Image(systemName: "folder.badge.minus")
-                                .appFont(size: metrics.navigatorIconSize)
-                                .foregroundStyle(model.palette.chromeAccent.swiftUIColor)
-                                .accessibilityHidden(true)
+                            AppIconView(.folderUp, size: metrics.navigatorIconSize + 1)
+                                .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
                             Text("...")
                                 .appFont(size: sidebarFont, weight: .semibold)
                                 .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
@@ -3483,15 +3838,13 @@ public struct SwiftEditRootView: View {
                 }
                 ForEach(model.folderEntries, id: \.url) { entry in
                     let binaryColor = model.palette.sidebarBinaryDisabledText.swiftUIColor
-                    let iconName = entry.isDirectory
-                        ? "folder.fill"
-                        : (entry.isBinary ? "doc.fill" : (entry.isHiddenDotfile ? "eye.slash" : "doc.text"))
+                    let icon: AppIcon = entry.isDirectory
+                        ? .folder
+                        : (entry.isBinary ? .fileBinary : (entry.isHiddenDotfile ? .eyeOff : .fileText))
                     let isSelected = model.selectedSidebarEntryURL == entry.url.standardizedFileURL
                     HStack(spacing: rowSpacing) {
-                        Image(systemName: iconName)
-                            .appFont(size: metrics.navigatorIconSize)
-                            .foregroundStyle(entry.isBinary ? binaryColor : model.palette.chromeAccent.swiftUIColor)
-                            .accessibilityHidden(true)
+                        AppIconView(icon, size: metrics.navigatorIconSize + 1)
+                            .foregroundStyle(entry.isBinary ? binaryColor : (entry.isDirectory ? model.palette.chromeAccent : model.palette.secondaryForeground).swiftUIColor)
                         Text(entry.name)
                             .appFont(size: sidebarFont)
                             .foregroundStyle(entry.isBinary ? binaryColor : model.palette.chromeForeground.swiftUIColor)
@@ -3500,7 +3853,7 @@ public struct SwiftEditRootView: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: metrics.navigatorRowHeight, alignment: .leading)
                     .padding(.leading, max(0, metrics.navigatorIndent - 12))
-                    .background(isSelected ? model.palette.tabActiveSurface.swiftUIColor : Color.clear)
+                    .background(isSelected ? model.palette.accentSoftSurface.swiftUIColor : Color.clear)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) { model.sidebarDoubleClick(entry) }
@@ -3527,6 +3880,35 @@ public struct SwiftEditRootView: View {
         .contextMenu {
             sidebarBackgroundContextMenu
         }
+    }
+
+    /// Empty Folder Navigator: one clear call to action instead of a bare "No Folder Open" label (R-08).
+    private var sidebarEmptyState: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Open a folder to browse its files.")
+                .appFont(.callout)
+                .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+            Button(action: { model.openFolderViaPanel() }) {
+                HStack(spacing: 6) {
+                    AppIconView(.folder, size: 13)
+                    Text("Open Folder…")
+                        .appFont(.callout, weight: .medium)
+                    Spacer(minLength: 4)
+                    Text(verbatim: "⇧⌘O")
+                        .appFont(.caption, monospaced: true)
+                        .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+                }
+                .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(model.palette.badgeSurface.swiftUIColor, in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open Folder")
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
     }
 
     @ViewBuilder
@@ -3650,6 +4032,7 @@ public struct SwiftEditRootView: View {
                     bufferRevision: BufferRevision(tail.generation),
                     text: tail.text,
                     isEditable: false,
+                    isWordOccurrenceHighlightEnabled: true,
                     isWordWrapEnabled: model.isWordWrapEnabled,
                     palette: model.palette,
                     fontSizePoints: model.zoomController.scaledFontSizePoints,
@@ -3662,6 +4045,7 @@ public struct SwiftEditRootView: View {
                     documentLanguage: .log,
                     programmaticSelection: SwiftEditCore.TextRange(location: tail.mode == .direct ? (tail.text as NSString).length : 0, length: 0),
                     programmaticSelectionToken: Int(truncatingIfNeeded: tail.generation),
+                    editorFocusRequestToken: model.editorFocusRequestToken,
                     onEscape: { model.handleEscape() },
                     typography: model.typography,
                     typographyGeneration: model.typographyGeneration
@@ -3684,6 +4068,7 @@ public struct SwiftEditRootView: View {
                         bufferRevision: session.revision,
                         text: session.text,
                         isEditable: !session.isBinaryReadOnly,
+                        isWordOccurrenceHighlightEnabled: !session.isBinaryReadOnly && !session.isDegradedPlainText,
                         isWordWrapEnabled: model.isWordWrapEnabled,
                         palette: model.palette,
                         fontSizePoints: model.zoomController.scaledFontSizePoints,
@@ -3703,7 +4088,8 @@ public struct SwiftEditRootView: View {
                         onEscape: { model.handleEscape() },
                         typography: model.typography,
                         typographyGeneration: model.typographyGeneration,
-                        lineIndexProvider: { model.lineIndex(for: $0, revision: $1) }
+                        lineIndexProvider: { model.lineIndex(for: $0, revision: $1) },
+                        completionProvider: { model.wordCompletionSuffix(forPrefix: $0) }
                     )
                 }
             }
@@ -3720,15 +4106,87 @@ public struct SwiftEditRootView: View {
                 diffPanel
                     .frame(minWidth: 300, idealWidth: 420)
             }
+            if !model.isDistractionFree, model.isShortcutsPanelVisible {
+                ShortcutsSidePanelView(model: model)
+                    .frame(minWidth: 260, idealWidth: 320, maxWidth: 480)
+            }
         }
     }
 
+    /// Compare header: source tab on the left; on the right a "Compare with" picker (saved version or another open tab)
+    /// and an X that drops the destination only, returning to saved vs current (`REQ-022-01`).
+    private var compareHeader: some View {
+        let palette = model.palette
+        let sourceTitle = model.title(ofTab: model.compareSourceTabID) ?? "—"
+        let destinationTitle = model.title(ofTab: model.compareDestinationTabID)
+        return HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Text("SOURCE")
+                    .appFont(.caption2, weight: .semibold)
+                    .tracking(0.6)
+                    .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                Text(verbatim: destinationTitle == nil ? "\(sourceTitle) · saved" : sourceTitle)
+                    .appFont(.caption, weight: .medium)
+                    .foregroundStyle(palette.chromeForeground.swiftUIColor)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                Menu {
+                    Button { model.setCompareDestination(nil) } label: {
+                        Text(model.compareDestinationTabID == nil ? "✓ Saved version (current tab)" : "Saved version (current tab)")
+                    }
+                    let candidates = model.compareDestinationCandidates
+                    if !candidates.isEmpty { Divider() }
+                    ForEach(candidates, id: \.id) { tab in
+                        Button { model.setCompareDestination(tab.id) } label: {
+                            Text(model.compareDestinationTabID == tab.id ? "✓ \(tab.title)" : tab.title)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Compare with:")
+                            .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                        Text(verbatim: destinationTitle ?? "current (unsaved)")
+                            .foregroundStyle(palette.chromeForeground.swiftUIColor)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        AppIconView(.chevronDown, size: 10)
+                            .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                    }
+                    .appFont(.caption, weight: .medium)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Choose another open tab to compare with the source")
+                .accessibilityLabel("Compare with \(destinationTitle ?? "saved version")")
+                Spacer(minLength: 0)
+                if model.compareDestinationTabID != nil {
+                    Button { model.setCompareDestination(nil) } label: {
+                        AppIconView(.close, size: 11).minimumHitTarget(20)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                    .help("Stop comparing with \(destinationTitle ?? "") (the tab stays open)")
+                    .accessibilityLabel("Remove compare destination")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(palette.tabBarSurface.swiftUIColor)
+        .overlay(alignment: .bottom) { Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(height: 1) }
+    }
+
     private var diffPanel: some View {
+        VStack(spacing: 0) {
+        compareHeader
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 4) {
-                Text("Side-by-Side Myers Diff (vs Saved Baseline)")
-                    .appFont(.caption, weight: .semibold)
-                    .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
                 let rows = model.diffCoordinator.rows
                 ForEach(rows.indices, id: \.self) { index in
                     let row = rows[index]
@@ -3750,66 +4208,118 @@ public struct SwiftEditRootView: View {
             }
             .padding(12)
         }
+        }
         .background(model.palette.chromeSurface.swiftUIColor)
     }
 
+    /// Neutral 24 pt status bar: sidebar toggle, lint icon + count, bracket warning only when unbalanced; right side
+    /// cursor metrics, encoding, line ending, language, zoom menu and theme toggle (R-01, R-02, V-01).
     private var statusBar: some View {
         let metrics = model.activeStatusBarMetrics
         let lintCount = model.lintDiagnostics.count
         let hasErrors = model.lintDiagnostics.contains { $0.severity == .error }
+        let unbalanced = model.bracketResult?.unbalancedBrackets.count ?? 0
         let lintForeground: Color = lintCount == 0
             ? model.palette.statusBarForeground.swiftUIColor
             : (hasErrors ? model.palette.unbalancedBracketHighlight : model.palette.bidiWarningForeground).swiftUIColor
         return HStack(spacing: 14) {
-            Button(action: { model.toggleDiagnosticsPopover() }) {
-                HStack(spacing: 4) {
-                    if lintCount > 0 {
-                        Image(systemName: hasErrors ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
-                            .appFont(.caption2, weight: .bold)
-                            .accessibilityHidden(true)
-                    }
-                    Text(model.activeLintStatus.label)
-                        .appFont(.caption, weight: lintCount > 0 ? .bold : .regular, monospaced: true)
-                }
-                .foregroundStyle(lintForeground)
-                .padding(.horizontal, lintCount > 0 ? 8 : 0)
-                .padding(.vertical, lintCount > 0 ? 2 : 0)
-                .background(lintCount > 0 ? lintForeground.opacity(0.18) : Color.clear)
-                .overlay(
-                    Capsule()
-                        .stroke(lintCount > 0 ? lintForeground.opacity(0.75) : Color.clear, lineWidth: 1)
-                )
-                .clipShape(Capsule())
+            Button(action: { model.toggleLeftSidebar() }) {
+                AppIconView(.sidebar, size: 13).minimumHitTarget(20)
             }
             .buttonStyle(.plain)
+            .help("Toggle Folder Navigator (⌘B)")
+            .accessibilityLabel(model.isLeftSidebarCollapsed ? "Show folder navigator" : "Hide folder navigator")
+
+            Button(action: { model.toggleDiagnosticsPopover() }) {
+                HStack(spacing: 4) {
+                    switch model.activeLintStatus {
+                    case .active(let count):
+                        AppIconView(count == 0 ? .checkCircle : (hasErrors ? .error : .warning), size: 13)
+                        Text("\(count)")
+                    case .off, .paused:
+                        Text(model.activeLintStatus.label)
+                    }
+                }
+                .foregroundStyle(lintForeground)
+            }
+            .buttonStyle(.plain)
+            .help("Markdown diagnostics (⇧⌘M)")
             .accessibilityLabel(model.activeLintStatus.label)
             .accessibilityHint("Opens the Markdown diagnostics popover")
             .popover(isPresented: Binding(get: { model.isDiagnosticsPopoverPresented }, set: { model.isDiagnosticsPopoverPresented = $0 })) {
                 MarkdownDiagnosticsPopoverView(model: model)
             }
-            Text("Brackets: \(model.bracketResult?.unbalancedBrackets.isEmpty == true ? "Balanced" : "Unbalanced (\(model.bracketResult?.unbalancedBrackets.count ?? 0))")")
-            Text("Mode: \(model.palette.mode.rawValue.capitalized)")
+            if unbalanced > 0 {
+                HStack(spacing: 4) {
+                    AppIconView(.braces, size: 13)
+                    Text("\(unbalanced) unbalanced")
+                }
+                .foregroundStyle(model.palette.unbalancedBracketHighlight.swiftUIColor)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Brackets: \(unbalanced) unbalanced")
+            }
             Spacer()
-            Text(model.activeDocumentLanguage.statusBarLabel)
-                .accessibilityLabel("Language: \(model.activeDocumentLanguage.statusBarLabel)")
-            Text("Zoom: \(model.zoomController.zoomPercent)%")
             Text("Ln \(metrics.line), Col \(metrics.column)")
             Text("\(metrics.characterCount) chars")
             Text(metrics.encodingLabel)
-            Menu(StatusBarMetricsProjection.displayLabel(for: metrics.lineEnding)) {
+            Menu {
                 Button("LF (Unix / macOS)") { model.setActiveDocumentLineEnding(.lf) }
                 Button("CRLF (Windows)") { model.setActiveDocumentLineEnding(.crlf) }
                 Button("CR (Classic Mac)") { model.setActiveDocumentLineEnding(.cr) }
+            } label: {
+                Text(StatusBarMetricsProjection.displayLabel(for: metrics.lineEnding)).appFont(.caption)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
             .fixedSize()
+            Text(model.activeDocumentLanguage.statusBarLabel)
+                .accessibilityLabel("Language: \(model.activeDocumentLanguage.statusBarLabel)")
+            Menu {
+                Button("Zoom In (⌘+)") { model.zoomController.zoomIn() }
+                Button("Zoom Out (⌘-)") { model.zoomController.zoomOut() }
+                Button("Actual Size (⌘0)") { model.zoomController.resetZoom() }
+            } label: {
+                Text("\(model.zoomController.zoomPercent)%").appFont(.caption).monospacedDigit()
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel("Zoom \(model.zoomController.zoomPercent) percent")
+            Button(action: { model.cycleAppearanceMode() }) {
+                AppIconView(appearanceIcon, size: 13).minimumHitTarget(20)
+            }
+            .buttonStyle(.plain)
+            .help("Appearance: \(appearanceTitle) (click to switch Light → Dark → Auto)")
+            .accessibilityLabel("Appearance \(appearanceTitle)")
+            .accessibilityHint("Switches between Light, Dark and Auto")
         }
-        .appFont(.caption, monospaced: true)
+        .appFont(.caption)
         .foregroundStyle(model.palette.statusBarForeground.swiftUIColor)
         .tint(model.palette.statusBarForeground.swiftUIColor)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 10)
+        .frame(height: 24)
         .background(model.palette.statusBarSurface.swiftUIColor)
+        .overlay(alignment: .top) {
+            Rectangle().fill(model.palette.hairlineBorder.swiftUIColor).frame(height: 1)
+        }
+    }
+
+    private var appearanceIcon: AppIcon {
+        switch model.appearanceMode {
+        case .light: return .sun
+        case .black: return .moon
+        case .auto: return .monitor
+        }
+    }
+
+    private var appearanceTitle: String {
+        switch model.appearanceMode {
+        case .light: return "Light"
+        case .black: return "Dark"
+        case .auto: return "Auto"
+        }
     }
 }
 

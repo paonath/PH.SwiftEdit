@@ -56,7 +56,8 @@ struct PropertiesPanelRow: Equatable, Identifiable {
 @MainActor
 @Observable
 public final class PropertiesPanelState {
-    public var isCollapsed = false
+    /// Collapsed by default so frontmatter never pushes the document body down on open (`REQ-020-02`).
+    public var isCollapsed = true
     public init() {}
 }
 
@@ -82,7 +83,7 @@ struct PropertiesPanelView: View {
 
     private func panelContent(rows: [PropertiesPanelRow], isReadOnly: Bool?, palette: PurpleThemePalette) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            headerButton(rowCount: rows.count, palette: palette)
+            headerButton(rows: rows, palette: palette)
             if !state.isCollapsed {
                 if isReadOnly == true {
                     Text("Frontmatter is read-only: unterminated, malformed or unsupported YAML.")
@@ -95,13 +96,28 @@ struct PropertiesPanelView: View {
         }
     }
 
-    private func headerButton(rowCount: Int, palette: PurpleThemePalette) -> some View {
-        Button {
+    /// Compact disclosure row aligned with the text column: chevron, label, count and (collapsed) a key preview (R-06).
+    private func headerButton(rows: [PropertiesPanelRow], palette: PurpleThemePalette) -> some View {
+        let rowCount = rows.count
+        return Button {
             state.isCollapsed.toggle()
         } label: {
-            Label("Properties (\(rowCount))", systemImage: state.isCollapsed ? "chevron.right" : "chevron.down")
-                .appFont(.caption, weight: .semibold)
-                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+            HStack(spacing: 6) {
+                AppIconView(state.isCollapsed ? .chevronRight : .chevronDown, size: 11)
+                Text("Properties")
+                    .appFont(.caption, weight: .medium)
+                Text("\(rowCount)")
+                    .appFont(.caption2, monospaced: true)
+                    .foregroundStyle(palette.secondaryForeground.swiftUIColor.opacity(0.8))
+                if state.isCollapsed, !rows.isEmpty {
+                    Text(verbatim: rows.prefix(6).map(\.key).joined(separator: " · "))
+                        .appFont(.caption2)
+                        .foregroundStyle(palette.secondaryForeground.swiftUIColor.opacity(0.75))
+                        .lineLimit(1)
+                }
+            }
+            .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Properties, \(rowCount) entries")
@@ -111,8 +127,10 @@ struct PropertiesPanelView: View {
     @ViewBuilder
     private func applyPanelChrome<Content: View>(to content: Content, palette: PurpleThemePalette) -> some View {
         content
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.leading, CGFloat(model.gutterWidth) + 12)
+            .padding(.trailing, 12)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(palette.editorCanvasBackground.swiftUIColor)
             .overlay(alignment: .bottom) { Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(height: 1) }
             .accessibilityElement(children: .contain)
@@ -143,19 +161,21 @@ struct PropertiesPanelView: View {
                 .onSubmit { commit(row) }
                 .onExitCommand { drafts[row.key] = nil }
                 .accessibilityLabel(row.accessibilityLabel)
+                .frame(maxWidth: 420, alignment: .leading)
                 Button {
                     model.applyPropertyOperation(.remove(key: row.key))
-                } label: { Image(systemName: "minus.circle") }
+                } label: { AppIconView(.minusCircle, size: 12).minimumHitTarget() }
                 .buttonStyle(.plain)
                 .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                .help("Remove \(row.key)")
                 .accessibilityLabel("Remove \(row.key)")
+                Spacer(minLength: 0)
             } else {
                 Text(verbatim: row.displayValue)
                     .appFont(size: 12, monospaced: true)
                     .foregroundStyle(palette.editorCanvasText.swiftUIColor)
-                Image(systemName: "lock")
+                AppIconView(.lock, size: 12)
                     .foregroundStyle(palette.secondaryForeground.swiftUIColor)
-                    .accessibilityHidden(true)
                 Spacer(minLength: 0)
             }
         }
@@ -176,9 +196,14 @@ struct PropertiesPanelView: View {
                 .appFont(size: 12, monospaced: true)
                 .onSubmit(addProperty)
                 .accessibilityLabel("New property value")
-            Button("Add", action: addProperty)
-                .buttonStyle(.borderless)
+                .frame(maxWidth: 420, alignment: .leading)
+            Button(action: addProperty) { AppIconView(.plus, size: 12).minimumHitTarget() }
+                .buttonStyle(.plain)
+                .foregroundStyle(palette.chromeAccent.swiftUIColor)
                 .disabled(newKey.trimmingCharacters(in: .whitespaces).isEmpty)
+                .help("Add property")
+                .accessibilityLabel("Add property")
+            Spacer(minLength: 0)
         }
     }
 

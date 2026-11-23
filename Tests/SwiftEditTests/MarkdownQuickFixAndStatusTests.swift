@@ -55,10 +55,12 @@ struct MarkdownQuickFixAndStatusTests {
         #expect(ActiveLintStatus.classify(isMarkdownDocument: true, snapshot: degraded, diagnosticCount: 0) == .paused)
         let active = ActiveLintStatus.classify(isMarkdownDocument: true, snapshot: md, diagnosticCount: 3)
         #expect(active == .active(count: 3))
-        #expect(active.label == "⚠ Lint: 3")
+        #expect(active.label == "Lint: 3")
         #expect(ActiveLintStatus.off.label == "Lint: Off")
         #expect(ActiveLintStatus.paused.label == "Lint: Paused")
-        #expect(ActiveLintStatus.active(count: 0).label == "✓ Lint: 0")
+        #expect(ActiveLintStatus.active(count: 0).label == "Lint: 0")
+        // V-01: the label never embeds a warning/check glyph (the status bar draws a single icon).
+        #expect(!active.label.contains("⚠") && !ActiveLintStatus.active(count: 0).label.contains("✓"))
     }
 
     @Test("N5 [Security]: active-line suppression hides transient warnings but never security errors")

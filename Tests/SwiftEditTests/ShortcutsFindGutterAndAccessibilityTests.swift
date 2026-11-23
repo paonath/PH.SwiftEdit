@@ -25,9 +25,12 @@ struct ShortcutsFindGutterAndAccessibilityTests {
     @MainActor
     func p5FindSelectionTokensSingleReplaceAndFocusRestoration() throws {
         // GIVEN an active workbench holding "alpha one\nbeta one\ngamma"
+        let recoveryDir = FileManager.default.temporaryDirectory.appendingPathComponent("p5-find-rec-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: recoveryDir) }
         let model = SwiftEditWorkbenchModel(
             preferencesStore: InMemoryKeyValueStore(),
             recentFilesStore: InMemoryKeyValueStore(),
+            recoveryDirectoryURL: recoveryDir,
             systemDarkDetector: { false },
             savePanelProvider: { _ in nil }
         )
