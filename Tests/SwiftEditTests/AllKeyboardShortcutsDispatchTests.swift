@@ -156,13 +156,13 @@ struct AllKeyboardShortcutsDispatchTests {
         let cmdShiftOptF = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "F", charactersIgnoringModifiers: "f", modifiers: [.command, .shift, .option]), model: model)
 
         // THEN every single command executes as specified
-        #expect(cmdN && countAfterN == 3)
-        #expect(cmdW && dirtyPromptTriggered && countAfterW == 2)
+        #expect(cmdN && countAfterN == 2)
+        #expect(cmdW && dirtyPromptTriggered && countAfterW == 1)
         #expect(cmdD && textAfterD == "# Title\n# Title\n\nline one\n")
         #expect(cmdS && dirtyAfterS == false)
         #expect(cmdShiftS && titleAfterSaveAs == "saved-as.md")
         #expect(cmdShiftO && folderAfterShiftO == folder.standardizedFileURL)
-        #expect(cmdShiftOptO && countAfterBatch == 4)
+        #expect(cmdShiftOptO && countAfterBatch == 3)
         #expect(cmdF && modeF == .find)
         #expect(cmdOptF && modeOptF == .findAndReplace)
         #expect(cmdG && modeG == .goToLine)

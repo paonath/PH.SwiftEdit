@@ -24,6 +24,7 @@ struct DocumentNavigatorWorkbenchTests {
     func p1OpenJumpClose() {
         let (model, dir) = Self.makeModel()
         defer { try? FileManager.default.removeItem(at: dir) }
+        model.newUntitledTab()
         model.handleEditorTextChanged("# One\ntext\n## Two\n")
         guard model.isMarkdownMenuEnabled else { Issue.record("default tab is not Markdown"); return }
         model.toggleDocumentNavigator()

@@ -34,6 +34,7 @@ struct ShortcutsFindGutterAndAccessibilityTests {
             systemDarkDetector: { false },
             savePanelProvider: { _ in nil }
         )
+        model.newUntitledTab()
         model.handleEditorTextChanged("alpha one\nbeta one\ngamma")
         let initialToken = model.programmaticSelectionToken
         let initialFocusToken = model.editorFocusRequestToken

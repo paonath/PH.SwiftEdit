@@ -41,6 +41,7 @@ public final class EmbeddedTerminalRegistry {
         let onTerminated: (UUID, Int32?) -> Void
         let onFailedToStart: (UUID, String) -> Void
         var hasStarted = false
+        var isReadyForInput = false
         var isTerminated = false
         var lastPalette: PurpleThemePalette?
         var lastFont: NSFont?
@@ -88,8 +89,17 @@ public final class EmbeddedTerminalRegistry {
     }
 
     private var entries: [UUID: Entry] = [:]
+    private var pendingPayloadsBySessionID: [UUID: [TerminalSelectionPayload]] = [:]
     private var terminatedSessionIDs: Set<UUID> = []
     private var appTerminateObserver: (any NSObjectProtocol)?
+    /// Delay after `startProcess` before flushing queued input so login shells finish prompt/bracketed-paste init.
+    public var shellReadinessDelayMilliseconds: Int = 250
+    /// Diagnostic hook invoked with `(sessionID, wireText)` whenever sanitized text is written to a live PTY.
+    public var onDeliveredWireText: ((UUID, String) -> Void)?
+    /// Number of queued payloads awaiting PTY readiness for `sessionID` (diagnostics and tests).
+    public func pendingPayloadCount(for sessionID: UUID) -> Int {
+        pendingPayloadsBySessionID[sessionID]?.count ?? 0
+    }
     private static let cachedBaseEnvironment: [String] = {
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         env.append("COLORTERM=truecolor")
@@ -183,14 +193,58 @@ public final class EmbeddedTerminalRegistry {
             }
         }
         entry.hasStarted = false
+        entry.isReadyForInput = false
         entry.isTerminated = false
         startShell(for: entry, in: directory)
+    }
+
+    /// Writes `payload` to the live PTY of `sessionID` without appending Return, or queues it until the newly opened shell is ready.
+    public func sendPayload(_ payload: TerminalSelectionPayload, to sessionID: UUID) {
+        guard !terminatedSessionIDs.contains(sessionID) else { return }
+        if let entry = entries[sessionID], !entry.isTerminated, entry.isReadyForInput {
+            deliverNow(payload, to: entry)
+        } else {
+            pendingPayloadsBySessionID[sessionID, default: []].append(payload)
+        }
+    }
+
+    /// Moves window first-responder focus to the live terminal view of `sessionID`, if mounted.
+    public func focusTerminal(for sessionID: UUID) {
+        guard let entry = entries[sessionID], !entry.isTerminated else { return }
+        let view = entry.terminalView
+        DispatchQueue.main.async {
+            view.window?.makeFirstResponder(view)
+        }
+    }
+
+    /// Flushes any queued payloads for `sessionID` once the PTY is ready.
+    func flushPendingPayloads(for sessionID: UUID) {
+        guard let entry = entries[sessionID], !entry.isTerminated else {
+            pendingPayloadsBySessionID.removeValue(forKey: sessionID)
+            return
+        }
+        entry.isReadyForInput = true
+        guard let queued = pendingPayloadsBySessionID.removeValue(forKey: sessionID), !queued.isEmpty else { return }
+        for payload in queued {
+            deliverNow(payload, to: entry)
+        }
+    }
+
+    private func deliverNow(_ payload: TerminalSelectionPayload, to entry: Entry) {
+        let wire = payload.wireText(bracketedPaste: true)
+        entry.terminalView.send(txt: wire)
+        onDeliveredWireText?(entry.sessionID, wire)
+        let view = entry.terminalView
+        DispatchQueue.main.async {
+            view.window?.makeFirstResponder(view)
+        }
     }
 
     /// Terminates the child PTY process for `sessionID` and releases its view.
     /// Sends `SIGHUP` to the PTY process group (interactive login shells like `zsh` ignore `SIGTERM` by POSIX default),
     /// with a bounded `SIGKILL` fallback so closing a tab, panel, or app never leaves orphan shells behind.
     public func terminate(sessionID: UUID) {
+        pendingPayloadsBySessionID.removeValue(forKey: sessionID)
         if entries.isEmpty && terminatedSessionIDs.count > 256 {
             terminatedSessionIDs.removeAll(keepingCapacity: true)
         }
@@ -231,6 +285,7 @@ public final class EmbeddedTerminalRegistry {
             : FileManager.default.homeDirectoryForCurrentUser.path
 
         entry.hasStarted = true
+        entry.isReadyForInput = false
         entry.terminalView.startProcess(
             executable: shellPath,
             args: ["-l"],
@@ -238,6 +293,15 @@ public final class EmbeddedTerminalRegistry {
             execName: "-\(shellName)",
             currentDirectory: validDir
         )
+        let sessionID = entry.sessionID
+        let delayMs = max(0, shellReadinessDelayMilliseconds)
+        if delayMs == 0 {
+            flushPendingPayloads(for: sessionID)
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
+                self?.flushPendingPayloads(for: sessionID)
+            }
+        }
     }
 
     private func applyStylingIfNeeded(to entry: Entry, palette: PurpleThemePalette, font: NSFont) {

@@ -291,6 +291,7 @@ struct FullAppSemanticThemingAndWindowSyncTests {
         let frame0Mode = model.palette.mode
         let frame0WindowTarget = model.lastWindowAppearanceTarget
 
+        model.newUntitledTab()
         model.handleEditorTextChanged("# Step 1")
         model.handleEditorTextChanged("# Step 2")
         let dirtySessionBefore = try #require(model.activeDocumentSession)

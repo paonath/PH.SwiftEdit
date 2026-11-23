@@ -54,12 +54,16 @@ struct PreviewDiffLineEndingHardeningTests {
         var crSession = DocumentSession(text: "single", lineEnding: .cr)
         _ = try crSession.duplicateLineOrSelection(selection: TextRange(location: 2, length: 0))
         let encodedCR = try DocumentCodec.encode(crSession.text, encoding: .utf8, lineEnding: .cr)
+        let crRecovery = FileManager.default.temporaryDirectory.appendingPathComponent("cr-model-rec-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: crRecovery) }
         let crModel = SwiftEditWorkbenchModel(
             preferencesStore: InMemoryKeyValueStore(),
             recentFilesStore: InMemoryKeyValueStore(),
+            recoveryDirectoryURL: crRecovery,
             systemDarkDetector: { false },
             savePanelProvider: { _ in nil }
         )
+        crModel.newUntitledTab()
         crModel.handleEditorTextChanged("one\rtwo\rthree")
         crModel.handleSelectionChanged(TextRange(location: 9, length: 0))
 

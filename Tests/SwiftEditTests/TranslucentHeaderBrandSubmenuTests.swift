@@ -111,6 +111,7 @@ struct TranslucentHeaderBrandSubmenuTests {
         defer {
             try? FileManager.default.removeItem(at: dir)
         }
+        model.newUntitledTab()
         model.handleEditorTextChanged("#BadHeading\n\n#Untouched")
         model.handleSelectionChanged(SwiftEditCore.TextRange(location: 0, length: 11))
         let revisionBefore = try #require(model.activeDocumentSession?.revision)
@@ -155,6 +156,7 @@ struct TranslucentHeaderBrandSubmenuTests {
         defer {
             try? FileManager.default.removeItem(at: dir)
         }
+        model.newUntitledTab()
         model.handleEditorTextChanged("# Good\n\ntext")
         model.handleSelectionChanged(SwiftEditCore.TextRange(location: 0, length: 6))
         let revisionBefore = try #require(model.activeDocumentSession?.revision)
