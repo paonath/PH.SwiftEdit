@@ -17,7 +17,7 @@ struct LogTailPanelView: View {
                 .appFont(.caption, weight: .semibold)
                 .foregroundStyle(palette.chromeForeground.swiftUIColor)
                 .accessibilityLabel(tail.isRunning ? "Log tail running" : "Log tail stopped")
-            Picker("Order", selection: Binding(get: { tail.mode }, set: { tail.setMode($0) })) {
+            Picker("Order", selection: Binding(get: { tail.mode }, set: { tail.setMode($0); model.requestEditorFocus() })) {
                 Text("Direct").tag(LogTailMode.direct)
                 Text("Inverse").tag(LogTailMode.inverse)
             }
@@ -29,9 +29,9 @@ struct LogTailPanelView: View {
                 TextField("80", text: $lineText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 64)
-                    .onSubmit { if let value = Int(lineText) { tail.setLineCount(value) }; lineText = String(tail.lineCount) }
+                    .onSubmit { if let value = Int(lineText) { tail.setLineCount(value) }; lineText = String(tail.lineCount); model.requestEditorFocus() }
                     .accessibilityLabel("Number of tail lines")
-                Stepper("", value: Binding(get: { tail.lineCount }, set: { tail.setLineCount($0); lineText = String($0) }), in: 1...LogTailBuffer.maxLines, step: 10)
+                Stepper("", value: Binding(get: { tail.lineCount }, set: { tail.setLineCount($0); lineText = String($0); model.requestEditorFocus() }), in: 1...LogTailBuffer.maxLines, step: 10)
                     .labelsHidden()
                     .accessibilityLabel("Adjust number of tail lines")
             }
@@ -43,7 +43,7 @@ struct LogTailPanelView: View {
             }
             Spacer(minLength: 0)
             Button(tail.isRunning ? "Stop" : "Resume") {
-                if tail.isRunning { model.stopLogTail() } else { model.startLogTail(mode: tail.mode) }
+                if tail.isRunning { model.stopLogTail(); model.requestEditorFocus() } else { model.startLogTail(mode: tail.mode) }
             }
             .accessibilityLabel(tail.isRunning ? "Stop log tail" : "Resume log tail")
             if !model.logTailOnlyTabIDs.contains(tail.tabID) {

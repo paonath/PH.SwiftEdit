@@ -2284,11 +2284,13 @@ public final class SwiftEditWorkbenchModel {
         if let existing = logTails[id] {
             existing.setMode(mode)
             existing.start()
+            requestEditorFocus()
             return
         }
         let controller = LogTailController(tabID: id, url: url, mode: mode, reader: logFileReader)
         logTails[id] = controller
         controller.start()
+        requestEditorFocus()
     }
 
     /// Pauses the live tail of the active tab (the last snapshot stays visible).
@@ -4030,6 +4032,7 @@ public struct SwiftEditRootView: View {
                     bufferRevision: BufferRevision(tail.generation),
                     text: tail.text,
                     isEditable: false,
+                    isWordOccurrenceHighlightEnabled: true,
                     isWordWrapEnabled: model.isWordWrapEnabled,
                     palette: model.palette,
                     fontSizePoints: model.zoomController.scaledFontSizePoints,
@@ -4042,6 +4045,7 @@ public struct SwiftEditRootView: View {
                     documentLanguage: .log,
                     programmaticSelection: SwiftEditCore.TextRange(location: tail.mode == .direct ? (tail.text as NSString).length : 0, length: 0),
                     programmaticSelectionToken: Int(truncatingIfNeeded: tail.generation),
+                    editorFocusRequestToken: model.editorFocusRequestToken,
                     onEscape: { model.handleEscape() },
                     typography: model.typography,
                     typographyGeneration: model.typographyGeneration
@@ -4064,6 +4068,7 @@ public struct SwiftEditRootView: View {
                         bufferRevision: session.revision,
                         text: session.text,
                         isEditable: !session.isBinaryReadOnly,
+                        isWordOccurrenceHighlightEnabled: !session.isBinaryReadOnly && !session.isDegradedPlainText,
                         isWordWrapEnabled: model.isWordWrapEnabled,
                         palette: model.palette,
                         fontSizePoints: model.zoomController.scaledFontSizePoints,

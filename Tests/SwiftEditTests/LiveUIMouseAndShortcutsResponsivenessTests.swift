@@ -393,4 +393,226 @@ struct LiveUIMouseAndShortcutsResponsivenessTests {
         textView.setSelectedRange(NSRange(location: sb2.location, length: 0))
         #expect(textView.liveWordOccurrenceRanges.isEmpty)
     }
+
+    @Test("Log viewer secondary occurrence highlight works in Plain, Live Direct, and Live Inverse modes without ever locking the log file")
+    func logViewerSecondaryOccurrenceHighlightInPlainDirectAndInverseWithoutFileLocking() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SwiftEditLogHighlightTest-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let logURL = dir.appendingPathComponent("filini2-api.log")
+        let initialLogLines = [
+            "2026-11-23 11:34:47.5310 TRACE [ ] - Starting Filini | [Filini2.Api.Program.Main:Program.cs:45] [Filini2.Api.Program]",
+            "2026-11-23 11:34:47.9700 INFO [ ] - Initialized Scheduler Signaller of type: Quartz.Core.SchedulerSignalerImpl | [Quartz.Simpl.MicrosoftLoggingProvider.GetLogger] [Quartz.Core.SchedulerSignalerImpl]",
+            "2026-11-23 11:34:47.9705 INFO [ ] - Quartz Scheduler created | [Quartz.Simpl.MicrosoftLoggingProvider.GetLogger] [Quartz.Core.QuartzScheduler]",
+            "2026-11-23 11:34:47.9705 INFO [ ] - JobFactory set to: Quartz.Simpl.MicrosoftDependencyInjectionJobFactory | [Quartz.Simpl.MicrosoftLoggingProvider.GetLogger] [Quartz.Core.QuartzScheduler]",
+            "2026-11-23 11:34:47.9705 INFO [ ] - RAMJobStore initialized. | [Quartz.Simpl.MicrosoftLoggingProvider.GetLogger] [Quartz.Simpl.RAMJobStore]",
+            "2026-11-23 11:34:47.9705 INFO [ ] - Quartz Scheduler 3.18.0.0 - 'QuartzScheduler' with instanceId 'NON_CLUSTERED' initialized | [Quartz.Simpl.MicrosoftLoggingProvider.GetLogger] [Quartz.Impl.StdSchedulerFactory]",
+            "2026-11-23 11:34:47.9712 INFO [ ] - Using thread pool 'Quartz.Simpl.DefaultThreadPool', size: 10 | [Quartz.Simpl.MicrosoftLoggingProvider.GetLogger] [Quartz.Impl.StdSchedulerFactory]",
+            "2026-11-23 11:34:47.9712 INFO [ ] - Using job store 'Quartz.Simpl.RAMJobStore', supports persistence: False, clustered: False | [Quartz.Simpl.MicrosoftLoggingProvider.GetLogger] [Quartz.Impl.StdSchedulerFactory]",
+            "2026-11-23 11:34:47.9767 INFO [ ] - Adding 2 jobs, 2 triggers. | [Quartz.Xml.XMLSchedulingDataProcessor.ScheduleJobs] [Quartz.ContainerConfigurationProcessor]",
+            "2026-11-23 11:34:47.9767 INFO [ ] - Adding job: DEFAULT.CheckAndSendNotifiche | [Quartz.Xml.XMLSchedulingDataProcessor.ScheduleJobs] [Quartz.ContainerConfigurationProcessor]",
+            "2026-11-23 11:34:47.9791 INFO [ ] - Adding job: DEFAULT.CreaNotificaPresenzeScadute | [Quartz.Xml.XMLSchedulingDataProcessor.ScheduleJobs] [Quartz.ContainerConfigurationProcessor]",
+            "2026-11-23 11:34:48.4352 INFO [ ] - Now listening on: http://localhost:5000 | [Microsoft.AspNetCore.Hosting.GenericWebHostService.StartAsync] [Microsoft.Hosting.Lifetime]",
+            "2026-11-23 11:34:48.4378 INFO [ ] - Application started. Press Ctrl+C to shut down. | [Microsoft.Extensions.Hosting.Internal.ConsoleLifetime.OnApplicationStarted] [Microsoft.Hosting.Lifetime]",
+            "2026-11-23 11:34:48.4378 INFO [ ] - Hosting environment: Development | [Microsoft.Extensions.Hosting.Internal.ConsoleLifetime.OnApplicationStarted] [Microsoft.Hosting.Lifetime]",
+            "2026-11-23 11:34:48.4382 INFO [ ] - Content root path: /Users/paoloinnocenti/Documents/git/filini-repo/filini-2.0/server/Filini2.0.Api/Filini2.0.Api | [Microsoft.Extensions.Hosting.Internal.ConsoleLifetime.OnApplicationStarted] [Microsoft.Hosting.Lifetime]",
+            "2026-11-23 11:34:48.4382 INFO [ ] - Scheduler QuartzScheduler_$_NON_CLUSTERED started. | [Quartz.Simpl.MicrosoftLoggingProvider.GetLogger] [Quartz.Core.QuartzScheduler]",
+        ]
+        let initialContent = initialLogLines.joined(separator: "\n") + "\n"
+        try Data(initialContent.utf8).write(to: logURL)
+
+        let model = SwiftEditWorkbenchModel(
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
+            recoveryDirectoryURL: dir.appendingPathComponent("recovery"),
+            fileSystem: LocalFileSystemAdapter(),
+            systemDarkDetector: { false },
+            savePanelProvider: { _ in nil }
+        )
+        model.appearanceMode = .light
+        model.openFile(at: logURL, withinScope: dir)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 520),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        let hostingView = NSHostingView(rootView: SwiftEditRootView(initialModel: model))
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1280, height: 520)
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+
+        hostingView.layoutSubtreeIfNeeded()
+        Self.pumpMainRunLoop(milliseconds: 30)
+
+        func currentTextView() throws -> SwiftEditNSTextView {
+            try #require(Self.findSubview(of: SwiftEditNSTextView.self, in: hostingView))
+        }
+
+        func bitmapHasSoftPurpleHighlight(on tv: SwiftEditNSTextView, in rect: NSRect) -> Bool {
+            guard let rep = tv.bitmapImageRepForCachingDisplay(in: tv.bounds) else { return false }
+            tv.cacheDisplay(in: tv.bounds, to: rep)
+            let target = model.palette.wordOccurrenceBackground.nsColor.usingColorSpace(.sRGB)!
+            let x0 = max(0, Int(rect.minX.rounded(.down)))
+            let x1 = min(rep.pixelsWide - 1, Int(rect.maxX.rounded(.up)))
+            let y0 = max(0, Int(rect.minY.rounded(.down)))
+            let y1 = min(rep.pixelsHigh - 1, Int(rect.maxY.rounded(.up)))
+            guard x1 >= x0, y1 >= y0 else { return false }
+            for y in y0...y1 {
+                for x in x0...x1 {
+                    if let px = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) {
+                        let dr = abs(px.redComponent - target.redComponent)
+                        let dg = abs(px.greenComponent - target.greenComponent)
+                        let db = abs(px.blueComponent - target.blueComponent)
+                        if dr < 0.06 && dg < 0.06 && db < 0.06 {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        func rectForUTF16Range(_ nsRange: NSRange, in tv: SwiftEditNSTextView) -> NSRect {
+            let screenRect = tv.firstRect(forCharacterRange: nsRange, actualRange: nil)
+            let winRect = window.convertFromScreen(screenRect)
+            return tv.convert(winRect, from: nil)
+        }
+
+        func assertLogFileIsNeverLockedAndWritable(_ appendLine: String) throws {
+            let fd = open(logURL.path, O_RDWR | O_APPEND | O_CLOEXEC)
+            #expect(fd >= 0, "External process must always be able to open the log file for read/write")
+            guard fd >= 0 else { return }
+            defer { close(fd) }
+            let lockRc = flock(fd, LOCK_EX | LOCK_NB)
+            #expect(lockRc == 0, "Log file must NEVER hold a shared or exclusive flock (errno=\(errno))")
+            if lockRc == 0 {
+                _ = flock(fd, LOCK_UN)
+            }
+            let bytes = Array((appendLine + "\n").utf8)
+            let written = bytes.withUnsafeBytes { ptr in
+                write(fd, ptr.baseAddress, ptr.count)
+            }
+            #expect(written == bytes.count, "External writer must be able to append to log file without contention")
+        }
+
+        // -----------------------------------------------------------------
+        // 1. PLAIN MODE (.log opened as standard tab, before starting live tail)
+        // -----------------------------------------------------------------
+        let plainTV = try currentTextView()
+        _ = window.makeFirstResponder(plainTV)
+        #expect(plainTV.isWordOccurrenceHighlightEnabled == true)
+        let plainNS = plainTV.string as NSString
+        let plainInfo1 = plainNS.range(of: "INFO")
+        let plainInfo2 = plainNS.range(of: "INFO", range: NSRange(location: NSMaxRange(plainInfo1), length: plainNS.length - NSMaxRange(plainInfo1)))
+        #expect(plainInfo1.location != NSNotFound && plainInfo2.location != NSNotFound)
+
+        plainTV.setSelectedRange(plainInfo1)
+        Self.pumpMainRunLoop(milliseconds: 30)
+        window.displayIfNeeded()
+        CATransaction.flush()
+
+        #expect(plainTV.liveWordOccurrenceRanges.count == 14)
+        #expect(bitmapHasSoftPurpleHighlight(on: plainTV, in: rectForUTF16Range(plainInfo2, in: plainTV)))
+
+        // -----------------------------------------------------------------
+        // 2. LIVE TAIL - DIRECT MODE (Cmd+L)
+        // -----------------------------------------------------------------
+        model.startLogTail(mode: .direct)
+        let tail = try #require(model.activeLogTail)
+        tail.pollNow()
+        Self.pumpMainRunLoop(milliseconds: 50)
+        hostingView.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        CATransaction.flush()
+
+        #expect(tail.mode == .direct)
+        let directTV = try currentTextView()
+        _ = window.makeFirstResponder(directTV)
+        #expect(directTV.isEditable == false)
+        #expect(directTV.isSelectable == true)
+        #expect(directTV.isWordOccurrenceHighlightEnabled == true)
+
+        let directNS = directTV.string as NSString
+        let directInfo1 = directNS.range(of: "INFO")
+        let directInfo2 = directNS.range(of: "INFO", range: NSRange(location: NSMaxRange(directInfo1), length: directNS.length - NSMaxRange(directInfo1)))
+        #expect(directInfo1.location != NSNotFound && directInfo2.location != NSNotFound)
+
+        // Select "INFO" via Shift + Right Arrow in read-only Live Direct mode
+        directTV.setSelectedRange(NSRange(location: directInfo1.location, length: 0))
+        for _ in 0..<directInfo1.length {
+            directTV.moveRightAndModifySelection(nil)
+        }
+        Self.pumpMainRunLoop(milliseconds: 30)
+        window.displayIfNeeded()
+        CATransaction.flush()
+
+        #expect(directTV.selectedRange() == directInfo1)
+        #expect(directTV.liveWordOccurrenceRanges.count == 14)
+        #expect(bitmapHasSoftPurpleHighlight(on: directTV, in: rectForUTF16Range(directInfo2, in: directTV)))
+
+        // Append a new log line externally while "INFO" is selected and verify non-locking + preserved selection + 15 secondary occurrences!
+        try assertLogFileIsNeverLockedAndWritable(
+            "2026-11-23 11:34:49.1000 INFO [ ] - Live appended line while active selection is preserved | [Filini2.Api.Heartbeat]"
+        )
+        tail.pollNow()
+        Self.pumpMainRunLoop(milliseconds: 50)
+        hostingView.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        CATransaction.flush()
+
+        #expect(directTV.selectedRange() == directInfo1, "Active user selection in live log tail must not be clobbered by incoming log lines")
+        #expect(directTV.liveWordOccurrenceRanges.count == 15)
+
+        // -----------------------------------------------------------------
+        // 3. LIVE TAIL - INVERSE MODE (Shift+Cmd+L / Order: Inverse, matching user screenshot)
+        // -----------------------------------------------------------------
+        tail.setMode(.inverse)
+        Self.pumpMainRunLoop(milliseconds: 50)
+        hostingView.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        CATransaction.flush()
+
+        #expect(tail.mode == .inverse)
+        let inverseTV = try currentTextView()
+        let inverseNS = inverseTV.string as NSString
+
+        // Select "INFO" on the 5th line (exactly as in user's screenshot: "Now listening on: http://localhost:5000")
+        let listeningLineRange = inverseNS.range(of: "Now listening on: http://localhost:5000")
+        #expect(listeningLineRange.location != NSNotFound)
+        let lineStart = inverseNS.lineRange(for: NSRange(location: listeningLineRange.location, length: 0))
+        let infoOnLine5 = inverseNS.range(of: "INFO", options: [], range: lineStart)
+        #expect(infoOnLine5.location != NSNotFound)
+
+        inverseTV.setSelectedRange(infoOnLine5)
+        Self.pumpMainRunLoop(milliseconds: 40)
+        hostingView.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        CATransaction.flush()
+
+        #expect(inverseTV.selectedRange() == infoOnLine5)
+        #expect(inverseTV.liveWordOccurrenceRanges.count == 15)
+        let firstLineInfo = inverseNS.range(of: "INFO")
+        #expect(firstLineInfo.location != NSNotFound && firstLineInfo != infoOnLine5)
+        #expect(bitmapHasSoftPurpleHighlight(on: inverseTV, in: rectForUTF16Range(firstLineInfo, in: inverseTV)))
+
+        // Also verify external non-locking write while Inverse mode is active with "INFO" highlighted
+        try assertLogFileIsNeverLockedAndWritable(
+            "2026-11-23 11:34:50.2000 INFO [ ] - Second live appended line in Inverse mode | [Filini2.Api.Heartbeat]"
+        )
+        tail.pollNow()
+        Self.pumpMainRunLoop(milliseconds: 50)
+        hostingView.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        CATransaction.flush()
+
+        let updatedInverseNS = inverseTV.string as NSString
+        #expect(updatedInverseNS.substring(with: inverseTV.selectedRange()) == "INFO")
+        #expect(inverseTV.liveWordOccurrenceRanges.count == 16)
+    }
 }
