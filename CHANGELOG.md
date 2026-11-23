@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-23 UTC
+Branch: feature/contaxtual_actions | Commit: c9d9c33
+
+### Changed
+- Reduced `Release` macOS `SwiftEdit.app` bundle size by a further 17.1% (`7.6 MB → 6.3 MB`; main executable `6.6 MB → 5.4 MB`, `__LINKEDIT` `983 KB → 295 KB`) by enabling Full LTO (`LLVM_LTO = YES`), `LD_EXPORT_SYMBOLS = NO`, `SWIFT_REFLECTION_METADATA_LEVEL = none`, and `GCC_SYMBOLS_PRIVATE_EXTERN = YES` in `XcodeApp/PH.SwiftEdit.xcodeproj/project.pbxproj` and `Scripts/build-app.sh` (`c9d9c33`).
+- Optimized editor, search, completion, and log-tail hot paths across `WordOccurrenceScanner` (linear UTF-16 cursor for Unicode whole-word matching), `WordCompletionIndex` (ASCII fast path and deferred buffer capture), `TextKit2EditorView` (zero-copy `mutableString` access), `SwiftEditRootView` (`O(log L)` `previewSourceLine` and shared `MarkdownLineIndex`/`BracketTopology`/`BacktickHighlightResult` caches), `LogTailBuffer` (`memchr` newline scanning), `ElementContextualActions`, and `DoubleClickSelectionCycle` (`c9d9c33`).
+
+### Fixed
+- Fixed fenced code block closing detection with trailing spaces in `MarkdownPreviewProjector`, stale `previewTaskTarget` locking across tab switches, `DispatchSourceFileSystemObject` retain cycle and missing `deinit` teardown in `LogTailController`, and `workdir` cleanup when `ditto` launch fails in `AppUpdateInstaller` (`c9d9c33`).
+- Fixed concurrent preference-write race conditions in `JSONPreferencesStore`, uninitialized buffer mutation in `DocumentSession.applyTextEdits`, and `ElementContextualMenuState` Up-Arrow wrapping from an empty highlight and whitespace-only query handling (`c9d9c33`).
+
+### Security
+- Added missing symbolic-link validation on `session-manifest.json` in `SessionRecoveryStore.saveManifest` and rejected UTF-16 surrogate-pair splits in `ElementContextualActionCatalog` (`c9d9c33`).
+
+## [Unreleased] - 2026-11-23 UTC
 Branch: feature/contaxtual_actions | Base commit: 7fad5f1
 
 ### Added
