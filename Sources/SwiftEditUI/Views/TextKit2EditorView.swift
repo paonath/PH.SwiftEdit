@@ -631,7 +631,10 @@ struct TextKit2EditorView: NSViewRepresentable {
         }
         layoutManager.setRenderingAttributes([:], for: clearRange)
         coordinator.hadNonMutatingHighlights = hasAnyHighlights
-        guard hasAnyHighlights else { return true }
+        guard hasAnyHighlights else {
+            layoutManager.invalidateLayout(for: clearRange)
+            return true
+        }
 
         func intersectsVisible(_ loc: Int, _ len: Int) -> Bool {
             let end = loc + len
@@ -779,6 +782,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
         }
 
+        layoutManager.invalidateLayout(for: clearRange)
         return true
     }
 

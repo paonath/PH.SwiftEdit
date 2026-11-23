@@ -236,4 +236,112 @@ struct LiveUIMouseAndShortcutsResponsivenessTests {
         let elapsed = ContinuousClock.now - startClock
         #expect(elapsed < .milliseconds(500))
     }
+
+    @Test("Secondary word occurrence highlight visibly paints other occurrences (plain prose AND inside backticks) via both mouse double-click and Shift+Arrow selection")
+    func secondaryWordOccurrenceHighlightRendersVisiblyInTextKit2() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("occ-render-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let sandboxText = """
+        # SwiftEdit — Sandbox Ready
+
+        Welcome to **SwiftEdit** (Zed-minimal Purple Chrome + Inverted B/W TextKit 2 Canvas).
+
+        - Press `Cmd+D` to duplicate the current line or selection.
+        - duplicate
+        - Press `Cmd++` / `Cmd+-` / `Cmd+0` to scale Editor Zoom (`50%..300%`).
+        - Try `#HeadingWithoutSpace` or `[XSS](javascript:alert(1))` to test live AST linting.
+        - Try `#HeadingWithoutSpace` or `[XSS](javascript:alert(1))` to test live AST linting.
+        """
+
+        let model = SwiftEditWorkbenchModel(
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
+            recoveryDirectoryURL: dir.appendingPathComponent("recovery"),
+            fileSystem: LocalFileSystemAdapter(),
+            systemDarkDetector: { false },
+            savePanelProvider: { _ in nil }
+        )
+        model.appearanceMode = .light
+        model.handleEditorTextChanged(sandboxText)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1100, height: 600),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        let hostingView = NSHostingView(rootView: SwiftEditRootView(initialModel: model))
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1100, height: 600)
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+
+        hostingView.layoutSubtreeIfNeeded()
+        Self.pumpMainRunLoop(milliseconds: 30)
+
+        let textView = try #require(Self.findSubview(of: SwiftEditNSTextView.self, in: hostingView))
+        _ = window.makeFirstResponder(textView)
+
+        func bitmapHasSoftPurpleHighlight(in rect: NSRect) -> Bool {
+            guard let rep = textView.bitmapImageRepForCachingDisplay(in: textView.bounds) else { return false }
+            textView.cacheDisplay(in: textView.bounds, to: rep)
+            let target = model.palette.wordOccurrenceBackground.nsColor.usingColorSpace(.sRGB)!
+            let x0 = max(0, Int(rect.minX.rounded(.down)))
+            let x1 = min(rep.pixelsWide - 1, Int(rect.maxX.rounded(.up)))
+            let y0 = max(0, Int(rect.minY.rounded(.down)))
+            let y1 = min(rep.pixelsHigh - 1, Int(rect.maxY.rounded(.up)))
+            guard x1 >= x0, y1 >= y0 else { return false }
+            for y in y0...y1 {
+                for x in x0...x1 {
+                    if let px = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) {
+                        let dr = abs(px.redComponent - target.redComponent)
+                        let dg = abs(px.greenComponent - target.greenComponent)
+                        let db = abs(px.blueComponent - target.blueComponent)
+                        if dr < 0.06 && dg < 0.06 && db < 0.06 {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        func rectForUTF16Range(_ nsRange: NSRange) -> NSRect {
+            let screenRect = textView.firstRect(forCharacterRange: nsRange, actualRange: nil)
+            let winRect = window.convertFromScreen(screenRect)
+            return textView.convert(winRect, from: nil)
+        }
+
+        let nsText = sandboxText as NSString
+
+        // Case 1: Select "duplicate" on line 5 -> "duplicate" on line 6 MUST be highlighted in soft purple (#DDD6FE)
+        let dup1 = nsText.range(of: "duplicate")
+        let dup2 = nsText.range(of: "duplicate", range: NSRange(location: NSMaxRange(dup1), length: nsText.length - NSMaxRange(dup1)))
+        #expect(dup1.location != NSNotFound && dup2.location != NSNotFound)
+
+        textView.setSelectedRange(dup1)
+        Self.pumpMainRunLoop(milliseconds: 40)
+        hostingView.layoutSubtreeIfNeeded()
+
+        #expect(model.activeHighlightProjection.wordOccurrenceRanges.contains(SwiftEditCore.TextRange(location: dup2.location, length: dup2.length)))
+        let dup2Rect = rectForUTF16Range(dup2)
+        #expect(bitmapHasSoftPurpleHighlight(in: dup2Rect), "Expected line 6 'duplicate' to render with wordOccurrenceBackground (#DDD6FE)")
+
+        // Case 2: Select "#HeadingWithoutSpace" on line 8 (inside backticks) -> line 9 occurrence MUST ALSO be highlighted in soft purple (#DDD6FE)
+        let h1 = nsText.range(of: "#HeadingWithoutSpace")
+        let h2 = nsText.range(of: "#HeadingWithoutSpace", range: NSRange(location: NSMaxRange(h1), length: nsText.length - NSMaxRange(h1)))
+        #expect(h1.location != NSNotFound && h2.location != NSNotFound)
+
+        textView.setSelectedRange(h1)
+        Self.pumpMainRunLoop(milliseconds: 40)
+        hostingView.layoutSubtreeIfNeeded()
+
+        #expect(model.activeHighlightProjection.wordOccurrenceRanges.contains(SwiftEditCore.TextRange(location: h2.location, length: h2.length)))
+        let h2Rect = rectForUTF16Range(h2)
+        #expect(bitmapHasSoftPurpleHighlight(in: h2Rect), "Expected line 9 '#HeadingWithoutSpace' inside backticks to render with wordOccurrenceBackground (#DDD6FE)")
+    }
 }
