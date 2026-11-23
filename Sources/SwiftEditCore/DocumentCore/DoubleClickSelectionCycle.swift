@@ -50,16 +50,41 @@ public enum DoubleClickSelectionCycle {
         while end < length, !isWhitespace(text.character(at: end)), (end + 1) - start <= maxTokenUTF16Length {
             end += 1
         }
-        while start < word.location, leadingTrim.contains(text.character(at: start)) {
+        while start < word.location, isLeadingTrim(text.character(at: start)) {
             start += 1
         }
-        while end > word.upperBound, trailingTrim.contains(text.character(at: end - 1)) {
+        while end > word.upperBound, isTrailingTrim(text.character(at: end - 1)) {
             end -= 1
         }
         return TextRange(location: start, length: end - start)
     }
 
+    @inline(__always)
+    private static func isLeadingTrim(_ unit: unichar) -> Bool {
+        switch unit {
+        case 0x28, 0x5B, 0x7B, 0x3C, 0x22, 0x27, 0x60, 0x201C, 0x2018, 0x00AB:
+            return true // ( [ { < " ' ` “ ‘ «
+        default:
+            return false
+        }
+    }
+
+    @inline(__always)
+    private static func isTrailingTrim(_ unit: unichar) -> Bool {
+        switch unit {
+        case 0x29, 0x5D, 0x7D, 0x3E, 0x22, 0x27, 0x60, 0x201D, 0x2019, 0x00BB,
+             0x2E, 0x2C, 0x3B, 0x3A, 0x21, 0x3F:
+            return true // ) ] } > " ' ` ” ’ » . , ; : ! ?
+        default:
+            return false
+        }
+    }
+
+    @inline(__always)
     private static func isWhitespace(_ unit: unichar) -> Bool {
+        if unit < 0x80 {
+            return unit == 0x20 || (unit >= 0x09 && unit <= 0x0D)
+        }
         guard let scalar = Unicode.Scalar(unit) else { return false }
         return scalar.properties.isWhitespace
     }

@@ -82,17 +82,24 @@ public struct WordCompletionIndex: Sendable, Equatable {
             if words[mid] < prefix { lo = mid + 1 } else { hi = mid }
         }
         var best: Int?
+        var bestUTF16Length = 0
         var scanned = 0
         var idx = lo
         while idx < words.count, scanned < Self.maxScannedCandidates, words[idx].hasPrefix(prefix) {
             let word = words[idx]
-            if word.utf16.count > prefixLength {
+            let wordLength = word.utf16.count
+            if wordLength > prefixLength {
                 if let current = best {
-                    let better = counts[idx] > counts[current]
-                        || (counts[idx] == counts[current] && word.utf16.count < words[current].utf16.count)
-                    if better { best = idx }
+                    let candidateCount = counts[idx]
+                    let currentCount = counts[current]
+                    if candidateCount > currentCount
+                        || (candidateCount == currentCount && wordLength < bestUTF16Length) {
+                        best = idx
+                        bestUTF16Length = wordLength
+                    }
                 } else {
                     best = idx
+                    bestUTF16Length = wordLength
                 }
             }
             scanned += 1
@@ -109,12 +116,18 @@ public struct WordCompletionIndex: Sendable, Equatable {
     public static func wordPrefix(endingAt caret: Int, in text: NSString) -> (range: TextRange, prefix: String)? {
         let length = text.length
         guard caret > 0, caret <= length else { return nil }
-        if caret < length, isWordComposedCharacter(in: text, at: caret) { return nil }
+        if caret < length, isWordUnit(in: text, at: caret) { return nil }
         var start = caret
         while start > 0 {
-            let previous = text.rangeOfComposedCharacterSequence(at: start - 1)
-            guard isWordComposedCharacter(in: text, at: previous.location) else { break }
-            start = previous.location
+            let unit = text.character(at: start - 1)
+            if unit < 0x80 {
+                guard isASCIIWordUnit(unit) else { break }
+                start -= 1
+            } else {
+                let previous = text.rangeOfComposedCharacterSequence(at: start - 1)
+                guard isWordComposedCharacter(in: text, range: previous) else { break }
+                start = previous.location
+            }
             if caret - start > maxIndexedWordUTF16Length { return nil }
         }
         guard caret - start >= minPrefixUTF16Length else { return nil }
@@ -122,8 +135,25 @@ public struct WordCompletionIndex: Sendable, Equatable {
         return (TextRange(location: start, length: caret - start), text.substring(with: range))
     }
 
-    private static func isWordComposedCharacter(in text: NSString, at location: Int) -> Bool {
+    @inline(__always)
+    private static func isASCIIWordUnit(_ u: unichar) -> Bool {
+        (u >= 0x41 && u <= 0x5A)
+            || (u >= 0x61 && u <= 0x7A)
+            || (u >= 0x30 && u <= 0x39)
+            || u == 0x5F
+    }
+
+    @inline(__always)
+    private static func isWordUnit(in text: NSString, at location: Int) -> Bool {
+        let unit = text.character(at: location)
+        if unit < 0x80 {
+            return isASCIIWordUnit(unit)
+        }
         let composed = text.rangeOfComposedCharacterSequence(at: location)
+        return isWordComposedCharacter(in: text, range: composed)
+    }
+
+    private static func isWordComposedCharacter(in text: NSString, range composed: NSRange) -> Bool {
         guard let scalar = text.substring(with: composed).unicodeScalars.first else { return false }
         return WordOccurrenceScanner.isWordScalar(scalar)
     }

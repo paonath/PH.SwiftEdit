@@ -267,14 +267,18 @@ public enum WordOccurrenceScanner {
         var searchRange = NSRange(location: 0, length: totalLength)
         var matches: [TextRange] = []
         let utf16 = text.utf16
+        var cursorIdx = utf16.startIndex
+        var cursorOffset = 0
 
         while searchRange.length > 0 {
             let found = nsText.range(of: word, options: [.literal], range: searchRange)
             guard found.location != NSNotFound && found.length > 0 else { break }
             let candidate = TextRange(location: found.location, length: found.length)
             if candidate != selection,
-               let startIdx = utf16.index(utf16.startIndex, offsetBy: candidate.location, limitedBy: utf16.endIndex),
+               let startIdx = utf16.index(cursorIdx, offsetBy: candidate.location - cursorOffset, limitedBy: utf16.endIndex),
                let endIdx = utf16.index(startIdx, offsetBy: candidate.length, limitedBy: utf16.endIndex) {
+                cursorIdx = endIdx
+                cursorOffset = candidate.upperBound
                 let leftOK: Bool
                 if startIdx > text.startIndex {
                     let prev = text.unicodeScalars.index(before: startIdx)

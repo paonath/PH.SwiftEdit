@@ -40,7 +40,8 @@ public struct ElementContextualMenuState: Equatable, Sendable {
         // Every group opens expanded (the menu is short) so the first action is one Return away.
         expandedGroupIDs = Set(available.map(\.id))
         highlightedRowID = nil
-        highlightedRowID = rows.first(where: { if case .action = $0 { return true } else { return false } })?.id ?? rows.first?.id
+        let initialRows = rows
+        highlightedRowID = initialRows.first(where: { if case .action = $0 { return true } else { return false } })?.id ?? initialRows.first?.id
     }
 
     /// Visible rows in display order.
@@ -74,8 +75,9 @@ public struct ElementContextualMenuState: Equatable, Sendable {
     public mutating func setQuery(_ newValue: String) {
         query = String(newValue.prefix(80))
         let visible = rows
+        let hasFilter = !query.trimmingCharacters(in: .whitespaces).isEmpty
         // While filtering, the best (first) matching action is always one Return away.
-        if !query.isEmpty || !visible.contains(where: { $0.id == highlightedRowID }) {
+        if hasFilter || !visible.contains(where: { $0.id == highlightedRowID }) {
             highlightedRowID = visible.first(where: { if case .action = $0 { return true } else { return false } })?.id ?? visible.first?.id
         }
     }
@@ -84,9 +86,15 @@ public struct ElementContextualMenuState: Equatable, Sendable {
     public mutating func moveHighlight(_ delta: Int) {
         let visible = rows
         guard !visible.isEmpty else { highlightedRowID = nil; return }
-        let current = visible.firstIndex { $0.id == highlightedRowID } ?? -1
-        let next = ((current + delta) % visible.count + visible.count) % visible.count
-        highlightedRowID = visible[next].id
+        if let current = visible.firstIndex(where: { $0.id == highlightedRowID }) {
+            let next = ((current + delta) % visible.count + visible.count) % visible.count
+            highlightedRowID = visible[next].id
+        } else {
+            let next = delta >= 0
+                ? (delta > 0 ? (delta - 1) % visible.count : 0)
+                : ((visible.count + (delta % visible.count)) % visible.count)
+            highlightedRowID = visible[next].id
+        }
     }
 
     public mutating func highlight(rowID: String) {

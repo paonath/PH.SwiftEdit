@@ -231,29 +231,50 @@ public final class SwiftEditWorkbenchModel {
 
     /// Rebuilds the active document's word cache on a background task, excluding the word under the caret.
     public func scheduleWordCompletionRebuild(debounce: Duration = SwiftEditWorkbenchModel.wordCompletionRebuildDebounce) {
-        guard let session = activeDocumentSession, !session.isBinaryReadOnly else { return }
+        guard activeLogTail == nil,
+              let session = activeDocumentSession,
+              !session.isBinaryReadOnly,
+              !session.isDegradedPlainText else { return }
         if let cache = wordCompletionCache, cache.id == session.id, cache.revision == session.revision { return }
-        let id = session.id
-        let revision = session.revision
-        let text = session.text
-        let caret = currentSelection.location
+        let targetID = session.id
         wordCompletionRebuildTask?.cancel()
-        wordCompletionRebuildTask = Task { [weak self] in
+        wordCompletionRebuildTask = Task { @MainActor [weak self] in
             if debounce > .zero {
                 try? await Task.sleep(for: debounce)
             }
-            guard !Task.isCancelled else { return }
-            let index = await Task.detached(priority: .utility) {
+            guard !Task.isCancelled,
+                  let self,
+                  self.activeLogTail == nil,
+                  let current = self.activeDocumentSession,
+                  current.id == targetID,
+                  !current.isBinaryReadOnly,
+                  !current.isDegradedPlainText else { return }
+            if let cache = self.wordCompletionCache, cache.id == current.id, cache.revision == current.revision { return }
+            let revision = current.revision
+            let text = current.text
+            let caret = self.currentSelection.location
+            let worker = Task.detached(priority: .utility) {
                 WordCompletionIndex.build(from: text, excluding: SwiftEditCore.TextRange(location: caret, length: 0))
-            }.value
-            guard !Task.isCancelled, let self else { return }
-            self.wordCompletionCache = (id, revision, index)
+            }
+            let index = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled,
+                  let latest = self.activeDocumentSession,
+                  latest.id == targetID,
+                  latest.revision == revision else { return }
+            self.wordCompletionCache = (targetID, revision, index)
         }
     }
 
     /// Synchronously rebuilds the active word cache (tests and first-open paths).
     public func rebuildWordCompletionIndexNow() {
-        guard let session = activeDocumentSession, !session.isBinaryReadOnly else { return }
+        guard activeLogTail == nil,
+              let session = activeDocumentSession,
+              !session.isBinaryReadOnly,
+              !session.isDegradedPlainText else { return }
         wordCompletionRebuildTask?.cancel()
         wordCompletionCache = (
             session.id,
@@ -1389,6 +1410,9 @@ public final class SwiftEditWorkbenchModel {
 
         let targetID = snap.id
         let targetRevision = snap.revision
+        let reusableTopology = (bracketTopologyCache?.id == targetID && bracketTopologyCache?.revision == targetRevision) ? bracketTopologyCache?.topology : nil
+        let hasReusableBackticks = (backtickCache?.id == targetID && backtickCache?.revision == targetRevision)
+        let reusableBackticks = hasReusableBackticks ? backtickCache?.result : nil
         diagnosticsTask = Task { @MainActor [weak self] in
             let worker = Task.detached(priority: .userInitiated) { () -> (lint: [MarkdownLintDiagnostic], topology: BracketTopology?, backticks: BacktickHighlightResult?, safety: InspectionSafetyBannerState)? in
                 guard !Task.isCancelled else { return nil }
@@ -1396,9 +1420,9 @@ public final class SwiftEditWorkbenchModel {
                 guard !Task.isCancelled else { return nil }
                 let lint = Self.lintDiagnostics(for: snap, language: language)
                 guard !Task.isCancelled else { return nil }
-                let topology = SearchDiffAndBracketEngine.scanTopology(in: snap).completedValue
+                let topology = reusableTopology ?? SearchDiffAndBracketEngine.scanTopology(in: snap).completedValue
                 guard !Task.isCancelled else { return nil }
-                let backticks = BacktickHighlightScanner.scan(in: snap).completedValue
+                let backticks = hasReusableBackticks ? reusableBackticks : BacktickHighlightScanner.scan(in: snap).completedValue
                 return (lint, topology, backticks, safety)
             }
             let computed = await withTaskCancellationHandler {
@@ -2374,7 +2398,11 @@ public final class SwiftEditWorkbenchModel {
             // same document until the current revision settles (scheduled from `refreshDiagnosticsForActiveDocument`).
             return previewCache?.id == session.id ? previewCache?.document : nil
         }
-        let document = MarkdownPreviewProjector.project(snapshot: session.snapshot, showPreview: true)
+        let document = MarkdownPreviewProjector.project(
+            snapshot: session.snapshot,
+            showPreview: true,
+            lineIndex: activeLineIndex()
+        )
         previewCache = (session.id, session.revision, document)
         return document
     }
@@ -2394,20 +2422,24 @@ public final class SwiftEditWorkbenchModel {
         if let target = previewTaskTarget, target.id == session.id, target.revision == session.revision { return }
         previewTask?.cancel()
         let snapshot = session.snapshot
+        let cachedIndex = (lineIndexCache?.id == snapshot.id && lineIndexCache?.revision == snapshot.revision) ? lineIndexCache?.index : nil
         previewTaskTarget = (snapshot.id, snapshot.revision)
         previewTask = Task { @MainActor [weak self] in
             let document = await Task.detached(priority: .userInitiated) {
-                MarkdownPreviewProjector.project(snapshot: snapshot, showPreview: true)
+                MarkdownPreviewProjector.project(snapshot: snapshot, showPreview: true, lineIndex: cachedIndex)
             }.value
-            guard let self, !Task.isCancelled,
+            guard let self else { return }
+            if self.previewTaskTarget?.id == snapshot.id && self.previewTaskTarget?.revision == snapshot.revision {
+                self.previewTaskTarget = nil
+            }
+            guard !Task.isCancelled,
                   let current = self.activeDocumentSession, current.id == snapshot.id, current.revision == snapshot.revision else { return }
             self.previewCache = (snapshot.id, snapshot.revision, document)
-            self.previewTaskTarget = nil
             self.previewGeneration &+= 1
         }
     }
 
-    /// 1-based source line of the caret counting `\r\n`, `\n`, and `\r`, cached per `(DocumentID, BufferRevision, caretLocation)` and used as the single scroll driver of the preview (`BUG-016`, `UI-007`).
+    /// 1-based source line of the caret counting `\r\n`, `\n`, and `\r`, cached per `(DocumentID, BufferRevision, caretLocation)` and answered in `O(log L)` via `textIndexCache` (`BUG-016`, `UI-007`).
     public var previewSourceLine: Int {
         guard let session = activeDocumentSession else { return 0 }
         let caret = currentSelection.location
@@ -2417,74 +2449,9 @@ public final class SwiftEditWorkbenchModel {
            cached.caret == caret {
             return cached.value
         }
-        let line: Int
-        if let fast = session.text.utf8.withContiguousStorageIfAvailable({ buf -> Int in
-            guard let base = buf.baseAddress, !buf.isEmpty, caret > 0 else { return 1 }
-            let count = buf.count
-            var currentLine = 1
-            var utf16Offset = 0
-            var i = 0
-            while i < count && utf16Offset < caret {
-                let b = base[i]
-                if b == 0x0A {
-                    currentLine += 1
-                    utf16Offset += 1
-                    i += 1
-                } else if b == 0x0D {
-                    currentLine += 1
-                    if i + 1 < count && base[i + 1] == 0x0A && utf16Offset + 1 < caret {
-                        utf16Offset += 2
-                        i += 2
-                    } else {
-                        utf16Offset += 1
-                        i += 1
-                    }
-                } else if b < 0x80 {
-                    utf16Offset += 1
-                    i += 1
-                } else if b < 0xE0 {
-                    utf16Offset += 1
-                    i += 2
-                } else if b < 0xF0 {
-                    utf16Offset += 1
-                    i += 3
-                } else {
-                    utf16Offset += 2
-                    i += 4
-                }
-            }
-            return currentLine
-        }) {
-            line = fast
-        } else {
-            let units = session.text.utf16
-            let limit = min(max(0, caret), units.count)
-            var currentLine = 1
-            var idx = units.startIndex
-            var offset = 0
-            while idx < units.endIndex, offset < limit {
-                let u = units[idx]
-                if u == 0x0A {
-                    currentLine += 1
-                    idx = units.index(after: idx)
-                    offset += 1
-                } else if u == 0x0D {
-                    currentLine += 1
-                    let next = units.index(after: idx)
-                    if next < units.endIndex, units[next] == 0x0A, offset + 1 < limit {
-                        idx = units.index(after: next)
-                        offset += 2
-                    } else {
-                        idx = next
-                        offset += 1
-                    }
-                } else {
-                    idx = units.index(after: idx)
-                    offset += 1
-                }
-            }
-            line = currentLine
-        }
+        let idx = textIndexCache.index(for: session.snapshot)
+        let clampedCaret = min(max(0, caret), idx.utf16Count)
+        let line = idx.cursorLineAndColumn(caret: clampedCaret)?.line ?? 1
         cachedPreviewSourceLine = (session.id, session.revision, caret, line)
         return line
     }

@@ -9,6 +9,7 @@ import Foundation
 public final class JSONPreferencesStore: PreferencesProviding, @unchecked Sendable {
     public let fileURL: URL
     private let lock = NSLock()
+    private let writeLock = NSLock()
     private var storage: [String: JSONValue]
     private var batchDepth = 0
     private var batchDirty = false
@@ -78,10 +79,7 @@ public final class JSONPreferencesStore: PreferencesProviding, @unchecked Sendab
 
     /// Ensures the `~/.SwiftEdit` directory and `settings.json` exist on disk, persisting current entries.
     public func ensurePersisted() {
-        lock.lock()
-        let snapshot = storage
-        lock.unlock()
-        writeToDisk(snapshot)
+        flushLatestSnapshotToDisk()
     }
 
     public func string(forKey defaultName: String) -> String? {
@@ -166,17 +164,14 @@ public final class JSONPreferencesStore: PreferencesProviding, @unchecked Sendab
 
         lock.lock()
         batchDepth -= 1
-        let snapshot: [String: JSONValue]?
-        if batchDepth == 0 && batchDirty {
+        let shouldFlush = batchDepth == 0 && batchDirty
+        if shouldFlush {
             batchDirty = false
-            snapshot = storage
-        } else {
-            snapshot = nil
         }
         lock.unlock()
 
-        if let snapshot {
-            writeToDisk(snapshot)
+        if shouldFlush {
+            flushLatestSnapshotToDisk()
         }
     }
 
@@ -209,21 +204,21 @@ public final class JSONPreferencesStore: PreferencesProviding, @unchecked Sendab
             changed = storage.removeValue(forKey: defaultName) != nil
         }
 
-        let snapshot: [String: JSONValue]?
+        let shouldFlush: Bool
         if changed {
             if batchDepth > 0 {
                 batchDirty = true
-                snapshot = nil
+                shouldFlush = false
             } else {
-                snapshot = storage
+                shouldFlush = true
             }
         } else {
-            snapshot = nil
+            shouldFlush = false
         }
         lock.unlock()
 
-        if let snapshot {
-            writeToDisk(snapshot)
+        if shouldFlush {
+            flushLatestSnapshotToDisk()
         }
     }
 
@@ -236,12 +231,17 @@ public final class JSONPreferencesStore: PreferencesProviding, @unchecked Sendab
         return (try? JSONDecoder().decode([String: JSONValue].self, from: data)) ?? [:]
     }
 
-    private func writeToDisk(_ dict: [String: JSONValue]) {
+    /// Serializes disk writes under `writeLock` and snapshots `storage` inside it so concurrent writers can never overwrite newer settings with an older snapshot.
+    private func flushLatestSnapshotToDisk() {
+        writeLock.lock()
+        defer { writeLock.unlock() }
+        lock.lock()
+        let dict = storage
+        let needsDir = !directoryEnsured
+        lock.unlock()
+
         let dir = fileURL.deletingLastPathComponent()
         do {
-            lock.lock()
-            let needsDir = !directoryEnsured
-            lock.unlock()
             if needsDir {
                 try FileManager.default.createDirectory(
                     at: dir,

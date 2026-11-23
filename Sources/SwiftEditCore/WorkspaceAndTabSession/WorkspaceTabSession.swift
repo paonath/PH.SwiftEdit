@@ -139,6 +139,7 @@ public struct WorkspaceTabSession: Equatable, Sendable {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else {
             throw DomainError.tabNotFound(id)
         }
+        guard tabs[index].isPinned != isPinned else { return }
         tabs[index].isPinned = isPinned
         tabs = Self.partitionPinnedFirst(tabs)
     }

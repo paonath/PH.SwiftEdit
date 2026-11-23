@@ -97,18 +97,26 @@ public enum ElementContextualActionCatalog {
         guard !snapshot.isBinaryReadOnly, !snapshot.isDegradedPlainText,
               selection.location >= 0, selection.length > 0,
               selection.length <= maxSelectionUTF16Length else { return nil }
-        let text = snapshot.text as NSString
-        guard selection.upperBound <= text.length else { return nil }
+        let utf16 = snapshot.text.utf16
+        guard let start = utf16.index(utf16.startIndex, offsetBy: selection.location, limitedBy: utf16.endIndex),
+              let end = utf16.index(start, offsetBy: selection.length, limitedBy: utf16.endIndex),
+              let scalarStart = start.samePosition(in: snapshot.text.unicodeScalars),
+              let scalarEnd = end.samePosition(in: snapshot.text.unicodeScalars) else { return nil }
         switch kind {
         case .surround(let style):
-            return surround(style, text: text, selection: selection)
+            return surround(style, in: snapshot.text, range: scalarStart..<scalarEnd, selection: selection)
         case .duplicateDocument:
             return nil
         }
     }
 
-    private static func surround(_ style: SurroundStyle, text: NSString, selection: TextRange) -> MarkdownAuthoringEdit {
-        let inner = text.substring(with: NSRange(location: selection.location, length: selection.length))
+    private static func surround(
+        _ style: SurroundStyle,
+        in text: String,
+        range: Range<String.Index>,
+        selection: TextRange
+    ) -> MarkdownAuthoringEdit {
+        let inner = text[range]
         let opening: String
         let closing: String
         switch style {
@@ -119,9 +127,12 @@ public enum ElementContextualActionCatalog {
             opening = "("
             closing = ")"
         case .tripleBacktickFence:
-            let startsLine = selection.location == 0 || isLineBreak(text.character(at: selection.location - 1))
-            let endsWithBreak = inner.hasSuffix("\n") || inner.hasSuffix("\r")
-            let endsLine = selection.upperBound == text.length || isLineBreak(text.character(at: selection.upperBound))
+            let utf16 = text.utf16
+            let startsLine = range.lowerBound == utf16.startIndex
+                || isLineBreak(utf16[utf16.index(before: range.lowerBound)])
+            let endsWithBreak = inner.utf16.last.map(isLineBreak) ?? false
+            let endsLine = range.upperBound == utf16.endIndex
+                || isLineBreak(utf16[range.upperBound])
             opening = (startsLine ? "" : "\n") + "```\n"
             if endsWithBreak {
                 closing = "```\n"
@@ -129,14 +140,20 @@ public enum ElementContextualActionCatalog {
                 closing = "\n```" + (endsLine ? "" : "\n")
             }
         }
-        let openingLength = (opening as NSString).length
+        let openingLength = opening.utf16.count
+        var replacement = String()
+        replacement.reserveCapacity(opening.utf8.count + inner.utf8.count + closing.utf8.count)
+        replacement.append(opening)
+        replacement.append(contentsOf: inner)
+        replacement.append(closing)
         return MarkdownAuthoringEdit(
-            edits: [TextEdit(range: selection, replacement: opening + inner + closing)],
+            edits: [TextEdit(range: selection, replacement: replacement)],
             newSelection: TextRange(location: selection.location + openingLength, length: selection.length)
         )
     }
 
-    private static func isLineBreak(_ unit: unichar) -> Bool {
+    @inline(__always)
+    private static func isLineBreak(_ unit: UInt16) -> Bool {
         unit == 0x0A || unit == 0x0D
     }
 }

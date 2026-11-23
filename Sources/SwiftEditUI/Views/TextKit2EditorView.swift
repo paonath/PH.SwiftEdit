@@ -81,7 +81,7 @@ final class SwiftEditNSTextView: NSTextView {
 
     /// Outcome of a double-click at `index` given the selection before the click (headless-testable).
     func doubleClickOutcome(atCharacterIndex index: Int, previous: NSRange) -> DoubleClickSelectionCycle.Outcome {
-        let text = (textStorage?.string ?? "") as NSString
+        let text: NSString = textStorage?.mutableString ?? ""
         guard index >= 0, index <= text.length, text.length > 0 else { return .selectWord }
         let probe = min(index, text.length - 1)
         let word = selectionRange(forProposedRange: NSRange(location: probe, length: 0), granularity: .selectByWord)
@@ -1112,7 +1112,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
 
             updateNativeTextMirror(newText)
-            let newLength = (newText as NSString).length
+            let newLength = nativeTextMirror?.utf16Length ?? newText.utf16.count
             let clampedLocation = min(max(0, targetLocation), newLength)
             let clampedLength = min(max(0, targetLength), newLength - clampedLocation)
             textView.setSelectedRange(NSRange(location: clampedLocation, length: clampedLength))
@@ -1323,7 +1323,7 @@ struct TextKit2EditorView: NSViewRepresentable {
                 return
             }
             let selection = textView.selectedRange()
-            let text = (textView.textStorage?.string ?? "") as NSString
+            let text: NSString = textView.textStorage?.mutableString ?? ""
             guard selection.length == 0,
                   let match = WordCompletionIndex.wordPrefix(endingAt: selection.location, in: text),
                   let suffix = provider(match.prefix) else {

@@ -28,33 +28,26 @@ public struct LogTailBuffer: Sendable, Equatable {
         data.withUnsafeBytes { rawBuffer in
             let bytes = rawBuffer.bindMemory(to: UInt8.self)
             let count = bytes.count
+            guard let base = bytes.baseAddress, count > 0 else { return }
             var cursor = 0
             if startsMidLine {
-                var foundNL = -1
-                var i = 0
-                while i < count {
-                    if bytes[i] == 0x0A {
-                        foundNL = i
-                        break
-                    }
-                    i += 1
-                }
-                guard foundNL >= 0 else { return }
+                guard let hit = memchr(base, 0x0A, count) else { return }
+                let foundNL = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
                 cursor = foundNL + 1
                 partial.removeAll(keepingCapacity: true)
             }
 
-            // Collect newline positions in the remaining slice so that if a single chunk carries
-            // more than `maxLines` lines (e.g. initial 8 MiB tail window), we only decode the
+            // Collect newline positions in the remaining slice using SIMD-accelerated `memchr` so that if a single
+            // chunk carries more than `maxLines` lines (e.g. initial 8 MiB tail window), we only decode the
             // trailing `maxLines` lines instead of allocating and immediately discarding the rest.
             var newlineOffsets: [Int] = []
             newlineOffsets.reserveCapacity(min(Self.maxLines + 1, max(16, (count - cursor) / 64)))
             var scan = cursor
             while scan < count {
-                if bytes[scan] == 0x0A {
-                    newlineOffsets.append(scan)
-                }
-                scan += 1
+                guard let hit = memchr(base + scan, 0x0A, count - scan) else { break }
+                let nlPos = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
+                newlineOffsets.append(nlPos)
+                scan = nlPos + 1
             }
 
             if !newlineOffsets.isEmpty {

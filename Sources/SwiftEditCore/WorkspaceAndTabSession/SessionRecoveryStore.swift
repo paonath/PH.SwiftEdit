@@ -67,6 +67,7 @@ public struct SessionRecoveryStore: Sendable {
     /// Atomically persists `manifest` to `session-manifest.json` with `0700`/`0600` POSIX permissions, quota verification, and backup exclusion.
     public func saveManifest(_ manifest: SessionRecoveryManifest) throws {
         try ensureProtectedRecoveryDirectory()
+        try verifyNotSymbolicLink(at: manifestFileURL)
         let encoded = try encodeJSON(manifest)
         try enforceDirectoryQuota(adding: UInt64(encoded.count), replacing: manifestFileURL)
         try writeProtectedFileAtomically(data: encoded, to: manifestFileURL)
