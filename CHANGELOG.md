@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-23 UTC
+Branch: feature/contaxtual_actions | Commit: 32cd96d
+
+### Added
+- Added live window end-to-end verification covering mouse interactions, TextKit 2 editing, ghost-text completion, double-click cycles, contextual action palette, and all keyboard shortcuts (`LiveUIMouseAndShortcutsResponsivenessTests`, `32cd96d`).
+
+### Changed
+- Restored Swift reflection metadata (`__swift5_fieldmd` and `__swift5_reflstr`) and `LLVM_LTO = YES_THIN` in `XcodeApp/PH.SwiftEdit.xcodeproj/project.pbxproj` and `Scripts/build-app.sh` so SwiftUI `AttributeGraph` property discovery (`@State`, `@FocusState`, `@Environment`, `@FocusedValue`) remains intact (`32cd96d`).
+
+### Fixed
+- Fixed UI unresponsiveness caused by stripping SwiftUI reflection metadata in `c9d9c33`, and fixed `TextKit2EditorView.updateNSView` skipping programmatic text updates (e.g., `Cmd+Return` Surround With, `Cmd+D`, Replace) when `hasPendingLocalEdit` was set (`32cd96d`).
+- Fixed `WordCompletionIndex` background rebuilds discarding valid caches when `BufferRevision` advanced mid-flight, and isolated `SessionRecovery` directories in `ShortcutsFindGutterAndAccessibilityTests` and `UIRenderingCoverageTests` (`32cd96d`).
+
+## [Unreleased] - 2026-11-23 UTC
 Branch: feature/contaxtual_actions | Commit: c9d9c33
 
 ### Changed
