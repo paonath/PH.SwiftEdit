@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-23 UTC
+Branch: feature/contaxtual_actions | Commit: 4f026b4
+
+### Added
+- Added secondary word and token occurrence highlighting to the integrated log viewer across Plain, Live Direct (`Cmd+L`), Live Inverse (`Shift+Cmd+L`), and tail-only modes while preserving active user selections across live polls and order switches without locking the `.log` file (`TextKit2EditorView`, `SwiftEditRootView`, `LogTailPanelView`).
+- Added live window end-to-end pixel and non-locking (`flock`) tests covering mouse double-click, `Shift+Arrow` selection, backtick-enclosed tokens, and Plain/Direct/Inverse log tail modes (`LiveUIMouseAndShortcutsResponsivenessTests`).
+
+### Fixed
+- Fixed secondary word-occurrence highlights failing to appear in TextKit 2 viewports by scanning occurrences synchronously inside `SwiftEditNSTextView`, painting occurrence pills and underlines directly in `drawBackground(in:)`, and invalidating nested `_NSTextViewportElementView` CoreAnimation sublayers (`TextKit2EditorView`, `a10373f`, `e27b44a`).
+- Fixed read-only log viewer primary selection contrast and focus restoration when interacting with `Log · live` panel controls (`TextKit2EditorView`, `LogTailPanelView`).
+
+## [Unreleased] - 2026-11-23 UTC
 Branch: feature/contaxtual_actions | Commit: 32cd96d
 
 ### Added
