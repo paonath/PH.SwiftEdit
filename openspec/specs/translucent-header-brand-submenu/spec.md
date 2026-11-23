@@ -46,12 +46,12 @@ The header command catalog SHALL expose descriptive verb-noun command titles wit
 - **WHEN** `formatActiveSection()` executes
 - **THEN** buffer text remains unchanged without throwing and a non-destructive status message is recorded
 
-#### Scenario: P4 Click-Only Header Submenu Dispatches Diff and Format Commands With Badge Parity
+#### Scenario: P4 Click-Only Header Submenu Dispatches Preview and Format Commands With Badge Parity
 - **Path**: P4
 - **Trait**: positive
 - **GIVEN** an open click-activated `HeaderBrandSubmenuView` over a Markdown tab after `1000 ms` delay
-- **WHEN** the user moves pointer down to `"Show File Compare Diff"` (`toggleDiffPane`) and clicks it, and audits shortcut sources
-- **THEN** `"Show File Compare Diff"` remains open until clicked (never auto-dismissed at `180 ms`), `showDiffPane` toggles `true`, and `scanSwiftEditUIViewsDirectory` reports zero duplicate shortcuts or polling loops
+- **WHEN** the user moves pointer down to `"Show Markdown Preview"` and clicks it, and audits shortcut sources
+- **THEN** the submenu remains open until clicked (never auto-dismissed at `180 ms`), lists no File Compare entry (moved to `Shift+Cmd+D`, spec 020), and `scanSwiftEditUIViewsDirectory` reports zero duplicate shortcuts or polling loops
 
 ### Requirement: REQ-003 Synchronized Binary Quarantine Lockouts Across Submenu Menu Bar and Workbench
 IF the active document is binary read-only (`isBinaryReadOnly == true`), THEN `HeaderCommandCatalog`, `SwiftEditCommands`, and `SwiftEditWorkbenchModel` SHALL disable and reject `Save Document`, `Save Document As…`, `Duplicate Line or Selection`, `Format Markdown Document`, and `Format Markdown Section` without mutating `BufferRevision` or opening `NSSavePanel` [DATA-003][SEC-004][SEC-012][UI-008].

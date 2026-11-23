@@ -183,17 +183,23 @@ public struct AppUpdateInstaller: Sendable {
         }
 
         // Run ditto off the cooperative async pool and drain stderr before waitUntilExit() to prevent 64 KiB pipe deadlock.
-        let (exitCode, stderrData): (Int32, Data) = try await Task.detached(priority: .utility) {
-            let ditto = Process()
-            ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-            ditto.arguments = ["-x", "-k", zipFileURL.path, extractedDir.path]
-            let stderrPipe = Pipe()
-            ditto.standardError = stderrPipe
-            try ditto.run()
-            let errBytes = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            ditto.waitUntilExit()
-            return (ditto.terminationStatus, errBytes)
-        }.value
+        let (exitCode, stderrData): (Int32, Data)
+        do {
+            (exitCode, stderrData) = try await Task.detached(priority: .utility) {
+                let ditto = Process()
+                ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                ditto.arguments = ["-x", "-k", zipFileURL.path, extractedDir.path]
+                let stderrPipe = Pipe()
+                ditto.standardError = stderrPipe
+                try ditto.run()
+                let errBytes = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                ditto.waitUntilExit()
+                return (ditto.terminationStatus, errBytes)
+            }.value
+        } catch {
+            try? FileManager.default.removeItem(at: workdir)
+            throw error
+        }
 
         guard exitCode == 0 else {
             let msg = String(data: stderrData, encoding: .utf8) ?? "ditto failed"

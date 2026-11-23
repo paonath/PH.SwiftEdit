@@ -15,9 +15,16 @@ struct AuditFindingsRegressionTests {
         let files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         return files.filter { $0.hasSuffix(".swift") }.flatMap { name -> [String] in
             let lines = AuditReportFitness.read("Sources/SwiftEditUI/Views/\(name)").components(separatedBy: "\n")
-            return lines.indices.filter { lines[$0].contains("Image(systemName") }.compactMap { i in
-                let context = lines[max(0, i - 6)..<min(lines.count, i + 10)].joined(separator: "\n")
-                guard context.contains("Button"), !context.contains("accessibilityLabel"), !context.contains("accessibilityHidden"), !context.contains("Label(") else { return nil }
+            return lines.indices.filter { lines[$0].contains("AppIconView(") || lines[$0].contains("Image(systemName") }.compactMap { i in
+                // `AppIconView` is decorative by default (or labelled via `label:`), so the owning Button's label may sit
+                // further down its modifier chain: scan a wider window for it.
+                let isAppIcon = lines[i].contains("AppIconView(")
+                if isAppIcon && lines[i].contains("label:") { return nil }
+                // An icon followed by visible text in the same label is not an icon-only button.
+                if isAppIcon && lines[(i + 1)..<min(lines.count, i + 5)].contains(where: { $0.contains("Text(") }) { return nil }
+                let context = lines[max(0, i - 6)..<min(lines.count, i + (isAppIcon ? 32 : 10))].joined(separator: "\n")
+                let decorativeOK = !isAppIcon && context.contains("accessibilityHidden")
+                guard context.contains("Button"), !context.contains("accessibilityLabel"), !decorativeOK, !context.contains("Label(") else { return nil }
                 return "\(name):\(i + 1)"
             }
         }
@@ -60,11 +67,13 @@ struct AuditFindingsRegressionTests {
         let start = source.range(of: "private var tabBar: some View")
         let tabBar = start.map { String(source[$0.lowerBound...].prefix(4000)) } ?? ""
         // WHEN icon buttons and hit-target modifiers are counted
-        let iconButtons = tabBar.components(separatedBy: "Image(systemName").count - 1
+        let closeGlyphs = tabBar.components(separatedBy: "AppIconView(.close").count - 1
         let hitTargets = tabBar.components(separatedBy: ".minimumHitTarget(").count - 1
-        // THEN every icon button (pin, move left, move right, close) applies the 24 pt target
-        #expect(iconButtons == 4)
-        #expect(hitTargets >= iconButtons)
+        // THEN the single icon button of a flat tab (close / unsaved dot, redesign-020 R-03) applies the 24 pt target;
+        // pin and reorder moved to the context menu and drag.
+        #expect(closeGlyphs == 1)
+        #expect(hitTargets >= closeGlyphs)
+        #expect(!tabBar.contains("Image(systemName"))
         #expect(ChromeHitTarget.minimumPoints == 24)
     }
 

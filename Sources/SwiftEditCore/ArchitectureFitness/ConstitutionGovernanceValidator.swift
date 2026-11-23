@@ -39,7 +39,8 @@ public struct ConstitutionValidationSummary: Sendable, Equatable {
 /// Pure `Foundation` static governance fitness analyzer enforcing `Constitution.md` `v1.5.0`, Bare-Bones token budgets, and active security floors (`AR-002`, `TEST-006`).
 public enum ConstitutionGovernanceValidator {
     /// `1.6.0` amends `AR-005`, `SEC-001` & `SEC-004` (MINOR): allow `SwiftTerm` in `SwiftEditUI` and unsandboxed Hardened Runtime on macOS direct distribution for the embedded PTY terminal.
-    private static let expectedConstitutionVersion = "1.6.0"
+    /// `1.7.0` amends `UI-001` (MINOR): Zed-neutral chrome with Purple accents and the in-code `AppIcon` line set; logo unchanged.
+    private static let expectedConstitutionVersion = "1.7.0"
     private static let maxConstitutionLines = 45
     private static let maxMiniIndexLines = 25
     private static let maxMicroFileLines = 40
@@ -312,6 +313,17 @@ public enum ConstitutionGovernanceValidator {
                 filePath: "Constitution.md",
                 ruleID: "SDD-006",
                 reason: "Missing 1.6.0 Sync Impact Report row citing AR-005, SEC-001, and SEC-004"
+            ))
+        }
+
+        let hasV170SyncRow = lines.contains { line in
+            line.contains("| `1.7.0` |") && line.contains("UI-001")
+        }
+        if !hasV170SyncRow {
+            violations.append(ConstitutionGovernanceViolation(
+                filePath: "Constitution.md",
+                ruleID: "SDD-006",
+                reason: "Missing 1.7.0 Sync Impact Report row citing UI-001"
             ))
         }
 

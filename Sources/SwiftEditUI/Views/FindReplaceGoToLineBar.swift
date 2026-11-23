@@ -108,10 +108,16 @@ public struct FindReplaceGoToLineBar: View {
                         Toggle("Aa", isOn: $state.isCaseSensitive)
                             .toggleStyle(.button)
                         Button("Find") { onFind() }
-                        Button("◀") { onFindPrevious() }
+                        Button { onFindPrevious() } label: { AppIconView(.chevronUp, size: 13).minimumHitTarget() }
+                            .buttonStyle(.plain)
                             .disabled(state.matches.isEmpty)
-                        Button("▶") { onFindNext() }
+                            .help("Previous match")
+                            .accessibilityLabel("Previous match")
+                        Button { onFindNext() } label: { AppIconView(.chevronDown, size: 13).minimumHitTarget() }
+                            .buttonStyle(.plain)
                             .disabled(state.matches.isEmpty)
+                            .help("Next match")
+                            .accessibilityLabel("Next match")
                         Text("\(state.matches.count) match(es)")
                             .appFont(.caption, monospaced: true)
                         if state.mode == .findAndReplace {
@@ -127,14 +133,16 @@ public struct FindReplaceGoToLineBar: View {
                     }
                     Spacer()
                     Button(action: onClose) {
-                        Image(systemName: "xmark.circle.fill")
+                        AppIconView(.close, size: 12)
                             .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                            .minimumHitTarget()
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Close Find Bar")
                 }
+                .controlSize(.small)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .padding(.vertical, 5)
                 .foregroundStyle(palette.chromeForeground.swiftUIColor)
                 .tint(palette.chromeAccent.swiftUIColor)
                 .background(palette.findBarSurface.swiftUIColor)

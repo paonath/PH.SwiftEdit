@@ -1,8 +1,8 @@
 ---
 project_name: "PH.SwiftEdit"
-version: "1.6.0"
+version: "1.7.0"
 ratified: "2026-11-17"
-last_amended: "2026-11-22"
+last_amended: "2026-11-23"
 primary_stack: "Swift 6.4+ / macOS 26+ & iOS 26+ Readiness (SwiftPM + SwiftUI + TextKit 2)"
 spec_root: "openspec"
 single_reference_lock: true
@@ -16,7 +16,7 @@ single_reference_lock: true
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `01-architecture/` | `AR` | `active` | `constitution/01-architecture/index.md` | `swift-macos-expert`, `oop-architecture-expert` | `SwiftEditCore` (`.macOS(.v26), .iOS(.v26)`), `SwiftEditUI` (`#if os`), `AppIcon.appiconset`, `nbgv` (`AR-001..014`) |
 | `02-domain/` | `BC` | `active` | `constitution/02-domain/index.md` | `ddd-expert`, `swift-macos-expert`, `spec-sdlc-expert` | `DocumentCore` (`Cmd+D`), `MarkdownLintAndFormat`, `SearchDiffAndBracketEngine`, `WorkspaceAndTabSession` (`BC-001..012`) |
-| `03-ui-ux/` | `UI` | `active` | `constitution/03-ui-ux/index.md` | `swift-macos-expert` | Logo E2 Purple chrome, collapsed sidebar, right-col tabs, left `LineNumberGutterView`, `#FFFFFF`/`#000000` canvas, Zoom `50%..300%` (`UI-001..012`) |
+| `03-ui-ux/` | `UI` | `active` | `constitution/03-ui-ux/index.md` | `swift-macos-expert` | Logo E2, Zed-neutral chrome with Purple accents, line icon set, collapsed sidebar, right-col tabs, left `LineNumberGutterView`, `#FFFFFF`/`#000000` canvas, Zoom `50%..300%` (`UI-001..012`) |
 | `04-data-persistence/` | `DATA` | `active` | `constitution/04-data-persistence/index.md` | `swift-macos-expert`, `cyber-security-expert` | Zero DB, explicit `Cmd+S` (`LF`/`CRLF`/`CR`), `10` MRU bookmarks, `SessionRecovery` + GC, binary ban (`DATA-001..008`) |
 | `05-api-contracts/` | `API` | `not-applicable` | `constitution/05-api-contracts/index.md` | `spec-sdlc-expert`, `swift-macos-expert`, `cyber-security-expert` | Dormant macOS/iOS IPC guardrails (`AppIntents`/`XPC`/CLI require `MINOR` amendment) (`API-001..008`) |
 | `06-testing-fitness/` | `TEST` | `active` | `constitution/06-testing-fitness/index.md` | `swift-macos-expert`, `test-quality-auditor`, `spec-sdlc-expert` | `[RED]->[GREEN]->[REFACTOR]` via `swift test` (`Swift Testing`), static SwiftPM & `AppIcon` fitness, thin `XCUITest` (`TEST-001..008`) |
@@ -34,3 +34,4 @@ single_reference_lock: true
 | `1.4.0` | `2026-11-21` | `UI-002 (Monospaced editor typography becomes the default; user-selectable system font or bundled OpenDyslexic for editor and interface)` | `index.yml synced` |
 | `1.5.0` | `2026-11-21` | `SEC-001, SEC-004 (Approved macOS network.client entitlement strictly for user-initiated GitHub Releases HTTPS check; expanded allowlisted macOS terminals)` | `index.yml synced` |
 | `1.6.0` | `2026-11-22` | `AR-005, SEC-001, SEC-004 (Allow SwiftTerm SPM dependency in SwiftEditUI and unsandboxed Hardened Runtime on macOS direct distribution for embedded PTY terminal)` | `index.yml synced` |
+| `1.7.0` | `2026-11-23` | `UI-001 (Zed-neutral chrome with Purple accent tokens, unchanged Concept E2 logo, in-code line icon set replacing SF Symbols)` | `index.yml synced` |

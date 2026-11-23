@@ -52,10 +52,12 @@ struct MarkdownNativePreviewView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    Text("Native Preview (Zero-WebKit)")
-                        .appFont(.caption, weight: .semibold)
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    Text("PREVIEW")
+                        .appFont(.caption2, weight: .semibold)
+                        .tracking(0.8)
                         .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                        .accessibilityLabel("Preview")
                     let allBlocks = document?.blocks ?? []
                     let ordinals = document?.orderedOrdinals ?? []
                     let imageSlots = document?.imageEntriesByBlock ?? []
@@ -68,7 +70,8 @@ struct MarkdownNativePreviewView: View {
                         .id(offset)
                     }
                 }
-                .padding(12)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
             }
             .onChange(of: activeSourceLine) { _, line in
                 guard let blocks = document?.blocks, !blocks.isEmpty else { return }
@@ -84,7 +87,8 @@ struct MarkdownNativePreviewView: View {
                 if reduceMotion { proxy.scrollTo(target, anchor: .top) } else { withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(target, anchor: .top) } }
             }
         }
-        .background(palette.chromeSurface.swiftUIColor)
+        .background(palette.editorCanvasBackground.swiftUIColor)
+        .overlay(alignment: .leading) { Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(width: 1) }
         .environment(\.openURL, OpenURLAction { url in
             if case .requiresConfirmation(let canonical) = PreviewResourceAndLinkGate.decideLink(url.absoluteString) {
                 pendingLinkURI = canonical
@@ -112,7 +116,10 @@ struct MarkdownNativePreviewView: View {
     ) -> some View {
         switch block {
         case .heading(let level, let text, _):
-            Text(inline(text)).appFont(level <= 1 ? .title : (level == 2 ? .title2 : .title3), weight: .bold).foregroundStyle(palette.chromeForeground.swiftUIColor)
+            Text(inline(text))
+                .appFont(level <= 1 ? .title : (level == 2 ? .title2 : .title3), weight: level <= 2 ? .semibold : .medium)
+                .foregroundStyle(palette.chromeForeground.swiftUIColor)
+                .padding(.top, level <= 2 ? 6 : 2)
         case .paragraph(let text, _):
             VStack(alignment: .leading, spacing: 6) {
                 Text(inline(text)).foregroundStyle(palette.chromeForeground.swiftUIColor)
@@ -166,7 +173,7 @@ struct MarkdownNativePreviewView: View {
             if let gate {
                 PreviewThumbnailTileView(gate: gate, reference: entry.reference, documentIndex: entry.documentIndex, palette: palette)
             } else {
-                Label("Image blocked or offline", systemImage: "photo.badge.exclamationmark")
+                Label { Text("Image blocked or offline") } icon: { AppIconView(.imageOff, size: 13) }
                     .appFont(.caption).foregroundStyle(palette.secondaryForeground.swiftUIColor)
             }
         }
@@ -247,7 +254,7 @@ private struct PreviewThumbnailTileView: View {
                     .resizable().scaledToFit().frame(maxWidth: 480)
                     .accessibilityLabel("Image \(reference)")
             } else if isBlocked {
-                Label("Image blocked or offline", systemImage: "photo.badge.exclamationmark")
+                Label { Text("Image blocked or offline") } icon: { AppIconView(.imageOff, size: 13) }
                     .appFont(.caption).foregroundStyle(palette.secondaryForeground.swiftUIColor)
             } else {
                 ProgressView().controlSize(.small)

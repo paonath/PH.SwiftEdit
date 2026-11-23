@@ -74,9 +74,7 @@ struct TerminalPanelView: View {
                     HStack(spacing: 4) {
                         Button { model.selectedTerminalSessionID = session.id } label: {
                             HStack(spacing: 4) {
-                                Image(systemName: "terminal")
-                                    .appFont(.caption2)
-                                    .accessibilityHidden(true)
+                                AppIconView(.terminal, size: 12)
                                 Text(session.title)
                                     .appFont(.caption, weight: selected ? .semibold : .regular)
                             }
@@ -85,7 +83,7 @@ struct TerminalPanelView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("\(session.title)\(selected ? ", selected" : "")")
                         Button { model.closeTerminalSession(id: session.id) } label: {
-                            Image(systemName: "xmark").appFont(.caption2).minimumHitTarget()
+                            AppIconView(.close, size: 10).minimumHitTarget()
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Close \(session.title)")
@@ -95,7 +93,7 @@ struct TerminalPanelView: View {
                     .background(selected ? palette.tabActiveSurface.swiftUIColor : Color.clear)
                     .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
-                Button { model.openTerminalSession() } label: { Image(systemName: "plus").minimumHitTarget() }
+                Button { model.openTerminalSession() } label: { AppIconView(.plus, size: 13).minimumHitTarget() }
                     .buttonStyle(.plain)
                     .help("New embedded terminal session in the current folder")
                     .accessibilityLabel("New terminal session")
@@ -115,7 +113,7 @@ struct TerminalPanelView: View {
                         .appFont(.caption)
                         .accessibilityLabel("Restart \(active.title)")
                 }
-                Button { model.toggleTerminalPanel() } label: { Image(systemName: "chevron.down").minimumHitTarget() }
+                Button { model.toggleTerminalPanel() } label: { AppIconView(.chevronDown, size: 13).minimumHitTarget() }
                     .buttonStyle(.plain)
                     .help("Close the Terminal panel and stop all shells (Cmd+J)")
                     .accessibilityLabel("Close terminal panel")
@@ -133,9 +131,8 @@ struct TerminalPanelView: View {
                 switch session.state {
                 case .failed(let message):
                     HStack(spacing: 10) {
-                        Image(systemName: "exclamationmark.triangle.fill")
+                        AppIconView(.warning, size: 14, label: "Error")
                             .foregroundStyle(palette.logErrorForeground.swiftUIColor)
-                            .accessibilityHidden(true)
                         Text(message)
                             .appFont(.caption)
                             .foregroundStyle(palette.logErrorForeground.swiftUIColor)

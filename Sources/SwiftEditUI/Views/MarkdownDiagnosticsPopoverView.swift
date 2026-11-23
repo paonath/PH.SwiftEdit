@@ -49,8 +49,7 @@ struct MarkdownDiagnosticsPopoverView: View {
 
     private func rowView(_ diagnostic: MarkdownLintDiagnostic) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: diagnostic.severity == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
-                .accessibilityLabel(diagnostic.severity == .error ? "Error" : "Warning")
+            AppIconView(diagnostic.severity == .error ? .error : .warning, size: 13, label: diagnostic.severity == .error ? "Error" : "Warning")
                 .foregroundStyle((diagnostic.severity == .error ? model.palette.unbalancedBracketHighlight : model.palette.bidiWarningForeground).swiftUIColor)
             Button("Ln \(diagnostic.line): \(diagnostic.message)") { model.jumpToDiagnostic(diagnostic) }
                 .buttonStyle(.plain)

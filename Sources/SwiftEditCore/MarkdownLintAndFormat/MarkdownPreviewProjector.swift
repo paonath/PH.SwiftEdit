@@ -57,9 +57,14 @@ public struct GFMPreviewDocument: Equatable, Sendable {
 /// Returns `nil` (zero work) when `showPreview` is `false`, for binary or degraded snapshots, and for non-Markdown documents. Tables beyond `GFMTableEditEngine` caps degrade to paragraph text; lines are truncated at `4096` UTF-16 units.
 public enum MarkdownPreviewProjector {
 
-    public static func project(snapshot: DocumentSnapshot, showPreview: Bool, isMarkdownDocument: Bool = true) -> GFMPreviewDocument? {
+    public static func project(
+        snapshot: DocumentSnapshot,
+        showPreview: Bool,
+        isMarkdownDocument: Bool = true,
+        lineIndex: MarkdownLineIndex? = nil
+    ) -> GFMPreviewDocument? {
         guard showPreview, isMarkdownDocument, !snapshot.isBinaryReadOnly, !snapshot.isDegradedPlainText else { return nil }
-        let index = MarkdownLineIndex(text: snapshot.text)
+        let index = lineIndex ?? MarkdownLineIndex(text: snapshot.text)
         var blocks: [GFMPreviewBlock] = []
         var paragraph: [String] = []
         var paragraphStart = 0
@@ -107,7 +112,7 @@ public enum MarkdownPreviewProjector {
             if let span = currentFence(at: line) {
                 flush()
                 let open = line
-                let closed = span.close > span.open && isClosingFence(index, span.close)
+                let closed = span.close > span.open && isClosingFence(index, openLine: span.open, closeLine: span.close)
                 let bodyEnd = closed ? span.close : span.close + 1
                 let body = ((open + 1)..<max(open + 1, bodyEnd)).map(text)
                 blocks.append(.code(text: body.joined(separator: "\n"), sourceLine: open + 1))
@@ -322,9 +327,22 @@ public enum MarkdownPreviewProjector {
         }
     }
 
-    private static func isClosingFence(_ index: MarkdownLineIndex, _ line: Int) -> Bool {
-        let s = index.lineSlice(line).drop(while: { $0 == 0x20 })
-        return s.count >= 3 && (s.allSatisfy { $0 == 0x60 } || s.allSatisfy { $0 == 0x7E })
+    private static func isClosingFence(_ index: MarkdownLineIndex, openLine: Int, closeLine: Int) -> Bool {
+        guard let opener = MarkdownLineIndex.fenceOpening(index.lineSlice(openLine)) else { return false }
+        let slice = index.lineSlice(closeLine)
+        var idx = slice.startIndex
+        var spaces = 0
+        while idx < slice.endIndex, slice[idx] == 0x20, spaces < 4 { idx += 1; spaces += 1 }
+        guard spaces < 4 else { return false }
+        var count = 0
+        while idx < slice.endIndex, slice[idx] == opener.char { idx += 1; count += 1 }
+        guard count >= opener.count else { return false }
+        while idx < slice.endIndex {
+            let u = slice[idx]
+            if u != 0x20 && u != 0x09 && u != 0x0D { return false }
+            idx += 1
+        }
+        return true
     }
 
     private static func isThematic(_ line: ArraySlice<UInt16>) -> Bool {

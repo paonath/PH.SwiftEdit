@@ -24,6 +24,18 @@ public struct ZoomedChromeMetrics: Equatable, Sendable {
     public var tabMinWidth: CGFloat { 80 * factor }
     public var tabMaxWidth: CGFloat { 240 * factor }
 
+    // Header bar and SwiftEdit command menu (grow and shrink with the editor text, `REQ-021-03`)
+    public var headerHeight: CGFloat { max(ChromeHitTarget.minimumPoints + 4, 36 * factor) }
+    public var headerFontSize: CGFloat { 13 * factor }
+    public var headerLogoSize: CGFloat { 20 * factor }
+    public var headerIconSize: CGFloat { 15 * factor }
+    public var headerIconButtonWidth: CGFloat { floored(28) }
+    public var headerIconButtonHeight: CGFloat { floored(24) }
+    public var menuFontSize: CGFloat { 13 * factor }
+    public var menuIconSize: CGFloat { 14 * factor }
+    public var menuBadgeFontSize: CGFloat { 10 * factor }
+    public var menuWidth: CGFloat { 312 * factor }
+
     // Left navigator
     public var navigatorFontSize: CGFloat { 13 * factor }
     public var navigatorHeaderFontSize: CGFloat { 11.44 * factor }
@@ -31,10 +43,13 @@ public struct ZoomedChromeMetrics: Equatable, Sendable {
     public var navigatorRowHeight: CGFloat { floored(24) }
     public var navigatorIndent: CGFloat { 12 * factor }
 
-    /// Gutter width for `lineCount` lines: at least 3 digits of the editor font's digit advance (measured at 100%) plus padding.
+    /// Left diagnostics column (severity bar + hover dot) kept apart from the numbers (V-02).
+    public static let gutterDiagnosticsColumn: CGFloat = 16
+    /// Gutter width for `lineCount` lines: at least 3 digits of the editor font's digit advance (measured at 100%),
+    /// the diagnostics column and the number padding.
     public func gutterWidth(lineCount: Int, digitAdvanceAt100: CGFloat) -> CGFloat {
         let digits = max(3, String(max(1, lineCount)).count)
-        return factor * (CGFloat(digits) * digitAdvanceAt100 + 20)
+        return factor * (CGFloat(digits) * digitAdvanceAt100 + Self.gutterDiagnosticsColumn + 14)
     }
 
     /// Metrics that scale strictly linearly at every zoom `>= 100%` (used by tests and goldens).
