@@ -263,8 +263,7 @@ public final class SwiftEditWorkbenchModel {
             }
             guard !Task.isCancelled,
                   let latest = self.activeDocumentSession,
-                  latest.id == targetID,
-                  latest.revision == revision else { return }
+                  latest.id == targetID else { return }
             self.wordCompletionCache = (targetID, revision, index)
         }
     }
@@ -2449,8 +2448,12 @@ public final class SwiftEditWorkbenchModel {
            cached.caret == caret {
             return cached.value
         }
+        guard caret > 0 else {
+            cachedPreviewSourceLine = (session.id, session.revision, caret, 1)
+            return 1
+        }
         let idx = textIndexCache.index(for: session.snapshot)
-        let clampedCaret = min(max(0, caret), idx.utf16Count)
+        let clampedCaret = min(caret, idx.utf16Count)
         let line = idx.cursorLineAndColumn(caret: clampedCaret)?.line ?? 1
         cachedPreviewSourceLine = (session.id, session.revision, caret, line)
         return line

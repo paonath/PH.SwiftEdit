@@ -9,8 +9,7 @@
 #   ./Scripts/build-app.sh [--configuration <Debug|Release>] [--debuggable] [--clean] [--derived-data <path>] [--dry-run] [--help]
 #
 # Size policy:
-#   Release            -Osize + whole-module + full LTO + LD_EXPORT_SYMBOLS=NO + no reflection metadata + dead-strip;
-#                      symbols live in a dSYM beside the app.
+#   Release            -Osize + whole-module + thin LTO + dead-strip; symbols in a dSYM beside the app.
 #   Debug (default)    compact: same -Osize code generation for every module (SwiftTerm included) in a separate
 #                      DerivedData (.build/xcode-compact) so Xcode's -Onone Debug cache is untouched; DEBUG flag kept.
 #   Debug --debuggable -Onone code for step-by-step debugging and assert(); still dead-stripped with a dSYM.
@@ -142,20 +141,10 @@ main() {
         xcodebuild_base_args+=(
             "SWIFT_COMPILATION_MODE=wholemodule"
             "SWIFT_OPTIMIZATION_LEVEL=-Osize"
-            "SWIFT_REFLECTION_METADATA_LEVEL=none"
             "GCC_OPTIMIZATION_LEVEL=s"
-            "GCC_SYMBOLS_PRIVATE_EXTERN=YES"
             "DEAD_CODE_STRIPPING=YES"
+            "LLVM_LTO=YES_THIN"
         )
-        if [[ "$configuration" == "Release" ]]; then
-            xcodebuild_base_args+=(
-                "LLVM_LTO=YES"
-            )
-        else
-            xcodebuild_base_args+=(
-                "LLVM_LTO=YES_THIN"
-            )
-        fi
     fi
     if [[ -z "$derived_data" && "$configuration" == "Debug" && "$debuggable" == "false" ]]; then
         # Compact Debug uses its own DerivedData so Xcode's -Onone Debug products are never rebuilt or replaced.

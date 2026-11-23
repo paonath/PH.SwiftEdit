@@ -206,8 +206,13 @@ struct UIRenderingCoverageTests {
             }
         }
 
-        // 10. Full SwiftEditRootView render pass (empty welcome state)
-        Self.renderInOffscreenWindow(SwiftEditRootView(), size: NSSize(width: 1080, height: 720))
+        // 10. Full SwiftEditRootView render pass (empty welcome state, isolated stores)
+        let emptyModel = SwiftEditWorkbenchModel(
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
+            recoveryDirectoryURL: dir.appendingPathComponent("empty-rec")
+        )
+        Self.renderInOffscreenWindow(SwiftEditRootView(initialModel: emptyModel), size: NSSize(width: 1080, height: 720))
         #expect(model.tabSession.tabs.count >= 1)
     }
 

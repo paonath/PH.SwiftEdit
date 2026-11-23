@@ -81,7 +81,7 @@ final class SwiftEditNSTextView: NSTextView {
 
     /// Outcome of a double-click at `index` given the selection before the click (headless-testable).
     func doubleClickOutcome(atCharacterIndex index: Int, previous: NSRange) -> DoubleClickSelectionCycle.Outcome {
-        let text: NSString = textStorage?.mutableString ?? ""
+        let text = (textStorage?.string ?? "") as NSString
         guard index >= 0, index <= text.length, text.length > 0 else { return .selectWord }
         let probe = min(index, text.length - 1)
         let word = selectionRange(forProposedRange: NSRange(location: probe, length: 0), granularity: .selectByWord)
@@ -353,9 +353,10 @@ struct TextKit2EditorView: NSViewRepresentable {
             || coordinator.lastSyncedBufferRevision != bufferRevision
             || coordinator.hasPendingLocalEdit
         if needsTextSyncCheck {
-            if coordinator.hasPendingLocalEdit && coordinator.activeDocumentID == documentID {
-                // Local textDidChange already owns the live NSTextStorage contents; re-stamp revision without O(N) full-string compare.
-                coordinator.hasPendingLocalEdit = false
+            let hadPendingLocalEdit = coordinator.hasPendingLocalEdit
+            coordinator.hasPendingLocalEdit = false
+            if hadPendingLocalEdit && coordinator.activeDocumentID == documentID && coordinator.isDisplaying(text, in: textView) {
+                // Local textDidChange already owns the live NSTextStorage contents (O(1) shared-buffer pointer check).
                 coordinator.markSynced(documentID: documentID, revision: bufferRevision)
                 coordinator.retagCachedLineIndexRevision(documentID: documentID, revision: bufferRevision, storageLength: textView.textStorage?.length ?? 0)
             } else if coordinator.activeDocumentID != documentID || !coordinator.isDisplaying(text, in: textView) {
@@ -1323,7 +1324,7 @@ struct TextKit2EditorView: NSViewRepresentable {
                 return
             }
             let selection = textView.selectedRange()
-            let text: NSString = textView.textStorage?.mutableString ?? ""
+            let text = ((nativeTextMirror?.text ?? textView.textStorage?.string) ?? "") as NSString
             guard selection.length == 0,
                   let match = WordCompletionIndex.wordPrefix(endingAt: selection.location, in: text),
                   let suffix = provider(match.prefix) else {
