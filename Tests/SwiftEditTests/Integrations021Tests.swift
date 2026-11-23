@@ -66,6 +66,7 @@ struct Integrations021Tests {
     @Test("P-DUP3: an in-memory document is duplicated only in memory")
     func pDuplicateInMemoryDocument() throws {
         let model = Self.makeModel()
+        model.newUntitledTab()
         model.handleEditorTextChanged("scratch notes")
         let before = model.tabSession.tabs.count
         #expect(model.duplicateActiveDocument())
@@ -97,6 +98,7 @@ struct Integrations021Tests {
     @Test("P-DUP4: the contextual palette Duplicate Document action runs the duplicate")
     func pDuplicateFromContextualPalette() {
         let model = Self.makeModel()
+        model.newUntitledTab()
         model.handleEditorTextChanged("palette")
         let before = model.tabSession.tabs.count
         #expect(model.presentElementContextualMenu())

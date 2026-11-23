@@ -248,7 +248,7 @@ struct LiveUIMouseAndShortcutsResponsivenessTests {
         let sandboxText = """
         # SwiftEdit — Sandbox Ready
 
-        Welcome to **SwiftEdit** (Zed-minimal Purple Chrome + Inverted B/W TextKit 2 Canvas).
+        Welcome to **SwiftEdit** (Minimal Neutral Chrome + Inverted B/W TextKit 2 Canvas).
 
         - Press `Cmd+D` to duplicate the current line or selection.
         - duplicate
@@ -267,6 +267,7 @@ struct LiveUIMouseAndShortcutsResponsivenessTests {
             savePanelProvider: { _ in nil }
         )
         model.appearanceMode = .light
+        model.newUntitledTab()
         model.handleEditorTextChanged(sandboxText)
 
         let window = NSWindow(

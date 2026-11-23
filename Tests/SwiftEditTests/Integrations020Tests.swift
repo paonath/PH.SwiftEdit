@@ -58,6 +58,7 @@ struct Integrations020Tests {
     @Test("P-WC3: workbench suggests document words and refuses binary/log-tail contexts")
     func pWorkbenchWordCompletion() {
         let model = Self.makeModel()
+        model.newUntitledTab()
         let text = "Introduction to SwiftEdit.\nSwiftEdit is fast. Intro"
         model.handleEditorTextChanged(text)
         // Caret at the end: "Intro" is the word being typed, so it is excluded from its own suggestions.
@@ -119,16 +120,16 @@ struct Integrations020Tests {
     @Test("P-ECM1: menu state starts expanded on the first action, filters, wraps navigation and collapses groups")
     func pMenuStateNavigation() {
         var state = ElementContextualMenuState(selection: TextRange(location: 0, length: 3))
-        #expect(state.rows.count == 6) // Surround (1 + 3) and Document (1 + 1), all expanded
+        #expect(state.rows.count == 8) // Surround (1 + 3), Terminal (1 + 1), and Document (1 + 1), all expanded
         #expect(state.highlightedRowID == "action:surround.backtick")
         state.moveHighlight(-1)
         #expect(state.highlightedRowID == "group:surround")
         state.moveHighlight(-1)
         #expect(state.highlightedRowID == "action:document.duplicate")
-        state.moveHighlight(-2)
+        state.moveHighlight(-4)
         #expect(state.highlightedRowID == "action:surround.parentheses")
         state.setHighlightedGroupExpanded(false)
-        #expect(state.rows.count == 3)
+        #expect(state.rows.count == 5)
         #expect(state.highlightedRowID == "group:surround")
         state.setQuery("paren")
         #expect(state.rows.map(\.id) == ["group:surround", "action:surround.parentheses"])
@@ -140,6 +141,7 @@ struct Integrations020Tests {
     @Test("P-ECM2: Cmd+Return with a selection opens the palette; Return applies the highlighted surround as one revision")
     func pWorkbenchContextualMenuFlow() throws {
         let model = Self.makeModel()
+        model.newUntitledTab()
         model.handleEditorTextChanged("make it bold")
         model.selectRange(TextRange(location: 5, length: 2)) // "it"
         let revision = try #require(model.activeDocumentSession?.revision)
@@ -156,6 +158,7 @@ struct Integrations020Tests {
     @Test("N-ECM1: Cmd+Return without a selection offers only document actions (REQ-021-05); Escape closes without editing")
     func nWorkbenchContextualMenuGuards() {
         let model = Self.makeModel()
+        model.newUntitledTab()
         model.handleEditorTextChanged("plain")
         model.selectRange(TextRange(location: 2, length: 0))
         let consumed = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "\r", keyCode: 36, modifiers: [.command]), model: model)
@@ -283,6 +286,7 @@ struct Redesign020Tests {
         model.cycleAppearanceMode(); #expect(model.appearanceMode == .black)
         model.cycleAppearanceMode(); #expect(model.appearanceMode == .auto)
         model.cycleAppearanceMode(); #expect(model.appearanceMode == .light)
+        model.newUntitledTab()
         model.handleEditorTextChanged("hello")
         #expect(model.headerBreadcrumb.last?.isEmpty == false)
     }

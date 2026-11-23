@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-23 UTC
+Branch: hotfix/missing-docs | Commit: 8bd3d65
+
+### Added
+- Added a six-chapter English User Guide in `docs/guide/` (`00-index.md` through `05-settings-shortcuts-and-security.md`) with 11 application screenshots, linked from `README.md` and bundled offline inside **Help → SwiftEdit Help** with chapter sidebar navigation (`HelpDocumentationView`, `HelpDocumentationTests`).
+- Added the selection-scoped **Send to Terminal** contextual action in both the `Cmd+Return` contextual palette and the editor/log-viewer right-click menu: automatically opens the embedded terminal (`Cmd+J`) if closed, queues input until PTY readiness, writes the sanitized selection without pressing Return, and moves keyboard focus to the terminal (`ElementContextualActions`, `EmbeddedTerminalRegistry`, `SwiftEditRootView`, `TextKit2EditorView`, `SendToTerminalContextualActionTests`).
+
+### Changed
+- Removed the placeholder `Welcome.md` page on first launch: SwiftEdit now opens onto a clean minimal empty workspace canvas (`New Document`, `Open File…`, `Open Folder…`) and automatically reopens only pinned documents (plus any unsaved crash-recovery snapshots) on restart (`SwiftEditRootView`, `WindowConfigWordWrapAndDragDropTests`).
+- Removed third-party editor comparisons from all documentation outside `openspec/` and converged `openspec/` living specifications and `openspec/index.yml` with the current application state (`014` archived, `023`, `024`).
+
+### Fixed
+- Fixed CI flakiness in `PerfExtreme3CyclesTests` by scaling `DEBUG` budgets under `CI`/`GITHUB_ACTIONS` runners while preserving strict local and `Release` budgets (`ad093d2`).
+- Fixed `SwiftEditNSTextView.menu(for:)` preserving the active selection prior to `super.menu(for:)` so right-clicking never mutates user selections or exposes selection-only actions on an empty caret.
+
+### Security
+- Added `TerminalSelectionPayload` sanitization (stripping trailing line breaks, `ESC`/`0x1B` and unsafe C0/DEL control bytes, `64 KiB` cap, binary and UTF-16 surrogate-pair guards) and an explicit multiline confirmation alert with ANSI Bracketed Paste framing (`ESC[200~ … ESC[201~`) to prevent unintended shell command execution (`CWE-78`, `CWE-150`, `CWE-400`).
+
+## [Unreleased] - 2026-11-23 UTC
 Branch: feature/contaxtual_actions | Commit: 4f026b4
 
 ### Added
@@ -55,7 +73,7 @@ Branch: feature/contaxtual_actions | Base commit: 7fad5f1
 - Added `SwiftEdit Line`, an in-code set of 50 minimal line icons (`AppIcon`) replacing every SF Symbol in the interface, and the opt-in offscreen visual audit (`SWIFTEDIT_VISUAL_AUDIT_DIR`, 34 Light/Dark snapshots in `docs/design/redesign-020/`).
 
 ### Changed
-- Redesigned the interface in a Zed-inspired neutral style (Constitution `v1.7.0`, `UI-001`): neutral header, tab strip, sidebar and status bar with purple reserved for caret, focus, active tab and toggles; flat tabs; header with the SwiftEdit menu followed by the command icons and the `folder / file` breadcrumb on the right; zoom and theme moved to the status bar; header and SwiftEdit menu scale with the editor zoom; the Concept E2 logo is unchanged.
+- Redesigned the interface in a minimal neutral style (Constitution `v1.7.0`, `UI-001`): neutral header, tab strip, sidebar and status bar with purple reserved for caret, focus, active tab and toggles; flat tabs; header with the SwiftEdit menu followed by the command icons and the `folder / file` breadcrumb on the right; zoom and theme moved to the status bar; header and SwiftEdit menu scale with the editor zoom; the Concept E2 logo is unchanged.
 - Restyled the Properties panel (collapsed by default, compact disclosure aligned with the text), Preview, Find bar, Document Navigator, sidebar empty state and header menu; the editor gutter now has a grey surface with numbers at 85% of the text size.
 - Moved File Compare out of the header menu to `Shift+Cmd+D`.
 - Reduced the Debug app bundle from 25 MB to 7.5 MB: Debug now dead-strips and keeps symbols in a dSYM beside the app, and `Scripts/build-app.sh -c Debug` builds a compact `-Osize` Debug in `.build/xcode-compact` (`--debuggable` keeps `-Onone`); the staging script also copies the dSYM.
@@ -198,7 +216,7 @@ Branch: feature/FirstStub | Commit: a3bfc35
 Branch: feature/FirstStub | Commit: 6f13c46
 
 ### Added
-- Added `MarkdownHeadingOutlineEngine` in `SwiftEditCore` and Alfred-style `DocumentNavigatorOverlayView` (`Option+\`) plus chrome-hidden full-screen distraction-free editing mode (`Option+1`) in `SwiftEditUI`, wired into `SwiftEditCommands` and `KeyboardShortcutsCheatSheetView`.
+- Added `MarkdownHeadingOutlineEngine` in `SwiftEditCore` and quick-jump `DocumentNavigatorOverlayView` (`Option+\`) plus chrome-hidden full-screen distraction-free editing mode (`Option+1`) in `SwiftEditUI`, wired into `SwiftEditCommands` and `KeyboardShortcutsCheatSheetView`.
 - Added `Scripts/build-app.sh` for repeatable macOS `.app` builds with `Info.plist` version stamping (`0.0.1-alpha5`).
 
 ## [Unreleased] - 2026-11-20 UTC
@@ -320,7 +338,7 @@ Branch: feature/FirstStub | Commit: a227d9a
 - Added pure `Foundation` `ConstitutionGovernanceValidator` in `SwiftEditCore` and `ConstitutionFitnessTests` (`Swift Testing`) enforcing SemVer `1.3.0`, Bare-Bones line caps (`<= 45` / `<= 25` / `<= 40` lines, zero blockquotes), and `v1.3.0` rule invariants (`[SDD-004..009]`, `[TEST-006]`).
 - Implemented `SwiftEditUI` Concept E2 Purple (`Viola`: `#0B0614`, `#7C3AED`, `#A78BFA`, `#C4B5FD`) chrome palette (`PurpleThemePalette`, `RGBAColorToken` with WCAG 2.2 `21:1` `#FFFFFF`/`#000000` inverted editor canvas), `50%..300%` `EditorZoomController`, and `@MainActor @Observable` `WorkspaceEditorCoordinator` / `TextKit2BufferAdapter` (`NSTextContentStorage` scoped `performEditingTransaction`) + `DiffPaneCoordinator` (`SideBySideDiffRow`) (`openspec/specs/swifteditui-purple-zed-layout-textkit2-and-appicons/spec.md`, archived at `openspec/changes/archive/2026-11-18-004-swifteditui-purple-zed-layout-textkit2-and-appicons/`).
 - Added `XcodeApp/` bundle resources (`Assets.xcassets/AppIcon.appiconset` 10 macOS PNGs, `iOSAssets.xcassets/AppIcon.appiconset` 8 iOS PNGs, `PH.SwiftEdit.macOS.entitlements`, `PH.SwiftEdit.iOS.entitlements`, `Info.plist`) alongside `EntitlementsFitnessValidator` and `InfoPlistVersionStamper` (`0.0.1-alpha1` from `version.json`) (`[AR-001]`, `[AR-014]`, `[TEST-007]`, `[TEST-008]`).
-- Implemented `WorkspaceTabSession` (`TabDescriptor`) in `SwiftEditCore` with Notepad++ pinned-first tab ordering, active tab fallback, and pinned-tab close protection (`DomainError.pinnedTabCloseForbidden`, `DomainError.tabNotFound`) (`openspec/specs/notepadpp-tabs-session-recovery-and-dotfiles/spec.md`, archived at `openspec/changes/archive/2026-11-18-003-notepadpp-tabs-session-recovery-and-dotfiles/`).
+- Implemented `WorkspaceTabSession` (`TabDescriptor`) in `SwiftEditCore` with pinned-first tab ordering, active tab fallback, and pinned-tab close protection (`DomainError.pinnedTabCloseForbidden`, `DomainError.tabNotFound`) (`openspec/specs/notepadpp-tabs-session-recovery-and-dotfiles/spec.md`, archived at `openspec/changes/archive/2026-11-18-003-notepadpp-tabs-session-recovery-and-dotfiles/`).
 - Implemented `SessionRecoveryStore` (`SessionRecoveryManifest`, `RecoveredDocumentSnapshot`) for atomic `session-manifest.json` and `<UUID>.recovery` persistence with immediate unlink on tab closure and deterministic startup orphan garbage collection (`[DATA-005]`, `[DATA-006]`).
 - Implemented `DotfileFolderNavigator` (`SecurityScopedResourceAccessing`, `FolderEntryDescriptor`) for shallow directory enumeration including hidden dotfiles (`.env`, `.gitignore`) sorted directories-first, alongside `EditorPreferencesStore` (`AppearanceMode`, `50%..300%` clamped zoom) on isolated `UserDefaults` suites (`[DATA-007]`, `[DATA-008]`).
 - Implemented `MarkdownLintAndFormatEngine` (`lint`, `formatDocument`, `formatSection`) using `swiftlang/swift-markdown` 100% offline in `SwiftEditCore` to detect `missingHeadingSpace`, `emptyLinkTarget`, `unsafeLinkScheme`, and `unbalancedFencedCodeBlock` and emit `TextEdit` batches preserving fenced code blocks (`openspec/specs/markdown-lint-format-bracket-and-diff/spec.md`, archived at `openspec/changes/archive/2026-11-18-002-markdown-lint-format-bracket-and-diff/`).
@@ -341,7 +359,7 @@ Branch: feature/FirstStub | Commit: bca0e90
 ### Added
 - Scaffolded cross-platform Swift 6 `Package.swift` (`.macOS(.v26)`, `.iOS(.v26)`, `-strict-concurrency=complete`) declaring `SwiftEditCore` (`swiftlang/swift-markdown` `0.9.0`), `SwiftEditUI` (`#if os(macOS)` / `#if os(iOS)`), and `SwiftEditTests` (`Swift Testing`), alongside `ArchitectureImportScanner` and `PackageManifestDumpValidator` (`openspec/specs/document-core-and-spm-scaffold/spec.md`, archived at `openspec/changes/archive/2026-11-17-001-swifteditcore-document-and-binary-guard/`).
 - Implemented `DocumentCore` (`DocumentSession`, `DocumentLoader`, `DocumentCodec`, `FileSystemProviding`, `LocalFileSystemAdapter`, `InMemoryFileSystemFake`) with lossless `UTF-8`/`UTF-8 BOM`/`UTF-16LE BOM`/`UTF-16BE BOM` and `LF`/`CRLF` round-trip encoding, `10 MiB` plain-text degraded mode, and deterministic `Cmd+D` (`duplicateLineOrSelection`) line and selection duplication (`[AR-012]`, `[BC-003]`, `[DATA-004]`).
-- Promoted Concept E2 brand icons (`logo-e2-refined.svg`, `logo-e2-refined-512.png`), macOS (`10` PNGs `16..1024 px`) and iOS (`8` PNGs across `9` slots `40..1024 px`) `AppIcon.appiconset` catalogs, Zed-minimal Purple (`Viola`) chrome and inverted `#FFFFFF`/`#000000` editor canvas specification (`color-schemes-and-zed-layout.md`), and three UI preview mockups to `docs/design/` (`openspec/specs/design-assets-promotion/spec.md`, archived at `openspec/changes/archive/2026-11-17-000-promote-design-and-app-icons-to-docs/`).
+- Promoted Concept E2 brand icons (`logo-e2-refined.svg`, `logo-e2-refined-512.png`), macOS (`10` PNGs `16..1024 px`) and iOS (`8` PNGs across `9` slots `40..1024 px`) `AppIcon.appiconset` catalogs, minimal Purple (`Viola`) chrome and inverted `#FFFFFF`/`#000000` editor canvas specification (`color-schemes-and-zed-layout.md`), and three UI preview mockups to `docs/design/` (`openspec/specs/design-assets-promotion/spec.md`, archived at `openspec/changes/archive/2026-11-17-000-promote-design-and-app-icons-to-docs/`).
 - Updated root `README.md` with relative links to `docs/design/color-schemes-and-zed-layout.md`, `docs/design/assets/app-icons-riepilogo.md`, and `openspec/Constitution.md`.
 - Added pure Swift 6 CLI asset verifier and 14-test `--self-test` harness (`Scripts/verify-design-assets.swift`) using `Foundation`, `ImageIO`, and `CoreGraphics` to validate file completeness, brand tokens, `Contents.json` slots, and PNG pixel dimensions (`[AR-001]`, `[UI-001]`, `[TEST-007]`).
 - Configured Nerdbank.GitVersioning (`version.json` at `0.0.0`, `feature/FirstStub` `0.0.1-alpha1`) and ratified the Bare-Bones `openspec/Constitution.md` (`v1.2.0`) alongside the `swift-macos-expert` agent profile (`e2af960`, `9008090`, `0a74b1f`).

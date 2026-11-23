@@ -36,7 +36,9 @@ struct TransientBinaryInspectionTests {
         try payload.write(to: binaryURL)
 
         let model = Self.makeModel(recoveryDir: dir.appendingPathComponent("rec"))
-        let welcomeID = try #require(model.tabSession.activeTabID)
+        model.newUntitledTab()
+        let initialTabID = try #require(model.tabSession.activeTabID)
+        let initialTitle = model.activeTabTitle
         let sessionsCountBefore = model.sessionsByID.count
         let baselinesCountBefore = model.savedBaselineByID.count
 
@@ -61,8 +63,8 @@ struct TransientBinaryInspectionTests {
         #expect(baselinesDuringBin == baselinesCountBefore)
         #expect(textLengthDuringBin <= DocumentCodec.maxBinaryInspectionBytes)
         #expect(inspectionAfterDismiss == nil)
-        #expect(model.tabSession.activeTabID == welcomeID)
-        #expect(activeTitleAfterDismiss == "Welcome.md")
+        #expect(model.tabSession.activeTabID == initialTabID)
+        #expect(activeTitleAfterDismiss == initialTitle)
     }
 
     @Test("N5: Reopening identical binary file deduplicates transient inspection and switching tabs clears it")
@@ -75,6 +77,7 @@ struct TransientBinaryInspectionTests {
         try Data([0x00, 0x01, 0x02, 0x03]).write(to: binaryURL)
 
         let model = Self.makeModel(recoveryDir: dir.appendingPathComponent("rec"))
+        model.newUntitledTab()
         let firstTabID = try #require(model.tabSession.activeTabID)
 
         // WHEN opening the binary file twice, attempting pin, then activating tab 1

@@ -61,6 +61,7 @@ struct TerminalPanelTests {
         let (model, dir) = Self.makeModel()
         defer { try? FileManager.default.removeItem(at: dir) }
 
+        model.newUntitledTab()
         model.toggleTerminalPanel()
         let session = try #require(model.terminalSessions.first)
         model.embeddedTerminalDidFail(id: session.id, message: "PTY unavailable")

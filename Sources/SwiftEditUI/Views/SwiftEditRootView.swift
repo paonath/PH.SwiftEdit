@@ -587,6 +587,8 @@ public final class SwiftEditWorkbenchModel {
     public private(set) var pendingBatchFolderURL: URL?
     public private(set) var sidebarClipboard: SidebarFileClipboard?
     public private(set) var pendingTrashItemURL: URL?
+    /// Pending multiline selection awaiting user confirmation before writing into the embedded terminal (`CWE-78`).
+    public private(set) var pendingMultilineTerminalSend: TerminalSelectionPayload?
     public var isCheckingForUpdates: Bool = false
     public var updateCheckOutcome: UpdateCheckOutcome?
     public var isUpdateDialogPresented: Bool = false
@@ -709,24 +711,16 @@ public final class SwiftEditWorkbenchModel {
             .appendingPathComponent("SessionRecovery", isDirectory: true)
         self.recoveryStore = SessionRecoveryStore(recoveryDirectoryURL: resolvedRecoveryURL)
 
-        let welcomeText = """
-        # SwiftEdit — Sandbox Ready
-
-        Welcome to **SwiftEdit** (Zed-minimal Purple Chrome + Inverted B/W TextKit 2 Canvas).
-
-        - Press `Cmd+D` to duplicate the current line or selection.
-        - Press `Cmd++` / `Cmd+-` / `Cmd+0` to scale Editor Zoom (`50%..300%`).
-        - Open a sandboxed folder on the left to inspect hidden dotfiles (`.env`, `.gitignore`).
-        - Try `#HeadingWithoutSpace` or `[XSS](javascript:alert(1))` to test live AST linting.
-        """
-        let initialSession = DocumentSession(text: welcomeText)
-        var initialTabs = WorkspaceTabSession()
-        try? initialTabs.openOrActivate(snapshot: initialSession.snapshot, title: "Welcome.md", isDirty: false)
-
-        self.tabSession = initialTabs
-        self.sessionsByID = [initialSession.id: initialSession]
-        self.savedBaselineByID = [initialSession.id: initialSession.snapshot]
-        self.safetyBanner = InspectionSafetyBannerState.evaluate(snapshot: initialSession.snapshot)
+        self.tabSession = WorkspaceTabSession()
+        self.sessionsByID = [:]
+        self.savedBaselineByID = [:]
+        self.safetyBanner = InspectionSafetyBannerState(
+            isBinaryReadOnlyBannerVisible: false,
+            canSave: false,
+            canFormat: false,
+            canPinTab: false,
+            bidiWarnings: []
+        )
 
         // Enumerate installed font families off the main actor so Settings opens without a stall (`PERF-017-B2`).
         Task.detached(priority: .utility) { await SystemFontFamilyCache.shared.prewarm() }
@@ -1365,6 +1359,13 @@ public final class SwiftEditWorkbenchModel {
         diagnosticsTask?.cancel()
         diagnosticsTask = nil
         guard let session = activeDocumentSession else {
+            safetyBanner = InspectionSafetyBannerState(
+                isBinaryReadOnlyBannerVisible: false,
+                canSave: false,
+                canFormat: false,
+                canPinTab: false,
+                bidiWarnings: []
+            )
             lintDiagnostics = []
             bracketResult = nil
             backtickResult = nil
@@ -2053,11 +2054,14 @@ public final class SwiftEditWorkbenchModel {
         }
     }
 
-    /// Applies `action` to the captured selection as one `BufferRevision` (or runs a document action) and closes the palette.
+    /// Applies `action` to the captured selection as one `BufferRevision` (or runs a document/terminal action) and closes the palette.
     @discardableResult
     public func performElementContextualAction(_ action: ElementContextualAction) -> Bool {
         guard let menu = elementContextualMenu else { return false }
         elementContextualMenu = nil
+        if case .sendToTerminal = action.kind {
+            return requestSendSelectionToTerminal(selection: menu.selection)
+        }
         defer { requestEditorFocus() }
         if case .duplicateDocument = action.kind {
             return duplicateActiveDocument()
@@ -2082,6 +2086,81 @@ public final class SwiftEditWorkbenchModel {
             statusBannerMessage = "Contextual action failed: \(error)"
             return false
         }
+    }
+
+    /// Prepares the selected text for the embedded terminal: single-line sends immediately (without Return),
+    /// while multiline selections require explicit user confirmation (`CWE-78`, `CWE-150`).
+    @discardableResult
+    public func requestSendSelectionToTerminal(
+        selection: SwiftEditCore.TextRange? = nil,
+        sourceText: String? = nil
+    ) -> Bool {
+        let resolvedText: String
+        let isBinary: Bool
+        if let sourceText {
+            resolvedText = sourceText
+            isBinary = (activeBinaryInspection != nil)
+        } else if let tail = activeLogTail {
+            resolvedText = tail.text
+            isBinary = false
+        } else if let session = activeDocumentSession {
+            resolvedText = session.text
+            isBinary = session.isBinaryReadOnly
+        } else {
+            return false
+        }
+        let targetRange = selection ?? currentSelection
+        guard let payload = TerminalSelectionPayload.prepare(
+            selection: targetRange,
+            in: resolvedText,
+            isBinaryReadOnly: isBinary
+        ) else {
+            statusBannerMessage = "Send to Terminal requires a non-empty text selection."
+            return false
+        }
+        if payload.isMultiline {
+            pendingMultilineTerminalSend = payload
+            statusBannerMessage = "Warning: selected text spans \(payload.lineCount) lines — confirm before sending to terminal."
+            return true
+        }
+        deliverTerminalPayload(payload)
+        return true
+    }
+
+    /// Confirms and writes the staged multiline selection into the active embedded terminal (using Bracketed Paste, no Return).
+    public func confirmPendingMultilineTerminalSend() {
+        guard let payload = pendingMultilineTerminalSend else { return }
+        pendingMultilineTerminalSend = nil
+        deliverTerminalPayload(payload)
+    }
+
+    /// Cancels a staged multiline Send to Terminal confirmation without touching the terminal.
+    public func cancelPendingMultilineTerminalSend() {
+        pendingMultilineTerminalSend = nil
+        statusBannerMessage = "Send to Terminal cancelled."
+        requestEditorFocus()
+    }
+
+    private func deliverTerminalPayload(_ payload: TerminalSelectionPayload) {
+        if !isTerminalPanelVisible {
+            isTerminalPanelVisible = true
+        }
+        let targetID: UUID
+        if let selected = selectedTerminalSessionID,
+           terminalSessions.contains(where: { $0.id == selected }) {
+            targetID = selected
+        } else if let existing = terminalSessions.last {
+            selectedTerminalSessionID = existing.id
+            targetID = existing.id
+        } else {
+            let created = openTerminalSession()
+            targetID = created.id
+        }
+        embeddedTerminalRegistry.sendPayload(payload, to: targetID)
+        embeddedTerminalRegistry.focusTerminal(for: targetID)
+        statusBannerMessage = payload.isMultiline
+            ? "Sent \(payload.lineCount) lines to terminal (review and press Return to execute)."
+            : nil
     }
 
     /// Duplicates the active document next to its tab (`REQ-021-05`).
@@ -3044,11 +3123,23 @@ public final class SwiftEditWorkbenchModel {
                 restoredTabs.append(tab)
                 restoredSessions[tab.id] = session
                 restoredBaselines[tab.id] = session.snapshot
-            } else if let fileURL = tab.fileURL,
+            } else if tab.isPinned,
+                      let fileURL = tab.fileURL,
                       let diskSession = try? loader.load(from: fileURL) {
+                let session = DocumentSession(
+                    id: tab.id,
+                    fileURL: diskSession.fileURL,
+                    revision: diskSession.revision,
+                    text: diskSession.text,
+                    encoding: diskSession.encoding,
+                    lineEnding: diskSession.lineEnding,
+                    isDirty: false,
+                    isDegradedPlainText: diskSession.isDegradedPlainText,
+                    isBinaryReadOnly: diskSession.isBinaryReadOnly
+                )
                 restoredTabs.append(tab)
-                restoredSessions[tab.id] = diskSession
-                restoredBaselines[tab.id] = diskSession.snapshot
+                restoredSessions[tab.id] = session
+                restoredBaselines[tab.id] = session.snapshot
             }
         }
 
@@ -3353,6 +3444,13 @@ public struct SwiftEditRootView: View {
             } message: {
                 Text(model.pendingTrashItemURL?.lastPathComponent ?? "")
             }
+            .alert("Send Multiline Text to Terminal?", isPresented: multilineTerminalSendAlertPresented) {
+                Button("Send to Terminal") { model.confirmPendingMultilineTerminalSend() }
+                Button("Cancel", role: .cancel) { model.cancelPendingMultilineTerminalSend() }
+            } message: {
+                let count = model.pendingMultilineTerminalSend?.lineCount ?? 0
+                Text("The selected text spans \(count) lines. Pasting multiline text into a shell may execute intermediate lines depending on shell settings. No trailing Return is appended.")
+            }
     }
 
     private var dirtyCloseAlertPresented: Binding<Bool> {
@@ -3384,6 +3482,13 @@ public struct SwiftEditRootView: View {
         Binding(
             get: { model.pendingTrashItemURL != nil },
             set: { if !$0 { model.cancelPendingTrashItem() } }
+        )
+    }
+
+    private var multilineTerminalSendAlertPresented: Binding<Bool> {
+        Binding(
+            get: { model.pendingMultilineTerminalSend != nil },
+            set: { if !$0 { model.cancelPendingMultilineTerminalSend() } }
         )
     }
 
@@ -3459,7 +3564,8 @@ public struct SwiftEditRootView: View {
                       !activeModel.isUpdateDialogPresented,
                       activeModel.pendingDirtyCloseTabID == nil,
                       activeModel.pendingBatchOpenPlan == nil,
-                      activeModel.pendingTrashItemURL == nil else {
+                      activeModel.pendingTrashItemURL == nil,
+                      activeModel.pendingMultilineTerminalSend == nil else {
                     return false
                 }
                 let responder = eventWindow.firstResponder
@@ -4047,6 +4153,9 @@ public struct SwiftEditRootView: View {
                     programmaticSelectionToken: Int(truncatingIfNeeded: tail.generation),
                     editorFocusRequestToken: model.editorFocusRequestToken,
                     onEscape: { model.handleEscape() },
+                    onSendSelectionToTerminal: { range, text in
+                        model.requestSendSelectionToTerminal(selection: range, sourceText: text)
+                    },
                     typography: model.typography,
                     typographyGeneration: model.typographyGeneration
                 )
@@ -4086,12 +4195,17 @@ public struct SwiftEditRootView: View {
                         editorFocusRequestToken: model.editorFocusRequestToken,
                         onViewportMetricsChange: { gutterViewportMetrics = $0 },
                         onEscape: { model.handleEscape() },
+                        onSendSelectionToTerminal: { range, text in
+                            model.requestSendSelectionToTerminal(selection: range, sourceText: text)
+                        },
                         typography: model.typography,
                         typographyGeneration: model.typographyGeneration,
                         lineIndexProvider: { model.lineIndex(for: $0, revision: $1) },
                         completionProvider: { model.wordCompletionSuffix(forPrefix: $0) }
                     )
                 }
+            } else {
+                emptyWorkspaceCanvas
             }
             if !model.isDistractionFree, model.showMarkdownPreview, model.isMarkdownMenuEnabled {
                 MarkdownNativePreviewView(
@@ -4111,6 +4225,64 @@ public struct SwiftEditRootView: View {
                     .frame(minWidth: 260, idealWidth: 320, maxWidth: 480)
             }
         }
+    }
+
+    /// Minimal empty-workspace canvas shown when no tab is open (first launch without pinned or recovered documents).
+    private var emptyWorkspaceCanvas: some View {
+        VStack(spacing: 16) {
+            SwiftEditBrandLogoView(size: 56)
+                .opacity(0.85)
+            Text("SwiftEdit")
+                .appFont(.title2, weight: .semibold)
+                .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
+            HStack(spacing: 10) {
+                Button { model.newUntitledTab() } label: {
+                    HStack(spacing: 6) {
+                        AppIconView(.filePlus, size: 13)
+                        Text("New Document")
+                        Text(verbatim: "⌘N")
+                            .appFont(.caption, monospaced: true)
+                            .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(model.palette.badgeSurface.swiftUIColor, in: RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                Button { model.openFileViaPanel() } label: {
+                    HStack(spacing: 6) {
+                        AppIconView(.fileText, size: 13)
+                        Text("Open File…")
+                        Text(verbatim: "⌘O")
+                            .appFont(.caption, monospaced: true)
+                            .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(model.palette.badgeSurface.swiftUIColor, in: RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                Button { model.openFolderViaPanel() } label: {
+                    HStack(spacing: 6) {
+                        AppIconView(.folder, size: 13)
+                        Text("Open Folder…")
+                        Text(verbatim: "⇧⌘O")
+                            .appFont(.caption, monospaced: true)
+                            .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(model.palette.badgeSurface.swiftUIColor, in: RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+            }
+            .appFont(.callout, weight: .medium)
+            .foregroundStyle(model.palette.chromeForeground.swiftUIColor)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(model.palette.editorCanvasBackground.swiftUIColor)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Empty workspace")
     }
 
     /// Compare header: source tab on the left; on the right a "Compare with" picker (saved version or another open tab)

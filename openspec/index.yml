@@ -4,6 +4,18 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "024-send-to-terminal-contextual-action"
+    status: "implemented"
+    date: "2026-11-23"
+    capabilities: ["send-to-terminal-contextual-action"]
+    path: "openspec/specs/send-to-terminal-contextual-action/spec.md"
+    summary: "Contextual Send to Terminal action (Cmd+Return & right-click) with auto-open PTY queue, no auto-Return, and multiline warning"
+  - id: "023-embedded-terminal-json-settings-log-highlights-and-onboard-docs"
+    status: "implemented"
+    date: "2026-11-23"
+    capabilities: ["embedded-terminal-json-settings-log-highlights-and-onboard-docs", "log-tail-terminal-panel-lint-hover-and-help"]
+    path: "openspec/specs/embedded-terminal-json-settings-log-highlights-and-onboard-docs/spec.md"
+    summary: "Embedded SwiftTerm PTY, JSON Settings, Drag & Drop, Verified Auto-Update, Synchronous Editor & Lock-Free Log Viewer Occurrence Highlights, and Onboard Multi-Chapter User Guide"
   - id: "022-two-tab-compare-gutter-theme-menu-and-dblclick"
     status: "implemented"
     date: "2026-11-23"
@@ -53,11 +65,11 @@ specs:
     path: "openspec/changes/archive/2026-11-20-015-debug-hardening-usability-and-automated-qa"
     summary: "Debug Hardening, Click-Only Accessible Usability & Automated 3x QA Verification"
   - id: "014-markdown-document-navigator-and-distraction-free"
-    status: "draft"
-    date: "2026-11-20"
+    status: "implemented"
+    date: "2026-11-23"
     capabilities: ["markdown-document-navigator-and-distraction-free"]
-    path: "openspec/changes/014-markdown-document-navigator-and-distraction-free"
-    summary: "Alfred-style Markdown heading navigator (Option+Backslash) and full-screen distraction-free mode (Option+1)"
+    path: "openspec/specs/markdown-document-navigator-and-distraction-free/spec.md"
+    summary: "Quick-jump Markdown heading navigator (Option+Backslash) and full-screen distraction-free mode (Option+1)"
   - id: "013-comprehensive-markdown-linter-and-diagnostics-ui"
     status: "implemented"
     date: "2026-11-20"

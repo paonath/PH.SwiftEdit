@@ -101,6 +101,7 @@ struct DiagnosticsUIWiringTests {
         defer {
             try? FileManager.default.removeItem(at: dir)
         }
+        model.newUntitledTab()
         model.handleEditorTextChanged("#Heading\n\n![](a.png)\n")
         let rules = model.lintDiagnostics.map(\.rule)
         #expect(rules.contains(.missingHeadingSpace))

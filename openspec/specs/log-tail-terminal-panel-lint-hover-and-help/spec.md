@@ -1,7 +1,7 @@
 # Capability: log-tail-terminal-panel-lint-hover-and-help
 
 ## Purpose
-Adds level-aware log highlighting with a non-blocking live tail (direct and inverse), a bottom Terminal panel that hands sessions to the preferred external terminal, English lint explanations on gutter hover, reliable navigator jumps, and an in-app help document built from the repository README.
+Adds level-aware log highlighting with a non-blocking live tail (direct and inverse) and synchronous secondary occurrence highlighting across all log modes, a bottom embedded GPU-accelerated Terminal panel (`SwiftTerm` PTY) with sidebar external terminal handoff, English lint explanations on gutter hover, reliable navigator jumps, and an offline multi-chapter in-app Help viewer built from `docs/guide/` and `README.md`.
 
 ## Requirements
 
@@ -22,8 +22,8 @@ WHEN a `.log` tab is laid out, the `LogSyntaxHighlighter` SHALL return viewport-
 - **WHEN** they are classified
 - **THEN** no level token is produced and the overlong line yields no spans
 
-### Requirement: REQ-002 Non-Blocking Live Log Tail With Direct and Inverse Order
-WHEN the user presses `Cmd+L` or `Shift+Cmd+L` on a file-backed tab, the workbench SHALL show a read-only live tail of the last N lines (default 80, 1 to 10000) in direct or newest-first order, read appended bytes on a background queue without locking the file, restart on truncation or rotation, and keep every other tab usable [UI-012][DATA-003][SEC-012].
+### Requirement: REQ-002 Non-Blocking Live Log Tail With Direct and Inverse Order and Secondary Occurrence Highlighting
+WHEN the user presses `Cmd+L` or `Shift+Cmd+L` on a file-backed tab, the workbench SHALL show a read-only selectable live tail of the last N lines (default 80, 1 to 10000) in direct or newest-first order, read appended bytes on a background queue without locking the file (`O_RDONLY | O_NONBLOCK | O_CLOEXEC` + `O_EVTONLY`), restart on truncation or rotation, highlight all secondary occurrences of any selected word or token across Plain, Direct, Inverse, and tail-only modes while preserving active user selection across live polls and order switches, and keep every other tab usable [UI-012][DATA-003][SEC-012].
 
 #### Scenario: P2 Tail Follows Appends and Switches Order and Line Count
 - **Path**: P2
@@ -39,8 +39,8 @@ WHEN the user presses `Cmd+L` or `Shift+Cmd+L` on a file-backed tab, the workben
 - **WHEN** the tail is requested, the oversized log is opened and saved, and the file grows after stop
 - **THEN** the untitled tab is refused, the oversized log opens tail-only with saving blocked, and no line written after stop appears
 
-### Requirement: REQ-003 Bottom Terminal Panel Handing Sessions to the External Terminal
-WHEN the user presses `Cmd+J`, the workbench SHALL toggle a bottom panel whose sessions each open the preferred allowlisted terminal in the current folder or the user home via `NSWorkspace`, record launch failures and terminal quits on the session without crashing, and end every session when the panel closes, starting zero subprocesses [SEC-001][SEC-004].
+### Requirement: REQ-003 Bottom Embedded Terminal Panel (`SwiftTerm` PTY)
+WHEN the user presses `Cmd+J`, the workbench SHALL toggle a resizable bottom panel hosting an embedded VT100/xterm-256color `SwiftTerm` PTY terminal in the current folder or user home (per Constitution `v1.6.0` `SEC-004`), support multiple terminal tabs with OSC 7 directory tracking, record launch or abnormal exit failures without crashing, and cleanly terminate child shell process groups on tab close or application exit [SEC-001][SEC-004].
 
 #### Scenario: P3 Sessions Open in Home or Folder and Close With the Panel
 - **Path**: P3
@@ -90,8 +90,8 @@ WHEN the user clicks anywhere on a navigator row, the workbench SHALL move the c
 - **WHEN** an offset beyond the end is revealed
 - **THEN** the caret is clamped to the end without error
 
-### Requirement: REQ-006 Offline In-App Help From the Repository README
-WHEN the user chooses Help, SwiftEdit Help, the `SwiftEditUI` SHALL render the bundled README, identical to the repository README, offline with the native Markdown preview, and the README SHALL name the app SwiftEdit, including the install and quarantine commands [UI-001][SEC-004].
+### Requirement: REQ-006 Offline In-App Help From Bundled User Guide and Repository README
+WHEN the user chooses Help, SwiftEdit Help (`Shift+Cmd+?`), `SwiftEditUI` SHALL render the bundled multi-chapter English User Guide (`docs/guide/*.md`) and repository `README.md` offline with chapter navigation and the native Markdown preview, keeping bundled copies byte-identical to the repository documents [UI-001][SEC-004].
 
 #### Scenario: P6 Bundled Help Matches the Repository README
 - **Path**: P6

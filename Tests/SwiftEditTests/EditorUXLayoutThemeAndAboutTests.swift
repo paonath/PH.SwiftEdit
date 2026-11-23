@@ -21,6 +21,7 @@ struct EditorUXLayoutThemeAndAboutTests {
             recoveryDirectoryURL: recoveryDir
         )
         let sampleText = "scrivo{a[b(c)]} `code`"
+        model.newUntitledTab()
         model.handleEditorTextChanged(sampleText)
         let revisionBefore = try #require(model.activeDocumentSession?.revision)
 

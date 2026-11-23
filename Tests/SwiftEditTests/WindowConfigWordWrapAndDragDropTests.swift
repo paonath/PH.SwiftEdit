@@ -82,11 +82,55 @@ struct WindowConfigWordWrapAndDragDropTests {
             systemDarkDetector: { false },
             savePanelProvider: { _ in nil }
         )
+        model.newUntitledTab()
         model.handleEditorTextChanged("SwiftEdit opens SwiftEdit fast with SwiftEdit highlight")
         model.handleSelectionChanged(TextRange(location: 0, length: 9)) // "SwiftEdit"
         let occurrences = model.activeHighlightProjection.wordOccurrenceRanges
         #expect(occurrences.count == 2)
         #expect(!occurrences.contains(TextRange(location: 0, length: 9)))
+    }
+
+    @Test("P-START1: First launch opens empty without Welcome.md; subsequent launch reopens only pinned documents")
+    func pFirstLaunchEmptyAndReopensOnlyPinnedDocuments() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftedit-startup-\(UUID().uuidString)", isDirectory: true)
+        let recoveryDir = root.appendingPathComponent("recovery", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // 1. Fresh launch: no Welcome.md, empty workspace
+        let firstLaunch = SwiftEditWorkbenchModel(
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
+            recoveryDirectoryURL: recoveryDir,
+            systemDarkDetector: { false },
+            savePanelProvider: { _ in nil }
+        )
+        #expect(firstLaunch.tabSession.tabs.isEmpty)
+        #expect(firstLaunch.activeDocumentSession == nil)
+
+        // 2. Open two files, pin only one, then relaunch
+        let pinnedFile = root.appendingPathComponent("pinned.md")
+        let unpinnedFile = root.appendingPathComponent("regular.md")
+        try "# Pinned Note\n".write(to: pinnedFile, atomically: true, encoding: .utf8)
+        try "# Regular Note\n".write(to: unpinnedFile, atomically: true, encoding: .utf8)
+
+        firstLaunch.openFile(at: pinnedFile, withinScope: root)
+        let pinnedID = try #require(firstLaunch.tabSession.activeTabID)
+        firstLaunch.togglePin(id: pinnedID)
+        firstLaunch.openFile(at: unpinnedFile, withinScope: root)
+
+        let relaunched = SwiftEditWorkbenchModel(
+            preferencesStore: InMemoryKeyValueStore(),
+            recentFilesStore: InMemoryKeyValueStore(),
+            recoveryDirectoryURL: recoveryDir,
+            systemDarkDetector: { false },
+            savePanelProvider: { _ in nil }
+        )
+        #expect(relaunched.tabSession.tabs.count == 1)
+        #expect(relaunched.tabSession.tabs.first?.title == "pinned.md")
+        #expect(relaunched.tabSession.tabs.first?.isPinned == true)
+        #expect(relaunched.activeDocumentSession?.text == "# Pinned Note\n")
     }
 
     @Test("P-DROP1: Dragging a file opens it in a tab; dragging a folder opens it in the left Folder Navigator and expands sidebar")

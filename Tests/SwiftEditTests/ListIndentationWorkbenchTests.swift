@@ -34,6 +34,7 @@ struct ListIndentationWorkbenchTests {
             try? FileManager.default.removeItem(at: dir)
         }
         let text = "1. a\n2. b\n3. "
+        model.newUntitledTab()
         model.handleEditorTextChanged(text)
         model.handleSelectionChanged(TextRange(location: (text as NSString).length, length: 0))
         let revisionBefore = try #require(model.activeDocumentSession?.revision)
