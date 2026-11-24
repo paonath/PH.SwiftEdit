@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "026-god-class-flattening-and-acyclicity"
+    status: "draft"
+    date: "2026-11-24"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/changes/026-god-class-flattening-and-acyclicity"
+    summary: "Flatten Workbench/Coordinator/Palette God-Classes (<=45 members), Eliminate 4 File Cycles & Recursion Loops"
   - id: "025-workbench-editor-and-linter-modular-decomposition"
     status: "implemented"
     date: "2026-11-24"
