@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "025-workbench-editor-and-linter-modular-decomposition"
+    status: "draft"
+    date: "2026-11-24"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/changes/025-workbench-editor-and-linter-modular-decomposition"
+    summary: "Modular decomposition of SwiftEditWorkbenchModel, SwiftEditRootView, TextKit2EditorView, Linter & Modularity Fitness"
   - id: "024-send-to-terminal-contextual-action"
     status: "implemented"
     date: "2026-11-23"
