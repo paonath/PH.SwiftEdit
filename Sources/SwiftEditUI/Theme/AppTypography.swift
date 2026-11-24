@@ -62,7 +62,8 @@ public final class AppTypography {
         case .default:
             break
         case .openDyslexic:
-            if let face = openDyslexic.font(size: size, bold: isBold, italic: italic) ?? openDyslexic.font(size: size, bold: false, italic: false) {
+            if let face = openDyslexic.verifiedFace(size: size, bold: isBold, italic: italic)
+                ?? openDyslexic.verifiedFace(size: size, bold: false, italic: false) {
                 return face
             }
         case .system(let family):
@@ -71,15 +72,27 @@ public final class AppTypography {
         return Self.roleDefault(role, size: size, weight: weight, italic: italic)
     }
 
-    /// Family face with the requested traits, or the family's regular face when a trait is missing; `nil` if absent.
+    /// Family face with the requested traits via `NSFontDescriptor` and `NSFontManager.convert` (avoiding `.font(...)` call-graph cycles), or the family's regular face when a trait is missing; `nil` if absent (`REQ-007`).
     private static func systemFamilyFont(_ family: String, size: CGFloat, weight: NSFont.Weight, italic: Bool) -> NSFont? {
+        let baseDescriptor = NSFontDescriptor(fontAttributes: [.family: family])
+        guard let matchedDescriptor = baseDescriptor.matchingFontDescriptors(withMandatoryKeys: [.family]).first,
+              let regularFace = NSFont(descriptor: matchedDescriptor, size: size) else {
+            return nil
+        }
         let manager = NSFontManager.shared
-        var traits: NSFontTraitMask = []
-        if weight.rawValue >= NSFont.Weight.semibold.rawValue { traits.insert(.boldFontMask) }
-        if italic { traits.insert(.italicFontMask) }
-        let managerWeight = weight.rawValue <= NSFont.Weight.light.rawValue ? 3 : 5
-        if let face = manager.font(withFamily: family, traits: traits, weight: managerWeight, size: size) { return face }
-        return manager.font(withFamily: family, traits: [], weight: 5, size: size)
+        var resolved = regularFace
+        if weight.rawValue >= NSFont.Weight.semibold.rawValue {
+            let bolded = manager.convert(resolved, toHaveTrait: .boldFontMask)
+            if bolded.familyName == regularFace.familyName { resolved = bolded }
+        } else if weight.rawValue <= NSFont.Weight.light.rawValue {
+            let lighter = manager.convertWeight(false, of: resolved)
+            if lighter.familyName == regularFace.familyName { resolved = lighter }
+        }
+        if italic {
+            let italicized = manager.convert(resolved, toHaveTrait: .italicFontMask)
+            if italicized.familyName == regularFace.familyName { resolved = italicized }
+        }
+        return resolved
     }
 
     private static func roleDefault(_ role: TypographyRole, size: CGFloat, weight: NSFont.Weight, italic: Bool) -> NSFont {

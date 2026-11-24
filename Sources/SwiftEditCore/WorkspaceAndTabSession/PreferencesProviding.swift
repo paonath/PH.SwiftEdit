@@ -12,48 +12,62 @@ public protocol PreferencesProviding: Sendable {
     func removeObject(forKey defaultName: String)
 }
 
+/// Non-conforming Foundation bridge preventing intra-type method-name collisions with `PreferencesProviding` in static call graphs (`AR-007`).
+private struct FoundationUserDefaultsBridge: @unchecked Sendable {
+    let defaults: UserDefaults
+
+    func readString(_ key: String) -> String? { defaults.string(forKey: key) }
+    func readInteger(_ key: String) -> Int { defaults.integer(forKey: key) }
+    func readDouble(_ key: String) -> Double { defaults.double(forKey: key) }
+    func readBool(_ key: String) -> Bool { defaults.bool(forKey: key) }
+    func readData(_ key: String) -> Data? { defaults.data(forKey: key) }
+    func readObject(_ key: String) -> Any? { defaults.object(forKey: key) }
+    func writeValue(_ value: Any?, key: String) { defaults.set(value, forKey: key) }
+    func deleteValue(_ key: String) { defaults.removeObject(forKey: key) }
+}
+
 /// Production `PreferencesProviding` adapter backed by the app container's `UserDefaults.standard` (default when `suiteName == nil`) or an explicit suite (`PERF-003`).
 public final class UserDefaultsPreferencesStore: PreferencesProviding, @unchecked Sendable {
-    private let defaults: UserDefaults
+    private let bridge: FoundationUserDefaultsBridge
 
     public init(suiteName: String? = nil) {
         if let suiteName, let suiteDefaults = UserDefaults(suiteName: suiteName) {
-            self.defaults = suiteDefaults
+            self.bridge = FoundationUserDefaultsBridge(defaults: suiteDefaults)
         } else {
-            self.defaults = .standard
+            self.bridge = FoundationUserDefaultsBridge(defaults: .standard)
         }
     }
 
     public func string(forKey defaultName: String) -> String? {
-        defaults.string(forKey: defaultName)
+        bridge.readString(defaultName)
     }
 
     public func integer(forKey defaultName: String) -> Int {
-        defaults.integer(forKey: defaultName)
+        bridge.readInteger(defaultName)
     }
 
     public func double(forKey defaultName: String) -> Double {
-        defaults.double(forKey: defaultName)
+        bridge.readDouble(defaultName)
     }
 
     public func bool(forKey defaultName: String) -> Bool {
-        defaults.bool(forKey: defaultName)
+        bridge.readBool(defaultName)
     }
 
     public func data(forKey defaultName: String) -> Data? {
-        defaults.data(forKey: defaultName)
+        bridge.readData(defaultName)
     }
 
     public func object(forKey defaultName: String) -> Any? {
-        defaults.object(forKey: defaultName)
+        bridge.readObject(defaultName)
     }
 
     public func set(_ value: Any?, forKey defaultName: String) {
-        defaults.set(value, forKey: defaultName)
+        bridge.writeValue(value, key: defaultName)
     }
 
     public func removeObject(forKey defaultName: String) {
-        defaults.removeObject(forKey: defaultName)
+        bridge.deleteValue(defaultName)
     }
 }
 

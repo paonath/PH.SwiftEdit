@@ -153,7 +153,7 @@ public struct WorkspaceTabSession: Equatable, Sendable {
         guard let sourceIndex = tabs.firstIndex(where: { $0.id == id }) else {
             throw DomainError.tabNotFound(id)
         }
-        moveTab(fromIndex: sourceIndex, toIndex: destinationIndex)
+        relocateTabAtIndices(fromIndex: sourceIndex, toIndex: destinationIndex)
     }
 
     /// Moves the tab matching `id` one slot left inside its pinned or unpinned partition (`BC-006`, `BC-008`).
@@ -162,7 +162,7 @@ public struct WorkspaceTabSession: Equatable, Sendable {
         guard let sourceIndex = tabs.firstIndex(where: { $0.id == id }) else {
             throw DomainError.tabNotFound(id)
         }
-        moveTab(fromIndex: sourceIndex, toIndex: sourceIndex - 1)
+        relocateTabAtIndices(fromIndex: sourceIndex, toIndex: sourceIndex - 1)
     }
 
     /// Moves the tab matching `id` one slot right inside its pinned or unpinned partition (`BC-006`, `BC-008`).
@@ -171,10 +171,10 @@ public struct WorkspaceTabSession: Equatable, Sendable {
         guard let sourceIndex = tabs.firstIndex(where: { $0.id == id }) else {
             throw DomainError.tabNotFound(id)
         }
-        moveTab(fromIndex: sourceIndex, toIndex: sourceIndex + 1)
+        relocateTabAtIndices(fromIndex: sourceIndex, toIndex: sourceIndex + 1)
     }
 
-    private mutating func moveTab(fromIndex sourceIndex: Int, toIndex destinationIndex: Int) {
+    private mutating func relocateTabAtIndices(fromIndex sourceIndex: Int, toIndex destinationIndex: Int) {
         let range = partitionRange(forPinned: tabs[sourceIndex].isPinned)
         let clampedDestination = min(max(destinationIndex, range.lowerBound), range.upperBound)
         guard clampedDestination != sourceIndex else { return }

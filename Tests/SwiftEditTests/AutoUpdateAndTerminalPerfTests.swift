@@ -129,4 +129,48 @@ struct AutoUpdateAndTerminalPerfTests {
         }
         termView.removeFromSuperview()
     }
+
+    @Test("P7-UPD: checkForUpdates and performUpdateCheck delegate to GitHubReleaseUpdateChecker.evaluateReleaseUpdate without mutual recursion")
+    func p7UpdateCheckerDisambiguatedFromWorkbenchCommand() async throws {
+        // GIVEN a stubbed GitHub release response and a workbench model wired to that checker
+        struct LocalStubFetcher: HTTPDataFetching {
+            let payload: Data
+            func fetch(request: URLRequest) async throws -> (Data, Int) {
+                (payload, 200)
+            }
+        }
+        let releaseJSON = Data("""
+        {
+          "tag_name": "v0.2.0",
+          "html_url": "https://github.com/paonath/PH.SwiftEdit/releases/tag/v0.2.0",
+          "draft": false
+        }
+        """.utf8)
+        let checker = GitHubReleaseUpdateChecker(fetcher: LocalStubFetcher(payload: releaseJSON))
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let checkerSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/SwiftEditUI/Updates/GitHubReleaseUpdateChecker.swift"),
+            encoding: .utf8
+        )
+        let workbenchUpdateSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/SwiftEditUI/Workbench/SwiftEditWorkbenchModel+TerminalLogAndUpdates.swift"),
+            encoding: .utf8
+        )
+
+        // WHEN evaluating release updates via the disambiguated API
+        let outcome = await checker.evaluateReleaseUpdate(currentVersion: "0.1.0")
+
+        // THEN evaluateReleaseUpdate returns updateAvailable and checkForUpdates(currentVersion:) is absent from GitHubReleaseUpdateChecker
+        #expect(outcome == .updateAvailable(
+            currentVersion: "0.1.0",
+            latestVersion: "0.2.0",
+            releaseURL: URL(string: "https://github.com/paonath/PH.SwiftEdit/releases/tag/v0.2.0")!,
+            downloadURL: nil
+        ))
+        #expect(!checkerSource.contains("func checkForUpdates(currentVersion:"))
+        #expect(workbenchUpdateSource.contains(".evaluateReleaseUpdate(currentVersion:"))
+    }
 }

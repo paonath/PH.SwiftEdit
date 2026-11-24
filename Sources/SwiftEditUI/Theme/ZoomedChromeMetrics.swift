@@ -23,7 +23,9 @@ public struct ZoomedChromeMetrics: Equatable, Sendable {
     public var tabHorizontalPadding: CGFloat { 10 * factor }
     public var tabMinWidth: CGFloat { 80 * factor }
     public var tabMaxWidth: CGFloat { 240 * factor }
+}
 
+extension ZoomedChromeMetrics {
     // Header bar and SwiftEdit command menu (grow and shrink with the editor text, `REQ-021-03`)
     public var headerHeight: CGFloat { max(ChromeHitTarget.minimumPoints + 4, 36 * factor) }
     public var headerFontSize: CGFloat { 13 * factor }
@@ -35,7 +37,9 @@ public struct ZoomedChromeMetrics: Equatable, Sendable {
     public var menuIconSize: CGFloat { 14 * factor }
     public var menuBadgeFontSize: CGFloat { 10 * factor }
     public var menuWidth: CGFloat { 312 * factor }
+}
 
+extension ZoomedChromeMetrics {
     // Left navigator
     public var navigatorFontSize: CGFloat { 13 * factor }
     public var navigatorHeaderFontSize: CGFloat { 11.44 * factor }

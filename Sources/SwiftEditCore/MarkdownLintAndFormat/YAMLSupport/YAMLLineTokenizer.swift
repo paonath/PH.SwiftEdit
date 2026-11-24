@@ -50,21 +50,13 @@ public enum YAMLLineTokenizer {
             return StructuralLine(isIgnored: true, hasDash: false, keyRange: nil, endsWithBlockScalar: false)
         }
         let base = line.startIndex
-        var end = line.endIndex
-        if end > base, line[end - 1] == cr { end -= 1 }
-        if end - base >= 3, (line[base] == dash || line[base] == dot),
-           line[base + 1] == line[base], line[base + 2] == line[base],
-           end - base == 3 || isBlank(line[base + 3]) {
+        let end = yamlTokenizerEffectiveEnd(line)
+        if yamlTokenizerHasDocMarkerPrefix(line, end: end) {
             return StructuralLine(isIgnored: true, hasDash: false, keyRange: nil, endsWithBlockScalar: false)
         }
         var i = base + indent
-        while i < end, isBlank(line[i]) { i += 1 }
-        var hasDash = false
-        while i < end, line[i] == dash, i + 1 == end || isBlank(line[i + 1]) {
-            hasDash = true
-            i += 1
-            while i < end, isBlank(line[i]) { i += 1 }
-        }
+        yamlTokenizerSkipBlanks(line, cursor: &i, end: end)
+        let hasDash = yamlTokenizerConsumeSequenceDashes(line, cursor: &i, end: end)
         guard i < end, line[i] != hash else {
             return StructuralLine(isIgnored: true, hasDash: hasDash, keyRange: nil, endsWithBlockScalar: false)
         }
@@ -72,13 +64,7 @@ public enum YAMLLineTokenizer {
             return StructuralLine(isIgnored: false, hasDash: hasDash, keyRange: nil, endsWithBlockScalar: false)
         }
         let keyRange = TextRange(location: i - base, length: keyResult.keyUpper - i)
-        var v = keyResult.colon + 1
-        while v < end, isBlank(line[v]) { v += 1 }
-        while v < end, line[v] == amp || line[v] == bang {
-            while v < end, !isBlank(line[v]) { v += 1 }
-            while v < end, isBlank(line[v]) { v += 1 }
-        }
-        let endsWithBlockScalar = v < end && (line[v] == pipe || line[v] == gt)
+        let endsWithBlockScalar = yamlTokenizerInspectAfterColon(line, from: keyResult.colon + 1, end: end)
         return StructuralLine(isIgnored: false, hasDash: hasDash, keyRange: keyRange, endsWithBlockScalar: endsWithBlockScalar)
     }
 
@@ -89,67 +75,47 @@ public enum YAMLLineTokenizer {
     public static func tokens(line: ArraySlice<UInt16>) -> [YAMLToken] {
         guard line.count <= YAMLSupportLimits.maxLineUTF16 else { return [] }
         let base = line.startIndex
-        var end = line.endIndex
-        if end > base, line[end - 1] == cr { end -= 1 }
+        let end = yamlTokenizerEffectiveEnd(line)
         var out: [YAMLToken] = []
-        func add(_ kind: YAMLTokenKind, _ from: Int, _ to: Int) {
-            guard to > from else { return }
-            out.append(YAMLToken(kind: kind, range: TextRange(location: from - base, length: to - from)))
-        }
-        func skipBlanks(_ i: inout Int) { while i < end, isBlank(line[i]) { i += 1 } }
-
         var i = base
+
         // Document markers live at column 0 only.
-        if end - base >= 3, (line[base] == dash || line[base] == dot),
-           line[base + 1] == line[base], line[base + 2] == line[base],
-           end - base == 3 || isBlank(line[base + 3]) {
-            add(.documentMarker, base, base + 3)
+        if yamlTokenizerHasDocMarkerPrefix(line, end: end) {
+            yamlTokenizerAppendToken(.documentMarker, from: base, to: base + 3, base: base, into: &out)
             i = base + 3
-            skipBlanks(&i)
-            scanValue(line, &i, end, add)
+            yamlTokenizerSkipBlanks(line, cursor: &i, end: end)
+            scanValue(line, cursor: &i, end: end, base: base, into: &out)
             return out
         }
-        skipBlanks(&i)
-        // Block-sequence dashes (`- - x`).
-        while i < end, line[i] == dash, i + 1 == end || isBlank(line[i + 1]) {
-            add(.listDash, i, i + 1)
-            i += 1
-            skipBlanks(&i)
-        }
+
+        yamlTokenizerSkipBlanks(line, cursor: &i, end: end)
+        yamlTokenizerEmitSequenceDashes(line, cursor: &i, end: end, base: base, into: &out)
         guard i < end else { return out }
-        if line[i] == hash { add(.comment, i, end); return out }
-        if let keyEnd = keyEnd(line, from: i, end: end) {
-            add(.key, i, keyEnd.keyUpper)
-            add(.colon, keyEnd.colon, keyEnd.colon + 1)
-            i = keyEnd.colon + 1
-            skipBlanks(&i)
+        if line[i] == hash {
+            yamlTokenizerAppendToken(.comment, from: i, to: end, base: base, into: &out)
+            return out
         }
-        scanValue(line, &i, end, add)
+        if let keyMatch = keyEnd(line, from: i, end: end) {
+            yamlTokenizerAppendToken(.key, from: i, to: keyMatch.keyUpper, base: base, into: &out)
+            yamlTokenizerAppendToken(.colon, from: keyMatch.colon, to: keyMatch.colon + 1, base: base, into: &out)
+            i = keyMatch.colon + 1
+            yamlTokenizerSkipBlanks(line, cursor: &i, end: end)
+        }
+        scanValue(line, cursor: &i, end: end, base: base, into: &out)
         return out
     }
 
     /// Returns the key's exclusive upper bound (trailing blanks trimmed) and the colon offset when a mapping key starts at `i`.
     static func keyEnd(_ line: ArraySlice<UInt16>, from i: Int, end: Int) -> (keyUpper: Int, colon: Int)? {
         let first = line[i]
-        func colonTerminates(_ k: Int) -> Bool { line[k] == colon && (k + 1 == end || isBlank(line[k + 1])) }
         if first == dquote || first == squote {
             let close = quotedEnd(line, from: i, end: end)
             var k = close
-            while k < end, isBlank(line[k]) { k += 1 }
-            return k < end && colonTerminates(k) ? (close, k) : nil
+            yamlTokenizerSkipBlanks(line, cursor: &k, end: end)
+            return k < end && yamlTokenizerColonTerminates(line, at: k, end: end) ? (close, k) : nil
         }
         guard !isFlowOrDirectiveIndicator(first) else { return nil }
-        var k = i
-        while k < end {
-            if line[k] == hash, k > i, isBlank(line[k - 1]) { return nil }
-            if colonTerminates(k) {
-                var upper = k
-                while upper > i, isBlank(line[upper - 1]) { upper -= 1 }
-                return upper > i ? (upper, k) : nil
-            }
-            k += 1
-        }
-        return nil
+        return yamlTokenizerUnquotedKeyEnd(line, from: i, end: end)
     }
 
     /// Exclusive end of a quoted scalar starting at `i`; an unterminated quote ends at `end`.
@@ -169,46 +135,26 @@ public enum YAMLLineTokenizer {
     }
 
     /// Scans the value part: properties (`&a`, `!t`), alias, block-scalar indicator, quoted/flow/plain scalar, then comment.
-    private static func scanValue(_ line: ArraySlice<UInt16>, _ i: inout Int, _ end: Int, _ add: (YAMLTokenKind, Int, Int) -> Void) {
-        func wordEnd(_ from: Int) -> Int { var k = from; while k < end, !isBlank(line[k]) { k += 1 }; return k }
-        func skipBlanks() { while i < end, isBlank(line[i]) { i += 1 } }
-        // Node properties may precede the content in any order.
-        while i < end, line[i] == amp || line[i] == bang {
-            let e = wordEnd(i)
-            add(line[i] == amp ? .anchor : .tag, i, e)
-            i = e
-            skipBlanks()
-        }
+    private static func scanValue(
+        _ line: ArraySlice<UInt16>,
+        cursor i: inout Int,
+        end: Int,
+        base: Int,
+        into out: inout [YAMLToken]
+    ) {
+        yamlTokenizerConsumeNodeProperties(line, cursor: &i, end: end, base: base, into: &out)
         guard i < end else { return }
-        let first = line[i]
-        if first == hash { add(.comment, i, end); i = end; return }
-        if first == star {
-            let e = wordEnd(i)
-            add(.alias, i, e)
-            i = e
-        } else if first == pipe || first == gt {
-            var k = i + 1
-            while k < end, line[k] == plus || line[k] == dash || (line[k] >= 0x30 && line[k] <= 0x39) { k += 1 }
-            add(.blockScalarIndicator, i, k)
-            i = k
-        } else if first == dquote || first == squote {
-            let e = quotedEnd(line, from: i, end: end)
-            add(.quotedString, i, e)
-            i = e
-        } else if first == lbracket || first == lbrace {
-            let e = flowEnd(line, from: i, end: end)
-            add(.value, i, e)
-            i = e
-        } else {
-            var k = i
-            while k < end, !(line[k] == hash && k > i && isBlank(line[k - 1])) { k += 1 }
-            var upper = k
-            while upper > i, isBlank(line[upper - 1]) { upper -= 1 }
-            add(.value, i, upper)
-            i = k
+        if line[i] == hash {
+            yamlTokenizerAppendToken(.comment, from: i, to: end, base: base, into: &out)
+            i = end
+            return
         }
-        skipBlanks()
-        if i < end, line[i] == hash { add(.comment, i, end); i = end }
+        yamlTokenizerConsumePrimaryValue(line, cursor: &i, end: end, base: base, into: &out)
+        yamlTokenizerSkipBlanks(line, cursor: &i, end: end)
+        if i < end, line[i] == hash {
+            yamlTokenizerAppendToken(.comment, from: i, to: end, base: base, into: &out)
+            i = end
+        }
     }
 
     /// Exclusive end of a flow collection (bracket depth tracked, quotes honored); unbalanced input ends at `end`.
@@ -226,5 +172,166 @@ public enum YAMLLineTokenizer {
             k += 1
         }
         return end
+    }
+}
+
+extension YAMLLineTokenizer {
+    @inline(__always)
+    private static func yamlTokenizerEffectiveEnd(_ line: ArraySlice<UInt16>) -> Int {
+        let base = line.startIndex
+        let end = line.endIndex
+        return (end > base && line[end - 1] == cr) ? (end - 1) : end
+    }
+
+    @inline(__always)
+    private static func yamlTokenizerAppendToken(
+        _ kind: YAMLTokenKind,
+        from: Int,
+        to: Int,
+        base: Int,
+        into out: inout [YAMLToken]
+    ) {
+        guard to > from else { return }
+        out.append(YAMLToken(kind: kind, range: TextRange(location: from - base, length: to - from)))
+    }
+
+    @inline(__always)
+    private static func yamlTokenizerSkipBlanks(_ line: ArraySlice<UInt16>, cursor i: inout Int, end: Int) {
+        while i < end, isBlank(line[i]) { i += 1 }
+    }
+
+    private static func yamlTokenizerWordEnd(_ line: ArraySlice<UInt16>, from start: Int, end: Int) -> Int {
+        var k = start
+        while k < end, !isBlank(line[k]) { k += 1 }
+        return k
+    }
+
+    @inline(__always)
+    private static func yamlTokenizerColonTerminates(_ line: ArraySlice<UInt16>, at k: Int, end: Int) -> Bool {
+        line[k] == colon && (k + 1 == end || isBlank(line[k + 1]))
+    }
+
+    private static func yamlTokenizerHasDocMarkerPrefix(_ line: ArraySlice<UInt16>, end: Int) -> Bool {
+        let base = line.startIndex
+        guard end - base >= 3, line[base] == dash || line[base] == dot else { return false }
+        guard line[base + 1] == line[base], line[base + 2] == line[base] else { return false }
+        return end - base == 3 || isBlank(line[base + 3])
+    }
+
+    private static func yamlTokenizerConsumeSequenceDashes(_ line: ArraySlice<UInt16>, cursor i: inout Int, end: Int) -> Bool {
+        var hasDash = false
+        while i < end, line[i] == dash, i + 1 == end || isBlank(line[i + 1]) {
+            hasDash = true
+            i += 1
+            yamlTokenizerSkipBlanks(line, cursor: &i, end: end)
+        }
+        return hasDash
+    }
+
+    private static func yamlTokenizerEmitSequenceDashes(
+        _ line: ArraySlice<UInt16>,
+        cursor i: inout Int,
+        end: Int,
+        base: Int,
+        into out: inout [YAMLToken]
+    ) {
+        while i < end, line[i] == dash, i + 1 == end || isBlank(line[i + 1]) {
+            yamlTokenizerAppendToken(.listDash, from: i, to: i + 1, base: base, into: &out)
+            i += 1
+            yamlTokenizerSkipBlanks(line, cursor: &i, end: end)
+        }
+    }
+
+    private static func yamlTokenizerInspectAfterColon(_ line: ArraySlice<UInt16>, from start: Int, end: Int) -> Bool {
+        var v = start
+        yamlTokenizerSkipBlanks(line, cursor: &v, end: end)
+        while v < end, line[v] == amp || line[v] == bang {
+            v = yamlTokenizerWordEnd(line, from: v, end: end)
+            yamlTokenizerSkipBlanks(line, cursor: &v, end: end)
+        }
+        return v < end && (line[v] == pipe || line[v] == gt)
+    }
+
+    private static func yamlTokenizerUnquotedKeyEnd(
+        _ line: ArraySlice<UInt16>,
+        from i: Int,
+        end: Int
+    ) -> (keyUpper: Int, colon: Int)? {
+        var k = i
+        while k < end {
+            if line[k] == hash, k > i, isBlank(line[k - 1]) { return nil }
+            if yamlTokenizerColonTerminates(line, at: k, end: end) {
+                var upper = k
+                while upper > i, isBlank(line[upper - 1]) { upper -= 1 }
+                return upper > i ? (upper, k) : nil
+            }
+            k += 1
+        }
+        return nil
+    }
+
+    private static func yamlTokenizerConsumeNodeProperties(
+        _ line: ArraySlice<UInt16>,
+        cursor i: inout Int,
+        end: Int,
+        base: Int,
+        into out: inout [YAMLToken]
+    ) {
+        while i < end, line[i] == amp || line[i] == bang {
+            let propEnd = yamlTokenizerWordEnd(line, from: i, end: end)
+            yamlTokenizerAppendToken(line[i] == amp ? .anchor : .tag, from: i, to: propEnd, base: base, into: &out)
+            i = propEnd
+            yamlTokenizerSkipBlanks(line, cursor: &i, end: end)
+        }
+    }
+
+    private static func yamlTokenizerConsumePrimaryValue(
+        _ line: ArraySlice<UInt16>,
+        cursor i: inout Int,
+        end: Int,
+        base: Int,
+        into out: inout [YAMLToken]
+    ) {
+        let first = line[i]
+        if first == star {
+            let aliasEnd = yamlTokenizerWordEnd(line, from: i, end: end)
+            yamlTokenizerAppendToken(.alias, from: i, to: aliasEnd, base: base, into: &out)
+            i = aliasEnd
+        } else if first == pipe || first == gt {
+            let indEnd = yamlTokenizerBlockScalarHeaderEnd(line, afterIndicator: i + 1, end: end)
+            yamlTokenizerAppendToken(.blockScalarIndicator, from: i, to: indEnd, base: base, into: &out)
+            i = indEnd
+        } else if first == dquote || first == squote {
+            let strEnd = quotedEnd(line, from: i, end: end)
+            yamlTokenizerAppendToken(.quotedString, from: i, to: strEnd, base: base, into: &out)
+            i = strEnd
+        } else if first == lbracket || first == lbrace {
+            let colEnd = flowEnd(line, from: i, end: end)
+            yamlTokenizerAppendToken(.value, from: i, to: colEnd, base: base, into: &out)
+            i = colEnd
+        } else {
+            yamlTokenizerConsumePlainScalar(line, cursor: &i, end: end, base: base, into: &out)
+        }
+    }
+
+    private static func yamlTokenizerBlockScalarHeaderEnd(_ line: ArraySlice<UInt16>, afterIndicator start: Int, end: Int) -> Int {
+        var k = start
+        while k < end, line[k] == plus || line[k] == dash || (line[k] >= 0x30 && line[k] <= 0x39) { k += 1 }
+        return k
+    }
+
+    private static func yamlTokenizerConsumePlainScalar(
+        _ line: ArraySlice<UInt16>,
+        cursor i: inout Int,
+        end: Int,
+        base: Int,
+        into out: inout [YAMLToken]
+    ) {
+        var k = i
+        while k < end, !(line[k] == hash && k > i && isBlank(line[k - 1])) { k += 1 }
+        var upper = k
+        while upper > i, isBlank(line[upper - 1]) { upper -= 1 }
+        yamlTokenizerAppendToken(.value, from: i, to: upper, base: base, into: &out)
+        i = k
     }
 }

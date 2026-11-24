@@ -55,52 +55,50 @@ public struct RGBAColorToken: Equatable, Sendable {
     }
 
     private static func parseHex(_ hex: String) -> (canonical: String, rawValue: UInt32) {
-        let utf8 = hex.utf8
-        var start = utf8.startIndex
-        var end = utf8.endIndex
-        while start < end && (utf8[start] == 0x20 || utf8[start] == 0x09 || utf8[start] == 0x0A || utf8[start] == 0x0D) {
-            start = utf8.index(after: start)
-        }
-        while end > start {
-            let prev = utf8.index(before: end)
-            let b = utf8[prev]
-            if b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D {
-                end = prev
-            } else {
-                break
-            }
-        }
-        if start < end && utf8[start] == 0x23 { // '#'
-            start = utf8.index(after: start)
-        }
+        let trimmed = trimHexPayloadBytes(Array(hex.utf8))
         var value: UInt32 = 0
-        var valid = (start < end)
+        var valid = !trimmed.isEmpty
         var upperBytes: [UInt8] = [0x23]
         upperBytes.reserveCapacity(7)
-        var idx = start
-        while idx < end {
-            var b = utf8[idx]
-            if b >= 0x61 && b <= 0x7A { b &= ~0x20 }
-            upperBytes.append(b)
-            let digit: UInt32?
-            if b >= 0x30 && b <= 0x39 {
-                digit = UInt32(b - 0x30)
-            } else if b >= 0x41 && b <= 0x46 {
-                digit = UInt32(b - 0x41 + 10)
-            } else {
-                digit = nil
-            }
-            if let d = digit, valid {
-                let (shifted, ov1) = value.multipliedReportingOverflow(by: 16)
-                let (sum, ov2) = shifted.addingReportingOverflow(d)
-                if ov1 || ov2 { valid = false; value = 0 } else { value = sum }
-            } else {
-                valid = false
-                value = 0
-            }
-            idx = utf8.index(after: idx)
+        for rawByte in trimmed {
+            let upper = (rawByte >= 0x61 && rawByte <= 0x7A) ? (rawByte & ~0x20) : rawByte
+            upperBytes.append(upper)
+            value = accumulateHexNibble(upper, current: value, valid: &valid)
         }
         return (String(decoding: upperBytes, as: UTF8.self), valid ? value : 0)
+    }
+
+    private static func trimHexPayloadBytes(_ bytes: [UInt8]) -> ArraySlice<UInt8> {
+        var start = 0
+        var end = bytes.count
+        while start < end && isHexASCIIWhitespace(bytes[start]) { start += 1 }
+        while end > start && isHexASCIIWhitespace(bytes[end - 1]) { end -= 1 }
+        if start < end && bytes[start] == 0x23 { start += 1 }
+        return bytes[start..<end]
+    }
+
+    private static func isHexASCIIWhitespace(_ byte: UInt8) -> Bool {
+        byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
+    }
+
+    private static func accumulateHexNibble(_ upperByte: UInt8, current: UInt32, valid: inout Bool) -> UInt32 {
+        guard valid, let digit = decodeUpperHexDigit(upperByte) else {
+            valid = false
+            return 0
+        }
+        let (shifted, ov1) = current.multipliedReportingOverflow(by: 16)
+        let (sum, ov2) = shifted.addingReportingOverflow(digit)
+        guard !ov1 && !ov2 else {
+            valid = false
+            return 0
+        }
+        return sum
+    }
+
+    private static func decodeUpperHexDigit(_ upperByte: UInt8) -> UInt32? {
+        if upperByte >= 0x30 && upperByte <= 0x39 { return UInt32(upperByte - 0x30) }
+        if upperByte >= 0x41 && upperByte <= 0x46 { return UInt32(upperByte - 0x41 + 10) }
+        return nil
     }
 
     /// WCAG 2.2 relative luminance (`0.0` pure black to `1.0` pure white).
@@ -190,120 +188,39 @@ public enum ResolvedThemeMode: String, Equatable, Sendable {
     case black
 }
 
-/// Semantic Concept E2 Feather-in-Triangle Purple (`Viola`) workspace chrome palette and `#FFFFFF`/`#000000` inverted editor canvas (`UI-001..003`, `UI-009`).
-///
-/// Intentionally omits `brandGround` so `SwiftEditUI` views cannot hardcode near-black `#0B0614` surfaces in Light mode (`CWE-451`).
-public struct PurpleThemePalette: Equatable, Sendable {
-    /// Active resolved Light or Black theme mode.
-    public let mode: ResolvedThemeMode
-    /// Concept E2 feather bottom anchor (`#7C3AED`).
-    public let primaryAccent: RGBAColorToken
-    /// Concept E2 inverted-triangle stroke anchor (`#A78BFA`).
-    public let strokeLavender: RGBAColorToken
-    /// Concept E2 feather top highlight anchor (`#C4B5FD`).
-    public let featherHighlight: RGBAColorToken
-    /// Default workspace chrome container surface (`#F5F3FF` Light, `#0B0614` Black).
-    public let chromeSurface: RGBAColorToken
-    /// Primary text and icon foreground across chrome and modal sheets (`#1E1035` Light, `#EDE9FE` Black, `>= 12.1:1`).
-    public let chromeForeground: RGBAColorToken
-    /// Pure editor canvas background (`#FFFFFF` Light, `#000000` Black, `21:1` contrast) (`UI-002`).
-    public let editorCanvasBackground: RGBAColorToken
-    /// Pure editor canvas primary text (`#000000` Light, `#FFFFFF` Black, `21:1` contrast) (`UI-002`).
-    public let editorCanvasText: RGBAColorToken
-    /// Subtle full-width current-line highlight (`#F3F0FA` Light, `#161224` Black) (`UI-002`).
-    public let currentLineHighlight: RGBAColorToken
-    /// Depth-indexed nested bracket pair colors verified at `>= 4.5:1` against `editorCanvasBackground` (`AR-012`, `UI-002`).
-    public let nestedBracketPalette: [RGBAColorToken]
-    /// Background highlight pill behind the active matched bracket pair (`UI-002`).
-    public let activeBracketHighlight: RGBAColorToken
-    /// Error foreground color applied to unbalanced bracket delimiters (`#991B1B` Light, `#FCA5A5` Black, `>= 6.78:1` against `unbalancedBracketBackground`, `CWE-451`, `UI-002`).
-    public let unbalancedBracketHighlight: RGBAColorToken
-    /// Opaque pill background paired with `unbalancedBracketHighlight` (`#FEE2E2` Light, `#450A0A` Black, `>= 6.78:1` WCAG 2.2 AA contrast) (`UI-002`, `UI-009`).
-    public let unbalancedBracketBackground: RGBAColorToken
-    /// Trojan Source Unicode BiDi warning text foreground (`#78350F` Light, `#FDE68A` Black, `>= 8.15:1` contrast, `CVE-2021-42574`, `CWE-451`, `UI-008`).
+/// Safety, Trojan Source BiDi, binary quarantine, and raw-HTML warning banner tokens (`UI-006`, `UI-008`, `DATA-003`).
+public struct PurpleWarningBannerPalette: Equatable, Sendable {
     public let bidiWarningForeground: RGBAColorToken
-    /// Trojan Source Unicode BiDi warning banner background (`#FEF3C7` Light, `#451A03` Black, `CVE-2021-42574`, `UI-008`).
     public let bidiWarningBackground: RGBAColorToken
-    /// Trojan Source Unicode BiDi warning border (`#B45309` Light, `#F59E0B` Black, `>= 4.56:1` against `chromeSurface`, `CVE-2021-42574`, `UI-008`).
     public let bidiWarningBorder: RGBAColorToken
-    /// Binary read-only quarantine banner text foreground (`#7C2D12` Light, `#FED7AA` Black, `>= 8.18:1` contrast, `CWE-451`, `DATA-003`, `UI-008`).
     public let binaryQuarantineForeground: RGBAColorToken
-    /// Binary read-only quarantine banner background (`#FFEDD5` Light, `#431407` Black, `DATA-003`, `UI-008`).
     public let binaryQuarantineBackground: RGBAColorToken
-    /// Binary read-only quarantine banner border (`#C2410C` Light, `#FB923C` Black, `>= 4.69:1` against `chromeSurface`, `DATA-003`, `UI-008`).
     public let binaryQuarantineBorder: RGBAColorToken
-    /// Inert raw-HTML preview block text foreground (`#7F1D1D` Light, `#FECACA` Black, `>= 8.17:1` contrast, `CWE-451`, `UI-006`).
     public let inertHTMLWarningForeground: RGBAColorToken
-    /// Inert raw-HTML preview block background (`#FEE2E2` Light, `#450A0A` Black, `UI-006`).
     public let inertHTMLWarningBackground: RGBAColorToken
-    /// Inert raw-HTML preview block border (`#DC2626` Light, `#EF4444` Black, `>= 3.0:1` against `chromeSurface`, `UI-006`).
     public let inertHTMLWarningBorder: RGBAColorToken
-    /// Background tint for inline backtick code spans (`` `...` ``) (`UI-002`).
-    public let backtickInlineBackground: RGBAColorToken
-    /// Background tint for multiline fenced code blocks (`` ```...``` ``) (`UI-002`).
-    public let backtickMultilineBackground: RGBAColorToken
-    /// Accent foreground applied to inline and fenced backtick code spans (`UI-002`).
-    public let backtickForeground: RGBAColorToken
-    /// Muted disabled foreground for quarantined binary files in the left sidebar (`#52525B` Light, `#9CA3AF` Black) (`DATA-003`, `UI-008`).
     public let sidebarBinaryDisabledText: RGBAColorToken
-    /// Top header bar surface (`#F6F5F9` Light, `#100E14` Black; Zed-neutral, v1.7.0).
-    public let topBarSurface: RGBAColorToken
-    /// Modal dialog surface for `AboutSheetView` and `KeyboardShortcutsCheatSheetView` (`#F3E8FF` Light, `#0B0614` Black).
-    public let sheetSurface: RGBAColorToken
-    /// Collapsible left Folder Navigator surface (`#EDE0FF` Light, `#140A24` Black).
-    public let sidebarSurface: RGBAColorToken
-    /// Right-column Notepad++-style tab strip surface (`#E9D5FF` Light, `#180C2C` Black).
-    public let tabBarSurface: RGBAColorToken
-    /// Selected editor tab background seamlessly matching `editorCanvasBackground` (`#FFFFFF` Light, `#000000` Black).
-    public let tabActiveSurface: RGBAColorToken
-    /// Pin badge and dirty-indicator accent on editor tabs (`#7C3AED` Light, `#C4B5FD` Black).
-    public let pinnedTabBadge: RGBAColorToken
-    /// Find/Replace/Go-to-Line bar surface (`0.96` alpha, clamped to `1.0` under `reduceTransparency` or `increasedContrast`).
-    public let findBarSurface: RGBAColorToken
-    /// Translucent header brand submenu surface (`0.90` alpha, clamped to `1.0` under `reduceTransparency` or `increasedContrast`).
-    public let submenuTranslucentSurface: RGBAColorToken
-    /// Left 1-based line-number gutter surface (`#F5F3FF` Light, `#0B0614` Black).
-    public let gutterSurface: RGBAColorToken
-    /// Inactive line-number foreground (`#5B21B6` Light, `#A78BFA` Black, `>= 6.8:1`).
-    public let gutterForeground: RGBAColorToken
-    /// Active caret-line number foreground (`#1E1035` Light, `#EDE9FE` Black, `>= 15.0:1`).
-    public let gutterActiveForeground: RGBAColorToken
-    /// Bottom status-bar surface, same neutral as the header (`#F6F5F9` Light, `#100E14` Black, v1.7.0).
-    public let statusBarSurface: RGBAColorToken
-    /// Bottom status-bar muted foreground (`#5E5A6B` Light, `#A29EAE` Black, `>= 4.5:1`).
-    public let statusBarForeground: RGBAColorToken
-    /// Secondary chrome text and muted label foreground (`#5B21B6` Light, `#C4B5FD` Black, `>= 6.6:1`).
-    public let secondaryForeground: RGBAColorToken
-    /// Interactive chrome icon, focus-ring, and active-tab border accent (`#7C3AED` Light, `#A78BFA` Black, `>= 3.0:1`).
-    public let chromeAccent: RGBAColorToken
-    /// Prominent selected-pill and primary-button fill (`#7C3AED`).
-    public let activeControlFill: RGBAColorToken
-    /// Foreground paired with `activeControlFill` (`#FFFFFF`, `5.70:1`).
-    public let activeControlForeground: RGBAColorToken
-    /// Shortcut-badge and selector-track container surface (`#E9D5FF` Light, `#2E1065` Black).
-    public let badgeSurface: RGBAColorToken
-    /// `1pt` neutral chrome separator (`#E3E0EA` / `#25212D`), stepped up to neutral `#858191` / `#6F6A7E` (`>= 3.0:1`) under `reduceTransparency` or `increasedContrast` (v1.7.0).
-    public let hairlineBorder: RGBAColorToken
-    /// High-contrast active text-selection background inside `TextKit2EditorView` (`#6D28D9` Light, `#A78BFA` Black).
-    public let selectionBackground: RGBAColorToken
-    /// High-contrast foreground text paired with `selectionBackground` (`#FFFFFF` Light 8.9:1, `#000000` Black 7.1:1, WCAG AAA).
-    public let selectionForeground: RGBAColorToken
-    /// Soft accent surface for highlighted menu/palette rows and active toggles (`#EDE7FD` Light, `#241B3A` Black, v1.7.0).
-    public let accentSoftSurface: RGBAColorToken
-    /// Soft secondary highlight background for other whole-word occurrences of the selected word (`#EDE9FE` Light, `#23173D` Black).
+}
+
+/// Editor syntax, bracket-pair, backtick, word-occurrence, and Myers diff canvas tokens (`AR-012`, `UI-002`, `UI-009`).
+public struct PurpleEditorSyntaxPalette: Equatable, Sendable {
+    public let nestedBracketPalette: [RGBAColorToken]
+    public let activeBracketHighlight: RGBAColorToken
+    public let unbalancedBracketHighlight: RGBAColorToken
+    public let unbalancedBracketBackground: RGBAColorToken
+    public let backtickInlineBackground: RGBAColorToken
+    public let backtickMultilineBackground: RGBAColorToken
+    public let backtickForeground: RGBAColorToken
     public let wordOccurrenceBackground: RGBAColorToken
-    /// Subtle underline cue paired with `wordOccurrenceBackground` so matches never rely on color alone (WCAG 1.4.1).
     public let wordOccurrenceUnderline: RGBAColorToken
-    /// Inserted-line background in Side-by-Side Myers Diff (`#DCFCE7` Light, `#052E16` Black).
     public let diffInsertedBackground: RGBAColorToken
-    /// Removed-line background in Side-by-Side Myers Diff (`#FEE2E2` Light, `#450A0A` Black).
     public let diffRemovedBackground: RGBAColorToken
-    /// YAML key foreground (`#6B7280` Light 4.83:1, `#9CA3AF` Black 8.6:1); values keep `editorCanvasText` (`REQ-010`, `UI-009`).
     public let yamlKeyForeground: RGBAColorToken
-    /// Editor link/image text (`#7C3AED` Light 5.7:1, `#A78BFA` Black 7.0:1); `primaryAccent` on black was 3.69:1 (`F-017-02`).
     public let linkForeground: RGBAColorToken
-    /// Log severity foregrounds (`trace`…`error`) on the editor canvas, all `>= 4.5:1`; `critical` is drawn as
-    /// `logCriticalForeground` on `logCriticalBackground` (VS Code log grammar mapping).
+}
+
+/// Log viewer severity and structured token foreground/background colors (`>= 4.5:1` contrast on editor canvas).
+public struct PurpleLogSyntaxPalette: Equatable, Sendable {
     public let logTraceForeground: RGBAColorToken
     public let logDebugForeground: RGBAColorToken
     public let logInfoForeground: RGBAColorToken
@@ -315,26 +232,161 @@ public struct PurpleThemePalette: Equatable, Sendable {
     public let logGuidForeground: RGBAColorToken
     public let logStringForeground: RGBAColorToken
     public let logExceptionForeground: RGBAColorToken
+}
+
+/// Workspace container, header, sheet, sidebar, tab-strip, find-bar, and submenu surface tokens grouped out of `PurpleThemePalette` (`UI-001..003`).
+public struct PurpleChromeSurfacesPalette: Equatable, Sendable {
+    public let chromeSurface: RGBAColorToken
+    public let chromeForeground: RGBAColorToken
+    public let topBarSurface: RGBAColorToken
+    public let sheetSurface: RGBAColorToken
+    public let sidebarSurface: RGBAColorToken
+    public let tabBarSurface: RGBAColorToken
+    public let tabActiveSurface: RGBAColorToken
+    public let pinnedTabBadge: RGBAColorToken
+    public let findBarSurface: RGBAColorToken
+    public let submenuTranslucentSurface: RGBAColorToken
+}
+
+/// Gutter, status bar, badge, border, and selection tokens grouped out of `PurpleThemePalette` (`UI-001..003`).
+public struct PurpleChromeControlsPalette: Equatable, Sendable {
+    public let gutterSurface: RGBAColorToken
+    public let gutterForeground: RGBAColorToken
+    public let gutterActiveForeground: RGBAColorToken
+    public let statusBarSurface: RGBAColorToken
+    public let statusBarForeground: RGBAColorToken
+    public let secondaryForeground: RGBAColorToken
+    public let badgeSurface: RGBAColorToken
+    public let hairlineBorder: RGBAColorToken
+    public let selectionBackground: RGBAColorToken
+    public let selectionForeground: RGBAColorToken
+    public let accentSoftSurface: RGBAColorToken
+}
+
+/// Semantic Concept E2 Feather-in-Triangle Purple (`Viola`) workspace chrome palette and `#FFFFFF`/`#000000` inverted editor canvas (`UI-001..003`, `UI-009`).
+///
+/// Intentionally omits `brandGround` so `SwiftEditUI` views cannot hardcode near-black `#0B0614` surfaces in Light mode (`CWE-451`).
+/// Groups chrome-surface, chrome-control, warning, editor-syntax, and log-syntax sub-palettes (`<= 20` members per block) while exposing flat token properties via extensions.
+public struct PurpleThemePalette: Equatable, Sendable {
+    /// Active resolved Light or Black theme mode.
+    public let mode: ResolvedThemeMode
+    /// Concept E2 feather bottom anchor (`#7C3AED`).
+    public let primaryAccent: RGBAColorToken
+    /// Concept E2 inverted-triangle stroke anchor (`#A78BFA`).
+    public let strokeLavender: RGBAColorToken
+    /// Concept E2 feather top highlight anchor (`#C4B5FD`).
+    public let featherHighlight: RGBAColorToken
+    /// Pure editor canvas background (`#FFFFFF` Light, `#000000` Black, `21:1` contrast) (`UI-002`).
+    public let editorCanvasBackground: RGBAColorToken
+    /// Pure editor canvas primary text (`#000000` Light, `#FFFFFF` Black, `21:1` contrast) (`UI-002`).
+    public let editorCanvasText: RGBAColorToken
+    /// Subtle full-width current-line highlight (`#F3F0FA` Light, `#161224` Black) (`UI-002`).
+    public let currentLineHighlight: RGBAColorToken
+    /// Interactive chrome icon, focus-ring, and active-tab border accent (`#7C3AED` Light, `#A78BFA` Black, `>= 3.0:1`).
+    public let chromeAccent: RGBAColorToken
+    /// Prominent selected-pill and primary-button fill (`#7C3AED`).
+    public let activeControlFill: RGBAColorToken
+    /// Foreground paired with `activeControlFill` (`#FFFFFF`, `5.70:1`).
+    public let activeControlForeground: RGBAColorToken
+    /// Grouped workspace container, header, sheet, sidebar, tab, find-bar, and submenu surfaces (`UI-001..003`).
+    public let surfaces: PurpleChromeSurfacesPalette
+    /// Grouped gutter, status bar, badge, border, and selection tokens (`UI-001..003`).
+    public let controls: PurpleChromeControlsPalette
+    /// Grouped safety and quarantine warning banner tokens (`UI-006`, `UI-008`, `DATA-003`).
+    public let warnings: PurpleWarningBannerPalette
+    /// Grouped editor syntax, bracket, backtick, occurrence, and diff tokens (`UI-002`, `UI-009`).
+    public let syntax: PurpleEditorSyntaxPalette
+    /// Grouped log viewer severity and structured highlight tokens.
+    public let logs: PurpleLogSyntaxPalette
+}
+
+/// Backward-compatible flat accessors for workspace chrome surface tokens (`UI-001..003`).
+public extension PurpleThemePalette {
+    var chromeSurface: RGBAColorToken { surfaces.chromeSurface }
+    var chromeForeground: RGBAColorToken { surfaces.chromeForeground }
+    var topBarSurface: RGBAColorToken { surfaces.topBarSurface }
+    var sheetSurface: RGBAColorToken { surfaces.sheetSurface }
+    var sidebarSurface: RGBAColorToken { surfaces.sidebarSurface }
+    var tabBarSurface: RGBAColorToken { surfaces.tabBarSurface }
+    var tabActiveSurface: RGBAColorToken { surfaces.tabActiveSurface }
+    var pinnedTabBadge: RGBAColorToken { surfaces.pinnedTabBadge }
+    var findBarSurface: RGBAColorToken { surfaces.findBarSurface }
+    var submenuTranslucentSurface: RGBAColorToken { surfaces.submenuTranslucentSurface }
+}
+
+/// Backward-compatible flat accessors for chrome control, gutter, status bar, and selection tokens (`UI-001..003`).
+public extension PurpleThemePalette {
+    var gutterSurface: RGBAColorToken { controls.gutterSurface }
+    var gutterForeground: RGBAColorToken { controls.gutterForeground }
+    var gutterActiveForeground: RGBAColorToken { controls.gutterActiveForeground }
+    var statusBarSurface: RGBAColorToken { controls.statusBarSurface }
+    var statusBarForeground: RGBAColorToken { controls.statusBarForeground }
+    var secondaryForeground: RGBAColorToken { controls.secondaryForeground }
+    var badgeSurface: RGBAColorToken { controls.badgeSurface }
+    var hairlineBorder: RGBAColorToken { controls.hairlineBorder }
+    var selectionBackground: RGBAColorToken { controls.selectionBackground }
+    var selectionForeground: RGBAColorToken { controls.selectionForeground }
+    var accentSoftSurface: RGBAColorToken { controls.accentSoftSurface }
+}
+
+/// Backward-compatible flat accessors for warning banner tokens (`UI-006`, `UI-008`, `DATA-003`).
+public extension PurpleThemePalette {
+    var bidiWarningForeground: RGBAColorToken { warnings.bidiWarningForeground }
+    var bidiWarningBackground: RGBAColorToken { warnings.bidiWarningBackground }
+    var bidiWarningBorder: RGBAColorToken { warnings.bidiWarningBorder }
+    var binaryQuarantineForeground: RGBAColorToken { warnings.binaryQuarantineForeground }
+    var binaryQuarantineBackground: RGBAColorToken { warnings.binaryQuarantineBackground }
+    var binaryQuarantineBorder: RGBAColorToken { warnings.binaryQuarantineBorder }
+    var inertHTMLWarningForeground: RGBAColorToken { warnings.inertHTMLWarningForeground }
+    var inertHTMLWarningBackground: RGBAColorToken { warnings.inertHTMLWarningBackground }
+    var inertHTMLWarningBorder: RGBAColorToken { warnings.inertHTMLWarningBorder }
+    var sidebarBinaryDisabledText: RGBAColorToken { warnings.sidebarBinaryDisabledText }
+}
+
+/// Backward-compatible flat accessors for editor syntax, bracket, backtick, occurrence, and diff tokens (`UI-002`, `UI-009`).
+public extension PurpleThemePalette {
+    var nestedBracketPalette: [RGBAColorToken] { syntax.nestedBracketPalette }
+    var activeBracketHighlight: RGBAColorToken { syntax.activeBracketHighlight }
+    var unbalancedBracketHighlight: RGBAColorToken { syntax.unbalancedBracketHighlight }
+    var unbalancedBracketBackground: RGBAColorToken { syntax.unbalancedBracketBackground }
+    var backtickInlineBackground: RGBAColorToken { syntax.backtickInlineBackground }
+    var backtickMultilineBackground: RGBAColorToken { syntax.backtickMultilineBackground }
+    var backtickForeground: RGBAColorToken { syntax.backtickForeground }
+    var wordOccurrenceBackground: RGBAColorToken { syntax.wordOccurrenceBackground }
+    var wordOccurrenceUnderline: RGBAColorToken { syntax.wordOccurrenceUnderline }
+    var diffInsertedBackground: RGBAColorToken { syntax.diffInsertedBackground }
+    var diffRemovedBackground: RGBAColorToken { syntax.diffRemovedBackground }
+    var yamlKeyForeground: RGBAColorToken { syntax.yamlKeyForeground }
+    var linkForeground: RGBAColorToken { syntax.linkForeground }
+}
+
+/// Log syntax token accessors, nested bracket lookup, and cached Light/Black palette resolution (`UI-001..003`, `UI-009`).
+public extension PurpleThemePalette {
+    var logTraceForeground: RGBAColorToken { logs.logTraceForeground }
+    var logDebugForeground: RGBAColorToken { logs.logDebugForeground }
+    var logInfoForeground: RGBAColorToken { logs.logInfoForeground }
+    var logWarnForeground: RGBAColorToken { logs.logWarnForeground }
+    var logErrorForeground: RGBAColorToken { logs.logErrorForeground }
+    var logCriticalForeground: RGBAColorToken { logs.logCriticalForeground }
+    var logCriticalBackground: RGBAColorToken { logs.logCriticalBackground }
+    var logTimestampForeground: RGBAColorToken { logs.logTimestampForeground }
+    var logGuidForeground: RGBAColorToken { logs.logGuidForeground }
+    var logStringForeground: RGBAColorToken { logs.logStringForeground }
+    var logExceptionForeground: RGBAColorToken { logs.logExceptionForeground }
 
     /// Returns the deterministic depth-indexed color for a matched nested bracket pair (`AR-012`).
-    public func nestedBracketColor(forDepth depth: Int) -> RGBAColorToken {
+    func nestedBracketColor(forDepth depth: Int) -> RGBAColorToken {
         guard !nestedBracketPalette.isEmpty else { return primaryAccent }
         return nestedBracketPalette[max(0, depth) % nestedBracketPalette.count]
     }
 
-    /// Resolves Concept E2 Purple chrome tokens, pure `#FFFFFF`/`#000000` inverted editor canvas tokens, and accessibility overrides.
-    /// - Parameters:
-    ///   - appearance: Requested `Light`, `Black`, or `Auto` preference mode.
-    ///   - systemPrefersDark: Unmasked host OS dark-mode state consulted when `appearance == .auto`.
-    ///   - reduceTransparency: Clamps `submenuTranslucentSurface` and `findBarSurface` to `1.0` alpha and steps up `hairlineBorder` contrast when `true`.
-    ///   - increasedContrast: Clamps translucent chrome surfaces to `1.0` alpha and steps up `hairlineBorder` to `>= 3.0:1` when `true`.
-    /// - Returns: Contrast-verified `PurpleThemePalette` value snapshot.
     private static let lightStandard: PurpleThemePalette = buildPalette(mode: .light, clampOpaque: false)
     private static let lightHighContrast: PurpleThemePalette = buildPalette(mode: .light, clampOpaque: true)
     private static let blackStandard: PurpleThemePalette = buildPalette(mode: .black, clampOpaque: false)
     private static let blackHighContrast: PurpleThemePalette = buildPalette(mode: .black, clampOpaque: true)
 
-    public static func resolve(
+    /// Resolves Concept E2 Purple chrome tokens, pure `#FFFFFF`/`#000000` inverted editor canvas tokens, and accessibility overrides.
+    static func resolve(
         appearance: AppearanceMode,
         systemPrefersDark: Bool = true,
         reduceTransparency: Bool = false,
@@ -356,7 +408,6 @@ public struct PurpleThemePalette: Equatable, Sendable {
     }
 
     private static func buildPalette(mode resolvedMode: ResolvedThemeMode, clampOpaque: Bool) -> PurpleThemePalette {
-        let darkGround = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.groundHex)
         let primaryAccent = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherBottomHex)
         let strokeLavender = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.triangleStrokeHex)
         let featherHighlight = RGBAColorToken(hex: SwiftEditBrandLogoGeometry.featherTopHex)
@@ -368,72 +419,82 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 primaryAccent: primaryAccent,
                 strokeLavender: strokeLavender,
                 featherHighlight: featherHighlight,
-                chromeSurface: RGBAColorToken(hex: "#F6F5F9"),
-                chromeForeground: RGBAColorToken(hex: "#1C1A22"),
                 editorCanvasBackground: RGBAColorToken(hex: "#FFFFFF"),
                 editorCanvasText: RGBAColorToken(hex: "#000000"),
                 currentLineHighlight: RGBAColorToken(hex: "#F3F0FA"),
-                nestedBracketPalette: [
-                    RGBAColorToken(hex: "#6D28D9"),
-                    RGBAColorToken(hex: "#0369A1"),
-                    RGBAColorToken(hex: "#047857"),
-                    RGBAColorToken(hex: "#B45309"),
-                ],
-                activeBracketHighlight: RGBAColorToken(hex: "#EDE9FE"),
-                unbalancedBracketHighlight: RGBAColorToken(hex: "#991B1B"),
-                unbalancedBracketBackground: RGBAColorToken(hex: "#FEE2E2"),
-                bidiWarningForeground: RGBAColorToken(hex: "#78350F"),
-                bidiWarningBackground: RGBAColorToken(hex: "#FEF3C7"),
-                bidiWarningBorder: RGBAColorToken(hex: "#B45309"),
-                binaryQuarantineForeground: RGBAColorToken(hex: "#7C2D12"),
-                binaryQuarantineBackground: RGBAColorToken(hex: "#FFEDD5"),
-                binaryQuarantineBorder: RGBAColorToken(hex: "#C2410C"),
-                inertHTMLWarningForeground: RGBAColorToken(hex: "#7F1D1D"),
-                inertHTMLWarningBackground: RGBAColorToken(hex: "#FEE2E2"),
-                inertHTMLWarningBorder: RGBAColorToken(hex: "#DC2626"),
-                backtickInlineBackground: RGBAColorToken(hex: "#F7F0D4"),
-                backtickMultilineBackground: RGBAColorToken(hex: "#FBF6E2"),
-                backtickForeground: RGBAColorToken(hex: "#3F2E00"),
-                sidebarBinaryDisabledText: RGBAColorToken(hex: "#52525B"),
-                topBarSurface: RGBAColorToken(hex: "#F6F5F9"),
-                sheetSurface: RGBAColorToken(hex: "#F8F7FA"),
-                sidebarSurface: RGBAColorToken(hex: "#F3F2F7"),
-                tabBarSurface: RGBAColorToken(hex: "#EFEDF4"),
-                tabActiveSurface: RGBAColorToken(hex: "#FFFFFF"),
-                pinnedTabBadge: RGBAColorToken(hex: "#7C3AED"),
-                findBarSurface: RGBAColorToken(hex: "#F6F5F9", alpha: clampOpaque ? 1.0 : 0.96),
-                submenuTranslucentSurface: RGBAColorToken(hex: "#FFFFFF", alpha: clampOpaque ? 1.0 : 0.94),
-                gutterSurface: RGBAColorToken(hex: "#F1F0F4"),
-                gutterForeground: RGBAColorToken(hex: "#6E6A7A"),
-                gutterActiveForeground: RGBAColorToken(hex: "#1C1A22"),
-                statusBarSurface: RGBAColorToken(hex: "#F6F5F9"),
-                statusBarForeground: RGBAColorToken(hex: "#5E5A6B"),
-                secondaryForeground: RGBAColorToken(hex: "#5E5A6B"),
                 chromeAccent: RGBAColorToken(hex: "#7C3AED"),
                 activeControlFill: RGBAColorToken(hex: "#7C3AED"),
                 activeControlForeground: RGBAColorToken(hex: "#FFFFFF"),
-                badgeSurface: RGBAColorToken(hex: "#ECEAF1"),
-                hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#858191" : "#E3E0EA"),
-                selectionBackground: RGBAColorToken(hex: "#6D28D9"),
-                selectionForeground: RGBAColorToken(hex: "#FFFFFF"),
-                accentSoftSurface: RGBAColorToken(hex: "#EDE7FD"),
-                wordOccurrenceBackground: RGBAColorToken(hex: "#DDD6FE"),
-                wordOccurrenceUnderline: RGBAColorToken(hex: "#7C3AED", alpha: clampOpaque ? 1.0 : 0.75),
-                diffInsertedBackground: RGBAColorToken(hex: "#DCFCE7"),
-                diffRemovedBackground: RGBAColorToken(hex: "#FEE2E2"),
-                yamlKeyForeground: RGBAColorToken(hex: "#6B7280"),
-                linkForeground: RGBAColorToken(hex: "#7C3AED"),
-                logTraceForeground: RGBAColorToken(hex: "#6B7280"),
-                logDebugForeground: RGBAColorToken(hex: "#0E7490"),
-                logInfoForeground: RGBAColorToken(hex: "#15803D"),
-                logWarnForeground: RGBAColorToken(hex: "#B45309"),
-                logErrorForeground: RGBAColorToken(hex: "#B91C1C"),
-                logCriticalForeground: RGBAColorToken(hex: "#FFFFFF"),
-                logCriticalBackground: RGBAColorToken(hex: "#B91C1C"),
-                logTimestampForeground: RGBAColorToken(hex: "#1D4ED8"),
-                logGuidForeground: RGBAColorToken(hex: "#6D28D9"),
-                logStringForeground: RGBAColorToken(hex: "#9D174D"),
-                logExceptionForeground: RGBAColorToken(hex: "#C2410C")
+                surfaces: PurpleChromeSurfacesPalette(
+                    chromeSurface: RGBAColorToken(hex: "#F6F5F9"),
+                    chromeForeground: RGBAColorToken(hex: "#1C1A22"),
+                    topBarSurface: RGBAColorToken(hex: "#F6F5F9"),
+                    sheetSurface: RGBAColorToken(hex: "#F8F7FA"),
+                    sidebarSurface: RGBAColorToken(hex: "#F3F2F7"),
+                    tabBarSurface: RGBAColorToken(hex: "#EFEDF4"),
+                    tabActiveSurface: RGBAColorToken(hex: "#FFFFFF"),
+                    pinnedTabBadge: RGBAColorToken(hex: "#7C3AED"),
+                    findBarSurface: RGBAColorToken(hex: "#F6F5F9", alpha: clampOpaque ? 1.0 : 0.96),
+                    submenuTranslucentSurface: RGBAColorToken(hex: "#FFFFFF", alpha: clampOpaque ? 1.0 : 0.94)
+                ),
+                controls: PurpleChromeControlsPalette(
+                    gutterSurface: RGBAColorToken(hex: "#F1F0F4"),
+                    gutterForeground: RGBAColorToken(hex: "#6E6A7A"),
+                    gutterActiveForeground: RGBAColorToken(hex: "#1C1A22"),
+                    statusBarSurface: RGBAColorToken(hex: "#F6F5F9"),
+                    statusBarForeground: RGBAColorToken(hex: "#5E5A6B"),
+                    secondaryForeground: RGBAColorToken(hex: "#5E5A6B"),
+                    badgeSurface: RGBAColorToken(hex: "#ECEAF1"),
+                    hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#858191" : "#E3E0EA"),
+                    selectionBackground: RGBAColorToken(hex: "#6D28D9"),
+                    selectionForeground: RGBAColorToken(hex: "#FFFFFF"),
+                    accentSoftSurface: RGBAColorToken(hex: "#EDE7FD")
+                ),
+                warnings: PurpleWarningBannerPalette(
+                    bidiWarningForeground: RGBAColorToken(hex: "#78350F"),
+                    bidiWarningBackground: RGBAColorToken(hex: "#FEF3C7"),
+                    bidiWarningBorder: RGBAColorToken(hex: "#B45309"),
+                    binaryQuarantineForeground: RGBAColorToken(hex: "#7C2D12"),
+                    binaryQuarantineBackground: RGBAColorToken(hex: "#FFEDD5"),
+                    binaryQuarantineBorder: RGBAColorToken(hex: "#C2410C"),
+                    inertHTMLWarningForeground: RGBAColorToken(hex: "#7F1D1D"),
+                    inertHTMLWarningBackground: RGBAColorToken(hex: "#FEE2E2"),
+                    inertHTMLWarningBorder: RGBAColorToken(hex: "#DC2626"),
+                    sidebarBinaryDisabledText: RGBAColorToken(hex: "#52525B")
+                ),
+                syntax: PurpleEditorSyntaxPalette(
+                    nestedBracketPalette: [
+                        RGBAColorToken(hex: "#6D28D9"),
+                        RGBAColorToken(hex: "#0369A1"),
+                        RGBAColorToken(hex: "#047857"),
+                        RGBAColorToken(hex: "#B45309"),
+                    ],
+                    activeBracketHighlight: RGBAColorToken(hex: "#EDE9FE"),
+                    unbalancedBracketHighlight: RGBAColorToken(hex: "#991B1B"),
+                    unbalancedBracketBackground: RGBAColorToken(hex: "#FEE2E2"),
+                    backtickInlineBackground: RGBAColorToken(hex: "#F7F0D4"),
+                    backtickMultilineBackground: RGBAColorToken(hex: "#FBF6E2"),
+                    backtickForeground: RGBAColorToken(hex: "#3F2E00"),
+                    wordOccurrenceBackground: RGBAColorToken(hex: "#DDD6FE"),
+                    wordOccurrenceUnderline: RGBAColorToken(hex: "#7C3AED", alpha: clampOpaque ? 1.0 : 0.75),
+                    diffInsertedBackground: RGBAColorToken(hex: "#DCFCE7"),
+                    diffRemovedBackground: RGBAColorToken(hex: "#FEE2E2"),
+                    yamlKeyForeground: RGBAColorToken(hex: "#6B7280"),
+                    linkForeground: RGBAColorToken(hex: "#7C3AED")
+                ),
+                logs: PurpleLogSyntaxPalette(
+                    logTraceForeground: RGBAColorToken(hex: "#6B7280"),
+                    logDebugForeground: RGBAColorToken(hex: "#0E7490"),
+                    logInfoForeground: RGBAColorToken(hex: "#15803D"),
+                    logWarnForeground: RGBAColorToken(hex: "#B45309"),
+                    logErrorForeground: RGBAColorToken(hex: "#B91C1C"),
+                    logCriticalForeground: RGBAColorToken(hex: "#FFFFFF"),
+                    logCriticalBackground: RGBAColorToken(hex: "#B91C1C"),
+                    logTimestampForeground: RGBAColorToken(hex: "#1D4ED8"),
+                    logGuidForeground: RGBAColorToken(hex: "#6D28D9"),
+                    logStringForeground: RGBAColorToken(hex: "#9D174D"),
+                    logExceptionForeground: RGBAColorToken(hex: "#C2410C")
+                )
             )
         case .black:
             return PurpleThemePalette(
@@ -441,345 +502,83 @@ public struct PurpleThemePalette: Equatable, Sendable {
                 primaryAccent: primaryAccent,
                 strokeLavender: strokeLavender,
                 featherHighlight: featherHighlight,
-                chromeSurface: RGBAColorToken(hex: "#100E14"),
-                chromeForeground: RGBAColorToken(hex: "#ECEAF2"),
                 editorCanvasBackground: RGBAColorToken(hex: "#000000"),
                 editorCanvasText: RGBAColorToken(hex: "#FFFFFF"),
                 currentLineHighlight: RGBAColorToken(hex: "#161224"),
-                nestedBracketPalette: [
-                    RGBAColorToken(hex: "#C4B5FD"),
-                    RGBAColorToken(hex: "#38BDF8"),
-                    RGBAColorToken(hex: "#34D399"),
-                    RGBAColorToken(hex: "#FBBF24"),
-                ],
-                activeBracketHighlight: RGBAColorToken(hex: "#2E1065"),
-                unbalancedBracketHighlight: RGBAColorToken(hex: "#FCA5A5"),
-                unbalancedBracketBackground: RGBAColorToken(hex: "#450A0A"),
-                bidiWarningForeground: RGBAColorToken(hex: "#FDE68A"),
-                bidiWarningBackground: RGBAColorToken(hex: "#451A03"),
-                bidiWarningBorder: RGBAColorToken(hex: "#F59E0B"),
-                binaryQuarantineForeground: RGBAColorToken(hex: "#FED7AA"),
-                binaryQuarantineBackground: RGBAColorToken(hex: "#431407"),
-                binaryQuarantineBorder: RGBAColorToken(hex: "#FB923C"),
-                inertHTMLWarningForeground: RGBAColorToken(hex: "#FECACA"),
-                inertHTMLWarningBackground: RGBAColorToken(hex: "#450A0A"),
-                inertHTMLWarningBorder: RGBAColorToken(hex: "#EF4444"),
-                backtickInlineBackground: RGBAColorToken(hex: "#24221C"),
-                backtickMultilineBackground: RGBAColorToken(hex: "#17150F"),
-                backtickForeground: RGBAColorToken(hex: "#F6E5A8"),
-                sidebarBinaryDisabledText: RGBAColorToken(hex: "#9CA3AF"),
-                topBarSurface: RGBAColorToken(hex: "#100E14"),
-                sheetSurface: RGBAColorToken(hex: "#121017"),
-                sidebarSurface: RGBAColorToken(hex: "#0C0B10"),
-                tabBarSurface: RGBAColorToken(hex: "#16131C"),
-                tabActiveSurface: RGBAColorToken(hex: "#000000"),
-                pinnedTabBadge: RGBAColorToken(hex: "#C4B5FD"),
-                findBarSurface: RGBAColorToken(hex: "#121017", alpha: clampOpaque ? 1.0 : 0.96),
-                submenuTranslucentSurface: RGBAColorToken(hex: "#16131C", alpha: clampOpaque ? 1.0 : 0.94),
-                gutterSurface: RGBAColorToken(hex: "#121117"),
-                gutterForeground: RGBAColorToken(hex: "#8A8597"),
-                gutterActiveForeground: RGBAColorToken(hex: "#FFFFFF"),
-                statusBarSurface: RGBAColorToken(hex: "#100E14"),
-                statusBarForeground: RGBAColorToken(hex: "#A29EAE"),
-                secondaryForeground: RGBAColorToken(hex: "#A29EAE"),
                 chromeAccent: RGBAColorToken(hex: "#A78BFA"),
                 activeControlFill: RGBAColorToken(hex: "#7C3AED"),
                 activeControlForeground: RGBAColorToken(hex: "#FFFFFF"),
-                badgeSurface: RGBAColorToken(hex: "#221E2A"),
-                hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#6F6A7E" : "#25212D"),
-                selectionBackground: RGBAColorToken(hex: "#A78BFA"),
-                selectionForeground: RGBAColorToken(hex: "#000000"),
-                accentSoftSurface: RGBAColorToken(hex: "#241B3A"),
-                wordOccurrenceBackground: RGBAColorToken(hex: "#3B1D6E"),
-                wordOccurrenceUnderline: RGBAColorToken(hex: "#C4B5FD", alpha: clampOpaque ? 1.0 : 0.75),
-                diffInsertedBackground: RGBAColorToken(hex: "#052E16"),
-                diffRemovedBackground: RGBAColorToken(hex: "#450A0A"),
-                yamlKeyForeground: RGBAColorToken(hex: "#9CA3AF"),
-                linkForeground: RGBAColorToken(hex: "#A78BFA"),
-                logTraceForeground: RGBAColorToken(hex: "#9CA3AF"),
-                logDebugForeground: RGBAColorToken(hex: "#22D3EE"),
-                logInfoForeground: RGBAColorToken(hex: "#4ADE80"),
-                logWarnForeground: RGBAColorToken(hex: "#FBBF24"),
-                logErrorForeground: RGBAColorToken(hex: "#F87171"),
-                logCriticalForeground: RGBAColorToken(hex: "#FFFFFF"),
-                logCriticalBackground: RGBAColorToken(hex: "#991B1B"),
-                logTimestampForeground: RGBAColorToken(hex: "#60A5FA"),
-                logGuidForeground: RGBAColorToken(hex: "#A78BFA"),
-                logStringForeground: RGBAColorToken(hex: "#F9A8D4"),
-                logExceptionForeground: RGBAColorToken(hex: "#FB923C")
+                surfaces: PurpleChromeSurfacesPalette(
+                    chromeSurface: RGBAColorToken(hex: "#100E14"),
+                    chromeForeground: RGBAColorToken(hex: "#ECEAF2"),
+                    topBarSurface: RGBAColorToken(hex: "#100E14"),
+                    sheetSurface: RGBAColorToken(hex: "#121017"),
+                    sidebarSurface: RGBAColorToken(hex: "#0C0B10"),
+                    tabBarSurface: RGBAColorToken(hex: "#16131C"),
+                    tabActiveSurface: RGBAColorToken(hex: "#000000"),
+                    pinnedTabBadge: RGBAColorToken(hex: "#C4B5FD"),
+                    findBarSurface: RGBAColorToken(hex: "#121017", alpha: clampOpaque ? 1.0 : 0.96),
+                    submenuTranslucentSurface: RGBAColorToken(hex: "#16131C", alpha: clampOpaque ? 1.0 : 0.94)
+                ),
+                controls: PurpleChromeControlsPalette(
+                    gutterSurface: RGBAColorToken(hex: "#121117"),
+                    gutterForeground: RGBAColorToken(hex: "#8A8597"),
+                    gutterActiveForeground: RGBAColorToken(hex: "#FFFFFF"),
+                    statusBarSurface: RGBAColorToken(hex: "#100E14"),
+                    statusBarForeground: RGBAColorToken(hex: "#A29EAE"),
+                    secondaryForeground: RGBAColorToken(hex: "#A29EAE"),
+                    badgeSurface: RGBAColorToken(hex: "#221E2A"),
+                    hairlineBorder: RGBAColorToken(hex: clampOpaque ? "#6F6A7E" : "#25212D"),
+                    selectionBackground: RGBAColorToken(hex: "#A78BFA"),
+                    selectionForeground: RGBAColorToken(hex: "#000000"),
+                    accentSoftSurface: RGBAColorToken(hex: "#241B3A")
+                ),
+                warnings: PurpleWarningBannerPalette(
+                    bidiWarningForeground: RGBAColorToken(hex: "#FDE68A"),
+                    bidiWarningBackground: RGBAColorToken(hex: "#451A03"),
+                    bidiWarningBorder: RGBAColorToken(hex: "#F59E0B"),
+                    binaryQuarantineForeground: RGBAColorToken(hex: "#FED7AA"),
+                    binaryQuarantineBackground: RGBAColorToken(hex: "#431407"),
+                    binaryQuarantineBorder: RGBAColorToken(hex: "#FB923C"),
+                    inertHTMLWarningForeground: RGBAColorToken(hex: "#FECACA"),
+                    inertHTMLWarningBackground: RGBAColorToken(hex: "#450A0A"),
+                    inertHTMLWarningBorder: RGBAColorToken(hex: "#EF4444"),
+                    sidebarBinaryDisabledText: RGBAColorToken(hex: "#9CA3AF")
+                ),
+                syntax: PurpleEditorSyntaxPalette(
+                    nestedBracketPalette: [
+                        RGBAColorToken(hex: "#C4B5FD"),
+                        RGBAColorToken(hex: "#38BDF8"),
+                        RGBAColorToken(hex: "#34D399"),
+                        RGBAColorToken(hex: "#FBBF24"),
+                    ],
+                    activeBracketHighlight: RGBAColorToken(hex: "#2E1065"),
+                    unbalancedBracketHighlight: RGBAColorToken(hex: "#FCA5A5"),
+                    unbalancedBracketBackground: RGBAColorToken(hex: "#450A0A"),
+                    backtickInlineBackground: RGBAColorToken(hex: "#24221C"),
+                    backtickMultilineBackground: RGBAColorToken(hex: "#17150F"),
+                    backtickForeground: RGBAColorToken(hex: "#F6E5A8"),
+                    wordOccurrenceBackground: RGBAColorToken(hex: "#3B1D6E"),
+                    wordOccurrenceUnderline: RGBAColorToken(hex: "#C4B5FD", alpha: clampOpaque ? 1.0 : 0.75),
+                    diffInsertedBackground: RGBAColorToken(hex: "#052E16"),
+                    diffRemovedBackground: RGBAColorToken(hex: "#450A0A"),
+                    yamlKeyForeground: RGBAColorToken(hex: "#9CA3AF"),
+                    linkForeground: RGBAColorToken(hex: "#A78BFA")
+                ),
+                logs: PurpleLogSyntaxPalette(
+                    logTraceForeground: RGBAColorToken(hex: "#9CA3AF"),
+                    logDebugForeground: RGBAColorToken(hex: "#22D3EE"),
+                    logInfoForeground: RGBAColorToken(hex: "#4ADE80"),
+                    logWarnForeground: RGBAColorToken(hex: "#FBBF24"),
+                    logErrorForeground: RGBAColorToken(hex: "#F87171"),
+                    logCriticalForeground: RGBAColorToken(hex: "#FFFFFF"),
+                    logCriticalBackground: RGBAColorToken(hex: "#991B1B"),
+                    logTimestampForeground: RGBAColorToken(hex: "#60A5FA"),
+                    logGuidForeground: RGBAColorToken(hex: "#A78BFA"),
+                    logStringForeground: RGBAColorToken(hex: "#F9A8D4"),
+                    logExceptionForeground: RGBAColorToken(hex: "#FB923C")
+                )
             )
         }
-    }
-}
-
-/// Minimum pointer target size (WCAG 2.2 SC 2.5.8).
-public enum ChromeHitTarget {
-    /// WCAG 2.2 SC 2.5.8 minimum target size in points (`F-017-03`).
-    public static let minimumPoints: CGFloat = 24
-}
-
-#if os(macOS)
-public extension View {
-    /// Expands the hit area of glyph-sized controls to at least `ChromeHitTarget.minimumPoints` without changing the glyph.
-    func minimumHitTarget(_ size: CGFloat = ChromeHitTarget.minimumPoints) -> some View {
-        let side = max(ChromeHitTarget.minimumPoints, size)
-        return frame(minWidth: side, minHeight: side).contentShape(Rectangle())
-    }
-}
-#endif
-
-/// Stateless value-type controller scaling editor and left sidebar font sizes across `50%..300%` (`Cmd++`, `Cmd+-`, `Cmd+0`, pinch, pane focus) without mutating document text (`UI-004`).
-public struct EditorZoomController: Equatable, Sendable {
-    public static let minZoomPercent: Int = EditorPreferences.minZoomPercent
-    public static let maxZoomPercent: Int = EditorPreferences.maxZoomPercent
-    public static let defaultZoomPercent: Int = EditorPreferences.defaultZoomPercent
-    public static let stepPercent: Int = 10
-
-    public private(set) var zoomPercent: Int
-    public let baseFontSizePoints: Double
-    public let baseSidebarFontSizePoints: Double
-    public private(set) var isPaneFocusZoomed: Bool
-
-    public init(
-        zoomPercent: Int = EditorZoomController.defaultZoomPercent,
-        baseFontSizePoints: Double = 14.0,
-        baseSidebarFontSizePoints: Double = 13.0,
-        isPaneFocusZoomed: Bool = false
-    ) {
-        self.zoomPercent = EditorPreferences.clampZoom(zoomPercent)
-        self.baseFontSizePoints = max(1.0, baseFontSizePoints)
-        self.baseSidebarFontSizePoints = max(1.0, baseSidebarFontSizePoints)
-        self.isPaneFocusZoomed = isPaneFocusZoomed
-    }
-
-    /// Linear scale multiplier (`0.5...3.0`) derived from `zoomPercent`.
-    public var zoomScaleFactor: Double {
-        Double(zoomPercent) / 100.0
-    }
-
-    /// Effective editor monospaced font point size computed from `baseFontSizePoints * (zoomPercent / 100)`.
-    public var scaledFontSizePoints: Double {
-        baseFontSizePoints * zoomScaleFactor
-    }
-
-    /// Effective left sidebar font point size scaled proportionally with `zoomPercent` (`50%..300%`) (`UI-004`).
-    public var sidebarScaledFontSizePoints: Double {
-        baseSidebarFontSizePoints * zoomScaleFactor
-    }
-
-    /// Executes `Cmd++` (`+10%`), clamped at `300%`.
-    public mutating func zoomIn() {
-        zoomPercent = EditorPreferences.clampZoom(zoomPercent + Self.stepPercent)
-    }
-
-    /// Executes `Cmd+-` (`-10%`), clamped at `50%`.
-    public mutating func zoomOut() {
-        zoomPercent = EditorPreferences.clampZoom(zoomPercent - Self.stepPercent)
-    }
-
-    /// Executes `Cmd+0` (`100%`).
-    public mutating func resetZoom() {
-        zoomPercent = Self.defaultZoomPercent
-    }
-
-    /// Applies a trackpad pinch magnification multiplier (`> 0`), rounded and clamped into `50%..300%`.
-    public mutating func applyPinchMagnification(_ factor: Double) {
-        guard factor > 0 else { return }
-        let scaled = Int((Double(zoomPercent) * factor).rounded())
-        zoomPercent = EditorPreferences.clampZoom(scaled)
-    }
-
-    /// Toggles distraction-free pane focus zoom without mutating buffer text.
-    public mutating func togglePaneFocus() {
-        isPaneFocusZoomed.toggle()
-    }
-}
-
-/// Inline warning descriptor emitted when Unicode bidirectional control characters are present (`UI-008`).
-public struct BiDiControlCharacterWarning: Equatable, Sendable {
-    public let utf16Offset: Int
-    public let line: Int
-    public let scalarHex: String
-    public let name: String
-
-    public init(utf16Offset: Int, line: Int, scalarHex: String, name: String) {
-        self.utf16Offset = utf16Offset
-        self.line = line
-        self.scalarHex = scalarHex
-        self.name = name
-    }
-}
-
-/// Canonicalized external URI handoff descriptor requiring user confirmation before opening (`UI-008`, `SEC-004`).
-public struct ExternalURIConfirmationPrompt: Equatable, Sendable {
-    public let scheme: String
-    public let canonicalURI: String
-    public let requiresUserConfirmation: Bool
-
-    public init(scheme: String, canonicalURI: String, requiresUserConfirmation: Bool) {
-        self.scheme = scheme
-        self.canonicalURI = canonicalURI
-        self.requiresUserConfirmation = requiresUserConfirmation
-    }
-}
-
-/// Evaluates UI safety banner state and external URI confirmation prompts for an inspected `DocumentSnapshot` (`UI-008`, `DATA-003`, `SEC-004`, `SEC-012`).
-///
-/// Security invariants:
-/// - Binary read-only buffers (`isBinaryReadOnly == true`) display a prominent read-only warning banner and disable `canSave`, `canFormat`, and `canPinTab`.
-/// - Scans text buffers for Trojan Source Unicode bidirectional control scalars (`U+202A..U+202E`, `U+2066..U+2069`, `U+061C`, `CWE-1007`) and emits exact UTF-16 offset badges.
-/// - Restricts external URI handoff exclusively to canonicalized `https`, `http`, and `mailto` targets with mandatory user confirmation (`SEC-004`).
-public struct InspectionSafetyBannerState: Equatable, Sendable {
-    public static let allowedExternalSchemes: Set<String> = MarkdownLintAndFormatEngine.allowedLinkSchemes
-
-    public let isBinaryReadOnlyBannerVisible: Bool
-    public let canSave: Bool
-    public let canFormat: Bool
-    public let canPinTab: Bool
-    public let bidiWarnings: [BiDiControlCharacterWarning]
-
-    public static func evaluate(snapshot: DocumentSnapshot) -> InspectionSafetyBannerState {
-        if snapshot.isBinaryReadOnly {
-            return InspectionSafetyBannerState(
-                isBinaryReadOnlyBannerVisible: true,
-                canSave: false,
-                canFormat: false,
-                canPinTab: false,
-                bidiWarnings: []
-            )
-        }
-        let warnings = scanBiDiControlScalars(in: snapshot.text)
-        return InspectionSafetyBannerState(
-            isBinaryReadOnlyBannerVisible: false,
-            canSave: true,
-            canFormat: !snapshot.isDegradedPlainText,
-            canPinTab: true,
-            bidiWarnings: warnings
-        )
-    }
-
-    public static func prepareExternalURIConfirmation(rawURI: String) -> ExternalURIConfirmationPrompt? {
-        let trimmed = rawURI.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let components = URLComponents(string: trimmed),
-              let scheme = components.scheme?.lowercased(),
-              allowedExternalSchemes.contains(scheme),
-              let canonical = components.url?.absoluteString else {
-            return nil
-        }
-        if (scheme == "https" || scheme == "http"), (components.host ?? "").isEmpty {
-            return nil
-        }
-        if scheme == "mailto", components.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return nil
-        }
-        return ExternalURIConfirmationPrompt(
-            scheme: scheme,
-            canonicalURI: canonical,
-            requiresUserConfirmation: true
-        )
-    }
-
-    private static func scanBiDiControlScalars(in text: String) -> [BiDiControlCharacterWarning] {
-        // Fast SIMD UTF-8 pre-check: all 10 Trojan Source BiDi scalars encode with UTF-8 lead byte 0xD8 (U+061C) or 0xE2 (U+202A..202E, U+2066..2069).
-        let mayContainBiDi: Bool = text.utf8.withContiguousStorageIfAvailable { buf -> Bool in
-            guard let base = buf.baseAddress, !buf.isEmpty else { return false }
-            let count = buf.count
-            return memchr(base, 0xE2, count) != nil || memchr(base, 0xD8, count) != nil
-        } ?? true
-        guard mayContainBiDi else { return [] }
-
-        var warnings: [BiDiControlCharacterWarning] = []
-        let scalars = text.unicodeScalars
-        var index = scalars.startIndex
-        var utf16Offset = 0
-        var line = 1
-
-        while index < scalars.endIndex {
-            let scalar = scalars[index]
-            if let descriptor = bidiDescriptor(for: scalar.value) {
-                warnings.append(BiDiControlCharacterWarning(
-                    utf16Offset: utf16Offset,
-                    line: line,
-                    scalarHex: descriptor.hex,
-                    name: descriptor.name
-                ))
-            }
-            if scalar.value == 0x0A {
-                line += 1
-            } else if scalar.value == 0x0D {
-                let nextIndex = scalars.index(after: index)
-                if nextIndex == scalars.endIndex || scalars[nextIndex].value != 0x0A {
-                    line += 1
-                }
-            }
-            utf16Offset += scalar.utf16.count
-            index = scalars.index(after: index)
-        }
-        return warnings
-    }
-
-    private static func bidiDescriptor(for value: UInt32) -> (hex: String, name: String)? {
-        switch value {
-        case 0x202A: return ("U+202A", "LEFT-TO-RIGHT EMBEDDING")
-        case 0x202B: return ("U+202B", "RIGHT-TO-LEFT EMBEDDING")
-        case 0x202C: return ("U+202C", "POP DIRECTIONAL FORMATTING")
-        case 0x202D: return ("U+202D", "LEFT-TO-RIGHT OVERRIDE")
-        case 0x202E: return ("U+202E", "RIGHT-TO-LEFT OVERRIDE")
-        case 0x2066: return ("U+2066", "LEFT-TO-RIGHT ISOLATE")
-        case 0x2067: return ("U+2067", "RIGHT-TO-LEFT ISOLATE")
-        case 0x2068: return ("U+2068", "FIRST STRONG ISOLATE")
-        case 0x2069: return ("U+2069", "POP DIRECTIONAL ISOLATE")
-        case 0x061C: return ("U+061C", "ARABIC LETTER MARK")
-        default: return nil
-        }
-    }
-}
-
-/// Shared semantic styling modifiers keeping modal sheets and `1pt` hairline borders uniform across `SwiftEditUI` views (`UI-001`, `UI-009`).
-public extension View {
-    /// Applies mode-resolved `sheetSurface`, `chromeForeground`, and `chromeAccent` tint to modal dialogs.
-    func purpleModalSheetChrome(palette: PurpleThemePalette) -> some View {
-        self
-            .background(palette.sheetSurface.swiftUIColor)
-            .foregroundStyle(palette.chromeForeground.swiftUIColor)
-            .tint(palette.chromeAccent.swiftUIColor)
-    }
-
-    /// Renders a `1pt` horizontal or vertical `hairlineBorder` separator along `edge`.
-    func purpleHairlineBorder(palette: PurpleThemePalette, edge: Edge) -> some View {
-        let isVertical = (edge == .leading || edge == .trailing)
-        let alignment: Alignment
-        switch edge {
-        case .top: alignment = .top
-        case .bottom: alignment = .bottom
-        case .leading: alignment = .leading
-        case .trailing: alignment = .trailing
-        }
-        return overlay(alignment: alignment) {
-            Rectangle()
-                .fill(palette.hairlineBorder.swiftUIColor)
-                .frame(width: isVertical ? 1 : nil, height: isVertical ? nil : 1)
-        }
-    }
-
-    /// Applies an opaque high-salience security warning banner surface, foreground, and `1pt` bottom border (`CVE-2021-42574`, `CWE-451`, `UI-008`).
-    func purpleSecurityWarningBanner(
-        foreground: RGBAColorToken,
-        background: RGBAColorToken,
-        border: RGBAColorToken,
-        verticalPadding: CGFloat
-    ) -> some View {
-        self
-            .appFont(.caption, weight: .semibold)
-            .foregroundStyle(foreground.swiftUIColor)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, verticalPadding)
-            .background(background.swiftUIColor)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(border.swiftUIColor)
-                    .frame(height: 1)
-            }
     }
 }

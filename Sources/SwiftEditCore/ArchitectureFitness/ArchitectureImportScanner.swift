@@ -112,8 +112,8 @@ public enum ArchitectureImportScanner {
         let hexPattern = "\"#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?\""
         if let regex = try? NSRegularExpression(pattern: hexPattern) {
             let nsRange = NSRange(uncommented.startIndex..<uncommented.endIndex, in: uncommented)
-            for match in regex.matches(in: uncommented, range: nsRange) {
-                if let range = Range(match.range, in: uncommented) {
+            regex.enumerateMatches(in: uncommented, range: nsRange) { match, _, _ in
+                if let match, let range = Range(match.range, in: uncommented) {
                     let literal = String(uncommented[range])
                     violations.append(ArchitectureFitnessViolation(
                         filePath: filePath,
@@ -173,58 +173,99 @@ public enum ArchitectureImportScanner {
         }
         return violations
     }
+}
 
-    private static func stripCommentsPreservingStrings(from source: String) -> String {
+private extension ArchitectureImportScanner {
+    /// Strips line and block comments while preserving string literals and block-comment line breaks.
+    static func stripCommentsPreservingStrings(from source: String) -> String {
         var output = String()
         output.reserveCapacity(source.utf8.count)
         let scalars = Array(source)
-        var i = 0
+        var index = 0
         var inString = false
-        while i < scalars.count {
-            let ch = scalars[i]
-            if inString {
-                output.append(ch)
-                if ch == "\\" && i + 1 < scalars.count {
-                    output.append(scalars[i + 1])
-                    i += 2
-                    continue
-                }
-                if ch == "\"" {
-                    inString = false
-                }
-                i += 1
-                continue
-            }
-            if ch == "\"" {
-                inString = true
-                output.append(ch)
-                i += 1
-                continue
-            }
-            if ch == "/" && i + 1 < scalars.count {
-                let next = scalars[i + 1]
-                if next == "/" {
-                    i += 2
-                    while i < scalars.count && scalars[i] != "\n" {
-                        i += 1
-                    }
-                    continue
-                } else if next == "*" {
-                    i += 2
-                    while i + 1 < scalars.count && !(scalars[i] == "*" && scalars[i + 1] == "/") {
-                        if scalars[i] == "\n" {
-                            output.append("\n")
-                        }
-                        i += 1
-                    }
-                    i += 2
-                    continue
-                }
-            }
-            output.append(ch)
-            i += 1
+        while index < scalars.count {
+            importScanStep(scalars: scalars, index: &index, inString: &inString, output: &output)
         }
         return output
+    }
+
+    static func importScanStep(
+        scalars: [Character],
+        index: inout Int,
+        inString: inout Bool,
+        output: inout String
+    ) {
+        let ch = scalars[index]
+        if inString {
+            importScanStringCharacter(scalars: scalars, index: &index, inString: &inString, output: &output)
+            return
+        }
+        if ch == "\"" {
+            inString = true
+            output.append(ch)
+            index += 1
+            return
+        }
+        if ch == "/", index + 1 < scalars.count,
+           importScanCommentIfPresent(scalars: scalars, index: &index, output: &output) {
+            return
+        }
+        output.append(ch)
+        index += 1
+    }
+
+    static func importScanStringCharacter(
+        scalars: [Character],
+        index: inout Int,
+        inString: inout Bool,
+        output: inout String
+    ) {
+        let ch = scalars[index]
+        output.append(ch)
+        if ch == "\\", index + 1 < scalars.count {
+            output.append(scalars[index + 1])
+            index += 2
+            return
+        }
+        if ch == "\"" {
+            inString = false
+        }
+        index += 1
+    }
+
+    static func importScanCommentIfPresent(
+        scalars: [Character],
+        index: inout Int,
+        output: inout String
+    ) -> Bool {
+        let next = scalars[index + 1]
+        if next == "/" {
+            importSkipLineComment(scalars: scalars, index: &index)
+            return true
+        }
+        if next == "*" {
+            importSkipBlockComment(scalars: scalars, index: &index, output: &output)
+            return true
+        }
+        return false
+    }
+
+    static func importSkipLineComment(scalars: [Character], index: inout Int) {
+        index += 2
+        while index < scalars.count && scalars[index] != "\n" {
+            index += 1
+        }
+    }
+
+    static func importSkipBlockComment(scalars: [Character], index: inout Int, output: inout String) {
+        index += 2
+        while index + 1 < scalars.count && !(scalars[index] == "*" && scalars[index + 1] == "/") {
+            if scalars[index] == "\n" {
+                output.append("\n")
+            }
+            index += 1
+        }
+        index += 2
     }
 }
 
@@ -336,23 +377,8 @@ public enum PackageManifestDumpValidator {
         var targetNames: [String] = []
         for target in payload.targets ?? [] {
             targetNames.append(target.name)
-            guard target.name == "SwiftEditCore" else { continue }
-            for depEntry in target.dependencies ?? [] {
-                if let depTarget = depEntry.byName?.first ?? nil {
-                    violations.append(ArchitectureFitnessViolation(
-                        filePath: "Package.swift",
-                        reason: "SwiftEditCore must not depend on target '\(depTarget)' (AR-002 / AR-006)"
-                    ))
-                }
-                if let product = depEntry.product,
-                   product.count >= 2,
-                   let pkgName = product[1],
-                   pkgName.lowercased() != "swift-markdown" {
-                    violations.append(ArchitectureFitnessViolation(
-                        filePath: "Package.swift",
-                        reason: "SwiftEditCore depends on non-allowlisted product package '\(pkgName)' (AR-005)"
-                    ))
-                }
+            if target.name == "SwiftEditCore" {
+                manifestAuditCoreDependencies(target.dependencies ?? [], into: &violations)
             }
         }
 
@@ -362,5 +388,35 @@ public enum PackageManifestDumpValidator {
             targetNames: targetNames,
             violations: violations
         )
+    }
+
+    private static func manifestAuditCoreDependencies(
+        _ dependencies: [DumpTargetDependency],
+        into violations: inout [ArchitectureFitnessViolation]
+    ) {
+        for depEntry in dependencies {
+            if let depTarget = depEntry.byName?.first ?? nil {
+                violations.append(ArchitectureFitnessViolation(
+                    filePath: "Package.swift",
+                    reason: "SwiftEditCore must not depend on target '\(depTarget)' (AR-002 / AR-006)"
+                ))
+            }
+            if let pkgName = manifestDisallowedProductPackage(in: depEntry) {
+                violations.append(ArchitectureFitnessViolation(
+                    filePath: "Package.swift",
+                    reason: "SwiftEditCore depends on non-allowlisted product package '\(pkgName)' (AR-005)"
+                ))
+            }
+        }
+    }
+
+    private static func manifestDisallowedProductPackage(in depEntry: DumpTargetDependency) -> String? {
+        guard let product = depEntry.product,
+              product.count >= 2,
+              let pkgName = product[1],
+              pkgName.lowercased() != "swift-markdown" else {
+            return nil
+        }
+        return pkgName
     }
 }

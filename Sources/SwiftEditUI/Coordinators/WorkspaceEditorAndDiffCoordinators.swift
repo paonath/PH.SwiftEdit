@@ -143,6 +143,15 @@ public struct VoiceOverAccessibilityDescriptor: Equatable, Sendable {
     }
 }
 
+/// Internal revision caches and appearance detector grouped out of `WorkspaceEditorCoordinator` (`REQ-002`).
+@MainActor
+private struct WorkspaceEditorInternalCaches {
+    let systemDarkDetector: @MainActor () -> Bool
+    var cachedBracketTopology: BracketTopology?
+    var cachedPreviewKey: (DocumentID, BufferRevision)?
+    var cachedPreviewBlocks: [MarkdownPreviewBlock] = []
+}
+
 /// `@MainActor @Observable` workspace coordinator binding `DocumentSession`, `WorkspaceTabSession`, `PurpleThemePalette`, `EditorZoomController`, and `TextKit2BufferAdapter` (`UI-005..012`).
 @MainActor
 @Observable
@@ -158,10 +167,7 @@ public final class WorkspaceEditorCoordinator {
     public private(set) var lastErrorBannerMessage: String?
     public private(set) var reduceMotionEnabled: Bool = false
     public private(set) var bufferReloadCount: Int = 0
-    private let systemDarkDetector: @MainActor () -> Bool
-    @ObservationIgnored private var cachedBracketTopology: BracketTopology?
-    @ObservationIgnored private var cachedPreviewKey: (DocumentID, BufferRevision)?
-    @ObservationIgnored private var cachedPreviewBlocks: [MarkdownPreviewBlock] = []
+    @ObservationIgnored fileprivate var internalCaches: WorkspaceEditorInternalCaches
 
     /// Returns `false` when system Reduce Motion is enabled (`UI-011`).
     public var shouldAnimateTransitions: Bool {
@@ -183,7 +189,7 @@ public final class WorkspaceEditorCoordinator {
         self.activeSession = session
         self.tabSession = WorkspaceTabSession()
         self.appearanceMode = appearanceMode
-        self.systemDarkDetector = systemDarkDetector
+        self.internalCaches = WorkspaceEditorInternalCaches(systemDarkDetector: systemDarkDetector)
         let initialDark = systemDarkDetector()
         self.palette = PurpleThemePalette.resolve(appearance: appearanceMode, systemPrefersDark: initialDark)
         self.zoomController = EditorZoomController()
@@ -203,7 +209,7 @@ public final class WorkspaceEditorCoordinator {
     /// Updates `appearanceMode` and `palette` dynamically without reloading open document buffers (`UI-003`).
     public func setAppearanceMode(_ mode: AppearanceMode, systemPrefersDark: Bool? = nil) {
         appearanceMode = mode
-        let resolvedDark = systemPrefersDark ?? systemDarkDetector()
+        let resolvedDark = systemPrefersDark ?? internalCaches.systemDarkDetector()
         palette = PurpleThemePalette.resolve(appearance: mode, systemPrefersDark: resolvedDark)
     }
 
@@ -226,7 +232,9 @@ public final class WorkspaceEditorCoordinator {
             lastErrorBannerMessage = "Invalid selection range for Cmd+D duplication."
         }
     }
+}
 
+extension WorkspaceEditorCoordinator {
     /// Formats the active Markdown buffer atomically or surfaces a non-destructive warning banner when formatting is disabled (`UI-008`, `UI-009`).
     public func formatDocument() {
         guard safetyBanner.canFormat else {
@@ -250,15 +258,15 @@ public final class WorkspaceEditorCoordinator {
     /// Evaluates active bracket highlights at `caretLocation` in `O(log P + depth)` using a revision-cached `BracketTopology` and applies scoped viewport highlight attributes (`UI-007`, `PERF-002`).
     public func updateCaretAndHighlightViewport(caretLocation: Int, viewportRange: SwiftEditCore.TextRange) {
         let topology: BracketTopology?
-        if let cached = cachedBracketTopology,
+        if let cached = internalCaches.cachedBracketTopology,
            cached.documentID == activeSession.id,
            cached.revision == activeSession.revision {
             topology = cached
         } else if let scanned = SearchDiffAndBracketEngine.scanTopology(in: activeSession.snapshot).completedValue {
-            cachedBracketTopology = scanned
+            internalCaches.cachedBracketTopology = scanned
             topology = scanned
         } else {
-            cachedBracketTopology = nil
+            internalCaches.cachedBracketTopology = nil
             topology = nil
         }
 
@@ -272,8 +280,8 @@ public final class WorkspaceEditorCoordinator {
     /// Projects Markdown blocks for native zero-WebKit preview, rendering raw HTML (`<script>`, `<iframe>`, etc.) strictly as inert literal plain text (`UI-006`, `SEC-004`).
     public func projectMarkdownPreview(from snapshot: DocumentSnapshot) -> [MarkdownPreviewBlock] {
         guard !snapshot.isBinaryReadOnly else { return [] }
-        if let key = cachedPreviewKey, key.0 == snapshot.id, key.1 == snapshot.revision {
-            return cachedPreviewBlocks
+        if let key = internalCaches.cachedPreviewKey, key.0 == snapshot.id, key.1 == snapshot.revision {
+            return internalCaches.cachedPreviewBlocks
         }
 
         var blocks: [MarkdownPreviewBlock] = []
@@ -285,48 +293,14 @@ public final class WorkspaceEditorCoordinator {
         var lineStart = utf8.startIndex
         var cursor = lineStart
 
-        func processLine(_ line: Substring) {
-            if let currentFence = activeFence {
-                if Self.isClosingFence(line, marker: currentFence.marker, minCount: currentFence.count) {
-                    blocks.append(MarkdownPreviewBlock(
-                        kind: .codeBlock,
-                        text: codeBuffer.joined(separator: "\n"),
-                        isInertPlainTextHTML: false
-                    ))
-                    codeBuffer.removeAll(keepingCapacity: true)
-                    activeFence = nil
-                } else {
-                    codeBuffer.append(line)
-                }
-                return
-            }
-
-            if let openedFence = Self.parseOpeningFence(line) {
-                activeFence = openedFence
-                codeBuffer.removeAll(keepingCapacity: true)
-                return
-            }
-
-            let trimmed = Self.trimHorizontalWhitespace(line)
-            guard !trimmed.isEmpty else { return }
-
-            if let headingText = Self.extractATXHeadingText(from: trimmed) {
-                blocks.append(MarkdownPreviewBlock(kind: .heading, text: headingText, isInertPlainTextHTML: false))
-            } else if Self.containsRawHTMLTag(trimmed) {
-                blocks.append(MarkdownPreviewBlock(kind: .rawHTML, text: String(trimmed), isInertPlainTextHTML: true))
-            } else {
-                blocks.append(MarkdownPreviewBlock(kind: .paragraph, text: String(trimmed), isInertPlainTextHTML: false))
-            }
-        }
-
         while cursor < utf8.endIndex {
             let b = utf8[cursor]
             if b == 0x0A {
-                processLine(text[lineStart..<cursor])
+                Self.appendProjectedPreviewLine(text[lineStart..<cursor], activeFence: &activeFence, codeBuffer: &codeBuffer, blocks: &blocks)
                 cursor = utf8.index(after: cursor)
                 lineStart = cursor
             } else if b == 0x0D {
-                processLine(text[lineStart..<cursor])
+                Self.appendProjectedPreviewLine(text[lineStart..<cursor], activeFence: &activeFence, codeBuffer: &codeBuffer, blocks: &blocks)
                 let next = utf8.index(after: cursor)
                 cursor = (next < utf8.endIndex && utf8[next] == 0x0A) ? utf8.index(after: next) : next
                 lineStart = cursor
@@ -334,7 +308,7 @@ public final class WorkspaceEditorCoordinator {
                 cursor = utf8.index(after: cursor)
             }
         }
-        processLine(text[lineStart..<utf8.endIndex])
+        Self.appendProjectedPreviewLine(text[lineStart..<utf8.endIndex], activeFence: &activeFence, codeBuffer: &codeBuffer, blocks: &blocks)
 
         if activeFence != nil {
             blocks.append(MarkdownPreviewBlock(
@@ -344,9 +318,47 @@ public final class WorkspaceEditorCoordinator {
             ))
         }
 
-        cachedPreviewKey = (snapshot.id, snapshot.revision)
-        cachedPreviewBlocks = blocks
+        internalCaches.cachedPreviewKey = (snapshot.id, snapshot.revision)
+        internalCaches.cachedPreviewBlocks = blocks
         return blocks
+    }
+}
+
+extension WorkspaceEditorCoordinator {
+    fileprivate static func appendProjectedPreviewLine(
+        _ line: Substring,
+        activeFence: inout (marker: Character, count: Int)?,
+        codeBuffer: inout [Substring],
+        blocks: inout [MarkdownPreviewBlock]
+    ) {
+        if let currentFence = activeFence {
+            if isClosingFence(line, marker: currentFence.marker, minCount: currentFence.count) {
+                blocks.append(MarkdownPreviewBlock(
+                    kind: .codeBlock,
+                    text: codeBuffer.joined(separator: "\n"),
+                    isInertPlainTextHTML: false
+                ))
+                codeBuffer.removeAll(keepingCapacity: true)
+                activeFence = nil
+            } else {
+                codeBuffer.append(line)
+            }
+            return
+        }
+        if let openedFence = parseOpeningFence(line) {
+            activeFence = openedFence
+            codeBuffer.removeAll(keepingCapacity: true)
+            return
+        }
+        let trimmed = trimHorizontalWhitespace(line)
+        guard !trimmed.isEmpty else { return }
+        if let headingText = extractATXHeadingText(from: trimmed) {
+            blocks.append(MarkdownPreviewBlock(kind: .heading, text: headingText, isInertPlainTextHTML: false))
+        } else if containsRawHTMLTag(trimmed) {
+            blocks.append(MarkdownPreviewBlock(kind: .rawHTML, text: String(trimmed), isInertPlainTextHTML: true))
+        } else {
+            blocks.append(MarkdownPreviewBlock(kind: .paragraph, text: String(trimmed), isInertPlainTextHTML: false))
+        }
     }
 
     private static func trimHorizontalWhitespace(_ line: Substring) -> Substring {
@@ -452,7 +464,7 @@ public final class WorkspaceEditorCoordinator {
         )
     }
 
-    private func refreshDerivedStateAfterMutation() {
+    func refreshDerivedStateAfterMutation() {
         lastErrorBannerMessage = nil
         safetyBanner = InspectionSafetyBannerState.evaluate(snapshot: activeSession.snapshot)
         try? tabSession.updateTabState(
@@ -460,130 +472,5 @@ public final class WorkspaceEditorCoordinator {
             isDirty: activeSession.isDirty,
             revision: activeSession.revision
         )
-    }
-}
-
-/// Single aligned row for VS Code-style Side-by-Side File Compare views (`UI-007`).
-public struct SideBySideDiffRow: Equatable, Sendable {
-    public let lhsLineNumber: Int?
-    public let lhsText: String?
-    public let rhsLineNumber: Int?
-    public let rhsText: String?
-    public let kind: DiffHunkKind
-    /// Left-hand pane semantic highlight kind (`BUG-020`: `.removed` for modified pairs).
-    public let lhsKind: DiffHunkKind
-    /// Right-hand pane semantic highlight kind (`BUG-020`: `.inserted` for modified pairs).
-    public let rhsKind: DiffHunkKind
-
-    public init(
-        lhsLineNumber: Int?,
-        lhsText: String?,
-        rhsLineNumber: Int?,
-        rhsText: String?,
-        kind: DiffHunkKind,
-        lhsKind: DiffHunkKind? = nil,
-        rhsKind: DiffHunkKind? = nil
-    ) {
-        self.lhsLineNumber = lhsLineNumber
-        self.lhsText = lhsText
-        self.rhsLineNumber = rhsLineNumber
-        self.rhsText = rhsText
-        self.kind = kind
-        self.lhsKind = lhsKind ?? ((kind == .inserted && lhsText != nil && rhsText != nil) ? .removed : kind)
-        self.rhsKind = rhsKind ?? kind
-    }
-}
-
-/// `@MainActor @Observable` coordinator projecting Myers `DiffHunk` sequences into Side-by-Side comparison rows (`UI-005`, `UI-007`).
-@MainActor
-@Observable
-public final class DiffPaneCoordinator {
-    public private(set) var rows: [SideBySideDiffRow] = []
-    public private(set) var hasDifferences: Bool = false
-    public private(set) var degradedReason: DegradedEvaluationReason?
-    @ObservationIgnored private var lastComparedKey: (lhsID: DocumentID, lhsRev: BufferRevision, rhsID: DocumentID, rhsRev: BufferRevision)?
-
-    public init() {}
-
-    /// Evaluates `SearchDiffAndBracketEngine.computeMyersDiff` (with revision-pair memoization) and aligns adjacent `.removed`/`.inserted` pairs into Side-by-Side rows.
-    public func compare(lhs: DocumentSnapshot, rhs: DocumentSnapshot) {
-        if let last = lastComparedKey,
-           last.lhsID == lhs.id, last.lhsRev == lhs.revision,
-           last.rhsID == rhs.id, last.rhsRev == rhs.revision {
-            return
-        }
-        switch SearchDiffAndBracketEngine.computeMyersDiff(lhs: lhs, rhs: rhs) {
-        case .completed(let result):
-            degradedReason = nil
-            hasDifferences = result.hasDifferences
-            rows = Self.alignSideBySideRows(from: result.hunks)
-        case .degradedOrTimedOut(let reason):
-            degradedReason = reason
-            hasDifferences = false
-            rows = []
-        }
-        lastComparedKey = (lhs.id, lhs.revision, rhs.id, rhs.revision)
-    }
-
-    /// Releases computed diff rows and error state when closing the diff pane or closing tabs (`MEM-003`).
-    public func clear() {
-        lastComparedKey = nil
-        rows = []
-        hasDifferences = false
-        degradedReason = nil
-    }
-
-    private static func alignSideBySideRows(from hunks: [DiffHunk]) -> [SideBySideDiffRow] {
-        var aligned: [SideBySideDiffRow] = []
-        aligned.reserveCapacity(hunks.count)
-        var index = 0
-
-        while index < hunks.count {
-            let current = hunks[index]
-            switch current.kind {
-            case .unchanged:
-                aligned.append(SideBySideDiffRow(
-                    lhsLineNumber: current.lhsLineNumber,
-                    lhsText: current.lineText,
-                    rhsLineNumber: current.rhsLineNumber,
-                    rhsText: current.lineText,
-                    kind: .unchanged
-                ))
-                index += 1
-            case .removed:
-                if index + 1 < hunks.count, hunks[index + 1].kind == .inserted {
-                    let next = hunks[index + 1]
-                    aligned.append(SideBySideDiffRow(
-                        lhsLineNumber: current.lhsLineNumber,
-                        lhsText: current.lineText,
-                        rhsLineNumber: next.rhsLineNumber,
-                        rhsText: next.lineText,
-                        kind: .inserted,
-                        lhsKind: .removed,
-                        rhsKind: .inserted
-                    ))
-                    index += 2
-                } else {
-                    aligned.append(SideBySideDiffRow(
-                        lhsLineNumber: current.lhsLineNumber,
-                        lhsText: current.lineText,
-                        rhsLineNumber: nil,
-                        rhsText: nil,
-                        kind: .removed
-                    ))
-                    index += 1
-                }
-            case .inserted:
-                aligned.append(SideBySideDiffRow(
-                    lhsLineNumber: nil,
-                    lhsText: nil,
-                    rhsLineNumber: current.rhsLineNumber,
-                    rhsText: current.lineText,
-                    kind: .inserted
-                ))
-                index += 1
-            }
-        }
-        return aligned
     }
 }

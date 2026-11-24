@@ -129,17 +129,7 @@ public struct DotfileFolderNavigator: Sendable {
         let canonicalScopePath = effectiveScope.resolvingSymlinksInPath().standardizedFileURL.path
         try Self.verifyConfinement(of: directoryURL, canonicalScopePath: canonicalScopePath)
 
-        let childURLs: [URL]
-        do {
-            childURLs = try FileManager.default.contentsOfDirectory(
-                at: directoryURL,
-                includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey],
-                options: []
-            )
-        } catch {
-            throw DomainError.ioFailure(error.localizedDescription)
-        }
-
+        let childURLs = try Self.dotfileEnumerateChildURLs(in: directoryURL)
         var sortable: [(entry: FolderEntryDescriptor, lowerName: String)] = []
         sortable.reserveCapacity(childURLs.count)
         var regularFileFlags: [URL: Bool] = [:]
@@ -149,73 +139,20 @@ public struct DotfileFolderNavigator: Sendable {
         var skippedCount = 0
 
         for rawChildURL in childURLs {
-            let name = rawChildURL.lastPathComponent
-            guard name != "." && name != ".." else { continue }
-            let reportedChildURL = directoryURL.appendingPathComponent(name)
-
-            let prefetched = try? rawChildURL.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
-            let isDir: Bool
-            let isRegularFile: Bool
-            let fileSize: Int?
-            let resolvedURLForProbe: URL
-
-            if prefetched?.isSymbolicLink == false {
-                // Non-symlink direct child of an already confinement-verified directory cannot escape `canonicalScopePath`.
-                isDir = prefetched?.isDirectory ?? false
-                isRegularFile = prefetched?.isRegularFile ?? false
-                fileSize = prefetched?.fileSize
-                resolvedURLForProbe = reportedChildURL
-            } else {
-                let resolvedChild: URL
-                do {
-                    resolvedChild = try Self.verifyConfinementAndResolve(of: reportedChildURL, canonicalScopePath: canonicalScopePath)
-                } catch DomainError.securityScopeViolation where symlinkPolicy == .skipAndReport {
-                    skippedCount += 1
-                    continue
-                }
-                let resolvedValues = try? resolvedChild.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey])
-                isDir = resolvedValues?.isDirectory ?? false
-                isRegularFile = resolvedValues?.isRegularFile ?? false
-                fileSize = resolvedValues?.fileSize
-                resolvedURLForProbe = resolvedChild
-            }
-
-            let isBinary: Bool
-            if probeBinary && !isDir && isRegularFile {
-                if fileSize == 0 {
-                    isBinary = false
-                } else {
-                    isBinary = probeBinaryRegularFile(at: resolvedURLForProbe, withinScope: effectiveScope)
-                }
-            } else {
-                isBinary = false
-            }
-
-            if !probeBinary {
-                regularFileFlags[reportedChildURL] = isRegularFile
-            }
-
-            let descriptor = FolderEntryDescriptor(
-                name: name,
-                url: reportedChildURL,
-                isDirectory: isDir,
-                isHiddenDotfile: name.hasPrefix("."),
-                isBinary: isBinary
+            try dotfileAppendChildIfConfined(
+                rawChildURL,
+                in: directoryURL,
+                effectiveScope: effectiveScope,
+                canonicalScopePath: canonicalScopePath,
+                symlinkPolicy: symlinkPolicy,
+                probeBinary: probeBinary,
+                skippedCount: &skippedCount,
+                regularFileFlags: &regularFileFlags,
+                sortable: &sortable
             )
-            sortable.append((descriptor, name.lowercased()))
         }
 
-        // Schwartzian transform: O(N) lowercased() allocations instead of O(2 * N log N).
-        sortable.sort { lhs, rhs in
-            if lhs.entry.isDirectory != rhs.entry.isDirectory {
-                return lhs.entry.isDirectory && !rhs.entry.isDirectory
-            }
-            if lhs.lowerName != rhs.lowerName {
-                return lhs.lowerName < rhs.lowerName
-            }
-            return lhs.entry.name < rhs.entry.name
-        }
-
+        sortable.sort(by: Self.dotfilePrecedesInListingOrder)
         let listing = FolderListingResult(
             entries: sortable.map(\.entry),
             skippedExternalSymlinkCount: skippedCount
@@ -335,5 +272,126 @@ public struct DotfileFolderNavigator: Sendable {
             throw DomainError.securityScopeViolation(path: candidateURL.path)
         }
         return resolvedURL
+    }
+}
+
+private extension DotfileFolderNavigator {
+    struct DotfileChildMetadata {
+        let isDirectory: Bool
+        let isRegularFile: Bool
+        let fileSize: Int?
+        let resolvedURLForProbe: URL
+    }
+
+    static func dotfileEnumerateChildURLs(in directoryURL: URL) throws -> [URL] {
+        do {
+            return try FileManager.default.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey],
+                options: []
+            )
+        } catch {
+            throw DomainError.ioFailure(error.localizedDescription)
+        }
+    }
+
+    func dotfileAppendChildIfConfined(
+        _ rawChildURL: URL,
+        in directoryURL: URL,
+        effectiveScope: URL,
+        canonicalScopePath: String,
+        symlinkPolicy: EscapingSymlinkPolicy,
+        probeBinary: Bool,
+        skippedCount: inout Int,
+        regularFileFlags: inout [URL: Bool],
+        sortable: inout [(entry: FolderEntryDescriptor, lowerName: String)]
+    ) throws {
+        let name = rawChildURL.lastPathComponent
+        guard name != "." && name != ".." else { return }
+        let reportedChildURL = directoryURL.appendingPathComponent(name)
+
+        guard let metadata = try Self.dotfileResolveChildMetadata(
+            rawChildURL: rawChildURL,
+            reportedChildURL: reportedChildURL,
+            canonicalScopePath: canonicalScopePath,
+            symlinkPolicy: symlinkPolicy,
+            skippedCount: &skippedCount
+        ) else {
+            return
+        }
+
+        let isBinary = dotfileShouldMarkBinary(metadata, probeBinary: probeBinary, effectiveScope: effectiveScope)
+        if !probeBinary {
+            regularFileFlags[reportedChildURL] = metadata.isRegularFile
+        }
+
+        let descriptor = FolderEntryDescriptor(
+            name: name,
+            url: reportedChildURL,
+            isDirectory: metadata.isDirectory,
+            isHiddenDotfile: name.hasPrefix("."),
+            isBinary: isBinary
+        )
+        sortable.append((descriptor, name.lowercased()))
+    }
+
+    static func dotfileResolveChildMetadata(
+        rawChildURL: URL,
+        reportedChildURL: URL,
+        canonicalScopePath: String,
+        symlinkPolicy: EscapingSymlinkPolicy,
+        skippedCount: inout Int
+    ) throws -> DotfileChildMetadata? {
+        let prefetched = try? rawChildURL.resourceValues(
+            forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+        )
+        if prefetched?.isSymbolicLink == false {
+            return DotfileChildMetadata(
+                isDirectory: prefetched?.isDirectory ?? false,
+                isRegularFile: prefetched?.isRegularFile ?? false,
+                fileSize: prefetched?.fileSize,
+                resolvedURLForProbe: reportedChildURL
+            )
+        }
+
+        let resolvedChild: URL
+        do {
+            resolvedChild = try verifyConfinementAndResolve(of: reportedChildURL, canonicalScopePath: canonicalScopePath)
+        } catch DomainError.securityScopeViolation where symlinkPolicy == .skipAndReport {
+            skippedCount += 1
+            return nil
+        }
+
+        let resolvedValues = try? resolvedChild.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey])
+        return DotfileChildMetadata(
+            isDirectory: resolvedValues?.isDirectory ?? false,
+            isRegularFile: resolvedValues?.isRegularFile ?? false,
+            fileSize: resolvedValues?.fileSize,
+            resolvedURLForProbe: resolvedChild
+        )
+    }
+
+    func dotfileShouldMarkBinary(
+        _ metadata: DotfileChildMetadata,
+        probeBinary: Bool,
+        effectiveScope: URL
+    ) -> Bool {
+        guard probeBinary, !metadata.isDirectory, metadata.isRegularFile, metadata.fileSize != 0 else {
+            return false
+        }
+        return probeBinaryRegularFile(at: metadata.resolvedURLForProbe, withinScope: effectiveScope)
+    }
+
+    static func dotfilePrecedesInListingOrder(
+        _ lhs: (entry: FolderEntryDescriptor, lowerName: String),
+        _ rhs: (entry: FolderEntryDescriptor, lowerName: String)
+    ) -> Bool {
+        if lhs.entry.isDirectory != rhs.entry.isDirectory {
+            return lhs.entry.isDirectory && !rhs.entry.isDirectory
+        }
+        if lhs.lowerName != rhs.lowerName {
+            return lhs.lowerName < rhs.lowerName
+        }
+        return lhs.entry.name < rhs.entry.name
     }
 }

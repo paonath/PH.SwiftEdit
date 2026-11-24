@@ -94,36 +94,11 @@ public enum FrontmatterPropertyParser {
         var seen: Set<String> = []
         var line = 1
         while line < closing {
-            let slice = index.lineSlice(line)
-            guard let first = slice.first, !isBlankLine(slice) else { line += 1; continue }
-            if first == YAMLLineTokenizer.space || first == YAMLLineTokenizer.tab { malformed = true; line += 1; continue }
-            let tokens = YAMLLineTokenizer.tokens(line: slice)
-            if tokens.first?.kind == .comment { line += 1; continue }
-            guard let keyToken = tokens.first, keyToken.kind == .key, keyToken.range.location == 0 else { malformed = true; line += 1; continue }
-            var end = line + 1
-            var children: [ArraySlice<UInt16>] = []
-            while end < closing {
-                let child = index.lineSlice(end)
-                if let c = child.first, c != YAMLLineTokenizer.space, c != YAMLLineTokenizer.tab { break }
-                if child.contains(YAMLLineTokenizer.tab), child.prefix(while: { YAMLLineTokenizer.isBlank($0) }).contains(YAMLLineTokenizer.tab) { malformed = true }
-                if !isBlankLine(child) { children.append(child) }
-                end += 1
-            }
-            if properties.count >= YAMLSupportLimits.maxProperties { malformed = true; break }
-            let key = unquote(slice, keyToken.range)
-            if !seen.insert(key).inserted { malformed = true }
-            let valueTokens = tokens.drop { $0.kind != .colon }.dropFirst()
-            let comment = tokens.last(where: { $0.kind == .comment }).map { text(slice, $0.range) }
-            let start = index.lineStarts[line]
-            let upper = index.lineStarts[end]
-            properties.append(FrontmatterProperty(
-                key: key,
-                kind: classify(slice, Array(valueTokens), children: children),
-                lineRange: line..<end,
-                utf16Range: TextRange(location: start, length: upper - start),
-                trailingComment: comment
-            ))
-            line = end
+            let step = scanFrontmatterTopLevelLine(in: index, at: line, closing: closing, currentCount: properties.count, seen: &seen)
+            if step.isMalformed { malformed = true }
+            if step.hitPropertyCap { break }
+            if let prop = step.property { properties.append(prop) }
+            line = step.nextLine
         }
         return FrontmatterPropertyModel(
             documentID: snapshot.id,
@@ -138,38 +113,11 @@ public enum FrontmatterPropertyParser {
     /// Classifies the value tokens after the key colon plus any indented child lines.
     static func classify(_ slice: ArraySlice<UInt16>, _ value: [YAMLToken], children: [ArraySlice<UInt16>]) -> FrontmatterValueKind {
         let content = value.filter { $0.kind != .comment }
-        if content.contains(where: { $0.kind == .anchor || $0.kind == .alias }) { return .aliased }
-        if content.contains(where: { $0.kind == .tag }) { return .tagged }
-        if content.contains(where: { $0.kind == .blockScalarIndicator }) { return .blockScalar }
-        if let token = content.first {
-            guard children.isEmpty else { return .blockScalar } // multi-line plain scalar
-            let raw = text(slice, token.range)
-            if raw.hasPrefix("{") { return .nestedMap }
-            if raw.hasPrefix("[") { return flowList(raw) ?? .nestedMap }
-            return .scalar(token.kind == .quotedString ? unquote(slice, token.range) : raw)
+        if let inlineKind = classifyInlineValueTokens(slice, content: content, hasChildren: !children.isEmpty) {
+            return inlineKind
         }
         guard !children.isEmpty else { return .scalar("") }
-        var items: [String] = []
-        for child in children {
-            let tokens = YAMLLineTokenizer.tokens(line: child).filter { $0.kind != .comment }
-            guard tokens.count == 2, tokens[0].kind == .listDash else {
-                if tokens.contains(where: { $0.kind == .key }) { return .nestedMap }
-                if tokens.contains(where: { $0.kind == .anchor || $0.kind == .alias }) { return .aliased }
-                return .nestedMap
-            }
-            let item = tokens[1]
-            switch item.kind {
-            case .quotedString: items.append(unquote(child, item.range))
-            case .value:
-                let raw = text(child, item.range)
-                guard !raw.hasPrefix("["), !raw.hasPrefix("{") else { return .nestedMap }
-                items.append(raw)
-            case .alias, .anchor: return .aliased
-            case .tag: return .tagged
-            default: return .nestedMap
-            }
-        }
-        return .list(items)
+        return classifyBlockSequenceChildren(children)
     }
 
     /// Splits a single-level flow sequence `[a, "b, c"]`; `nil` when nested collections appear.
@@ -182,24 +130,9 @@ public enum FrontmatterPropertyParser {
         while i < inner.endIndex {
             while i < inner.endIndex, YAMLLineTokenizer.isBlank(inner[i]) { i += 1 }
             guard i < inner.endIndex else { break }
-            let u = inner[i]
-            if u == YAMLLineTokenizer.lbracket || u == YAMLLineTokenizer.lbrace || u == YAMLLineTokenizer.star || u == YAMLLineTokenizer.amp { return nil }
-            var itemEnd: Int
-            var item: String
-            if u == YAMLLineTokenizer.dquote || u == YAMLLineTokenizer.squote {
-                itemEnd = YAMLLineTokenizer.quotedEnd(inner, from: i, end: inner.endIndex)
-                item = unquote(inner, TextRange(location: i - inner.startIndex, length: itemEnd - i))
-            } else {
-                itemEnd = i
-                while itemEnd < inner.endIndex, inner[itemEnd] != YAMLLineTokenizer.comma { itemEnd += 1 }
-                var upper = itemEnd
-                while upper > i, YAMLLineTokenizer.isBlank(inner[upper - 1]) { upper -= 1 }
-                item = String(decoding: inner[i..<upper], as: UTF16.self)
-            }
-            items.append(item)
-            i = itemEnd
-            while i < inner.endIndex, inner[i] != YAMLLineTokenizer.comma { i += 1 }
-            i += 1
+            guard let parsed = parseFlowListItem(inner, at: i) else { return nil }
+            items.append(parsed.item)
+            i = advancePastFlowComma(inner, from: parsed.itemEnd)
         }
         return .list(items)
     }
@@ -242,6 +175,168 @@ public enum FrontmatterPropertyParser {
     }
 }
 
+extension FrontmatterPropertyParser {
+    private struct TopLevelLineStep {
+        let property: FrontmatterProperty?
+        let nextLine: Int
+        let isMalformed: Bool
+        let hitPropertyCap: Bool
+    }
+
+    private static func scanFrontmatterTopLevelLine(
+        in index: MarkdownLineIndex,
+        at line: Int,
+        closing: Int,
+        currentCount: Int,
+        seen: inout Set<String>
+    ) -> TopLevelLineStep {
+        let slice = index.lineSlice(line)
+        guard let first = slice.first, isBlankLine(slice) == false else {
+            return TopLevelLineStep(property: nil, nextLine: line + 1, isMalformed: false, hitPropertyCap: false)
+        }
+        if YAMLLineTokenizer.isBlank(first) {
+            return TopLevelLineStep(property: nil, nextLine: line + 1, isMalformed: true, hitPropertyCap: false)
+        }
+        let tokens = YAMLLineTokenizer.tokens(line: slice)
+        if tokens.first?.kind == .comment {
+            return TopLevelLineStep(property: nil, nextLine: line + 1, isMalformed: false, hitPropertyCap: false)
+        }
+        guard let keyToken = tokens.first, keyToken.kind == .key, keyToken.range.location == 0 else {
+            return TopLevelLineStep(property: nil, nextLine: line + 1, isMalformed: true, hitPropertyCap: false)
+        }
+
+        let collected = collectFrontmatterChildLines(in: index, from: line + 1, closing: closing)
+        if currentCount >= YAMLSupportLimits.maxProperties {
+            return TopLevelLineStep(property: nil, nextLine: collected.endLine, isMalformed: true, hitPropertyCap: true)
+        }
+        let key = unquote(slice, keyToken.range)
+        let isDuplicate = !seen.insert(key).inserted
+        let valueTokens = Array(tokens.drop { $0.kind != .colon }.dropFirst())
+        let comment = tokens.last(where: { $0.kind == .comment }).map { text(slice, $0.range) }
+        let start = index.lineStarts[line]
+        let upper = index.lineStarts[collected.endLine]
+        let property = FrontmatterProperty(
+            key: key,
+            kind: classify(slice, valueTokens, children: collected.children),
+            lineRange: line..<collected.endLine,
+            utf16Range: TextRange(location: start, length: upper - start),
+            trailingComment: comment
+        )
+        return TopLevelLineStep(
+            property: property,
+            nextLine: collected.endLine,
+            isMalformed: collected.hasTabIndent || isDuplicate,
+            hitPropertyCap: false
+        )
+    }
+
+    private static func collectFrontmatterChildLines(
+        in index: MarkdownLineIndex,
+        from startLine: Int,
+        closing: Int
+    ) -> (children: [ArraySlice<UInt16>], endLine: Int, hasTabIndent: Bool) {
+        var end = startLine
+        var children: [ArraySlice<UInt16>] = []
+        var hasTabIndent = false
+        while end < closing {
+            let child = index.lineSlice(end)
+            if let c = child.first, !YAMLLineTokenizer.isBlank(c) { break }
+            if hasLeadingTabIndent(child) { hasTabIndent = true }
+            if isBlankLine(child) == false { children.append(child) }
+            end += 1
+        }
+        return (children, end, hasTabIndent)
+    }
+
+    private static func hasLeadingTabIndent(_ line: ArraySlice<UInt16>) -> Bool {
+        guard line.contains(YAMLLineTokenizer.tab) else { return false }
+        return line.prefix(while: { YAMLLineTokenizer.isBlank($0) }).contains(YAMLLineTokenizer.tab)
+    }
+
+    private static func classifyInlineValueTokens(
+        _ slice: ArraySlice<UInt16>,
+        content: [YAMLToken],
+        hasChildren: Bool
+    ) -> FrontmatterValueKind? {
+        if content.contains(where: { $0.kind == .anchor || $0.kind == .alias }) { return .aliased }
+        if content.contains(where: { $0.kind == .tag }) { return .tagged }
+        if content.contains(where: { $0.kind == .blockScalarIndicator }) { return .blockScalar }
+        guard let token = content.first else { return nil }
+        guard !hasChildren else { return .blockScalar }
+        let raw = text(slice, token.range)
+        if raw.hasPrefix("{") { return .nestedMap }
+        if raw.hasPrefix("[") { return flowList(raw) ?? .nestedMap }
+        return .scalar(token.kind == .quotedString ? unquote(slice, token.range) : raw)
+    }
+
+    private static func classifyBlockSequenceChildren(_ children: [ArraySlice<UInt16>]) -> FrontmatterValueKind {
+        var items: [String] = []
+        items.reserveCapacity(children.count)
+        for child in children {
+            switch classifySingleChildSequenceLine(child) {
+            case .item(let value): items.append(value)
+            case .nonEditable(let kind): return kind
+            }
+        }
+        return .list(items)
+    }
+
+    private enum ChildSequenceClassification {
+        case item(String)
+        case nonEditable(FrontmatterValueKind)
+    }
+
+    private static func classifySingleChildSequenceLine(_ child: ArraySlice<UInt16>) -> ChildSequenceClassification {
+        let tokens = YAMLLineTokenizer.tokens(line: child).filter { $0.kind != .comment }
+        guard tokens.count == 2, tokens[0].kind == .listDash else {
+            if tokens.contains(where: { $0.kind == .anchor || $0.kind == .alias }) {
+                return .nonEditable(.aliased)
+            }
+            return .nonEditable(.nestedMap)
+        }
+        let item = tokens[1]
+        switch item.kind {
+        case .quotedString:
+            return .item(unquote(child, item.range))
+        case .value:
+            let raw = text(child, item.range)
+            return (raw.hasPrefix("[") || raw.hasPrefix("{")) ? .nonEditable(.nestedMap) : .item(raw)
+        case .alias, .anchor:
+            return .nonEditable(.aliased)
+        case .tag:
+            return .nonEditable(.tagged)
+        default:
+            return .nonEditable(.nestedMap)
+        }
+    }
+
+    private static func parseFlowListItem(_ inner: ArraySlice<UInt16>, at i: Int) -> (item: String, itemEnd: Int)? {
+        let u = inner[i]
+        guard isDisallowedFlowItemOpeningUnit(u) == false else { return nil }
+        if u == YAMLLineTokenizer.dquote || u == YAMLLineTokenizer.squote {
+            let itemEnd = YAMLLineTokenizer.quotedEnd(inner, from: i, end: inner.endIndex)
+            let item = unquote(inner, TextRange(location: i - inner.startIndex, length: itemEnd - i))
+            return (item, itemEnd)
+        }
+        var itemEnd = i
+        while itemEnd < inner.endIndex, inner[itemEnd] != YAMLLineTokenizer.comma { itemEnd += 1 }
+        var upper = itemEnd
+        while upper > i, YAMLLineTokenizer.isBlank(inner[upper - 1]) { upper -= 1 }
+        return (String(decoding: inner[i..<upper], as: UTF16.self), itemEnd)
+    }
+
+    @inline(__always)
+    private static func isDisallowedFlowItemOpeningUnit(_ u: UInt16) -> Bool {
+        u == YAMLLineTokenizer.lbracket || u == YAMLLineTokenizer.lbrace || u == YAMLLineTokenizer.star || u == YAMLLineTokenizer.amp
+    }
+
+    private static func advancePastFlowComma(_ inner: ArraySlice<UInt16>, from start: Int) -> Int {
+        var i = start
+        while i < inner.endIndex, inner[i] != YAMLLineTokenizer.comma { i += 1 }
+        return i + 1
+    }
+}
+
 /// New value for an editable property.
 public enum FrontmatterEditValue: Equatable, Sendable { case scalar(String), list([String]) }
 
@@ -274,28 +369,15 @@ public enum FrontmatterPropertyWriter {
     public static func apply(_ operation: FrontmatterPropertyOperation, model: FrontmatterPropertyModel, snapshot: DocumentSnapshot) -> FrontmatterWriteResult {
         guard model.documentID == snapshot.id, model.revision == snapshot.revision else { return .staleRevision }
         guard !model.isReadOnly, model.closingDelimiterOffset >= 0 else { return .rejected(.readOnly) }
-        func entry(_ key: String) -> FrontmatterProperty? { model.properties.first { $0.key == key } }
         switch operation {
         case .setValue(let key, let value):
-            guard let property = entry(key) else { return .rejected(.unknownKey) }
-            guard property.isEditable else { return .rejected(.readOnly) }
-            let blockStyle = property.lineRange.count > 1
-            return .edit(TextEdit(range: property.utf16Range, replacement: render(key: key, value: value, blockStyle: blockStyle, comment: property.trailingComment)))
+            return applySetValue(key: key, value: value, model: model)
         case .rename(let from, let to):
-            guard isValidKey(to) else { return .rejected(.invalidKey) }
-            guard let property = entry(from) else { return .rejected(.unknownKey) }
-            guard property.isEditable else { return .rejected(.readOnly) }
-            guard from == to || entry(to) == nil else { return .rejected(.duplicateKey) }
-            guard let value = editValue(property.kind) else { return .rejected(.readOnly) }
-            return .edit(TextEdit(range: property.utf16Range, replacement: render(key: to, value: value, blockStyle: property.lineRange.count > 1, comment: property.trailingComment)))
+            return applyRename(from: from, to: to, model: model)
         case .add(let key, let value):
-            guard isValidKey(key) else { return .rejected(.invalidKey) }
-            guard entry(key) == nil else { return .rejected(.duplicateKey) }
-            guard model.properties.count < YAMLSupportLimits.maxProperties else { return .rejected(.readOnly) }
-            return .edit(TextEdit(range: TextRange(location: model.closingDelimiterOffset, length: 0), replacement: render(key: key, value: value, blockStyle: false, comment: nil)))
+            return applyAdd(key: key, value: value, model: model)
         case .remove(let key):
-            guard let property = entry(key) else { return .rejected(.unknownKey) }
-            return .edit(TextEdit(range: property.utf16Range, replacement: ""))
+            return applyRemove(key: key, model: model)
         }
     }
 
@@ -360,5 +442,40 @@ public enum FrontmatterPropertyWriter {
             }
         }
         return out + "\""
+    }
+}
+
+extension FrontmatterPropertyWriter {
+    private static func findPropertyEntry(_ key: String, in model: FrontmatterPropertyModel) -> FrontmatterProperty? {
+        model.properties.first { $0.key == key }
+    }
+
+    private static func applySetValue(key: String, value: FrontmatterEditValue, model: FrontmatterPropertyModel) -> FrontmatterWriteResult {
+        guard let property = findPropertyEntry(key, in: model) else { return .rejected(.unknownKey) }
+        guard property.isEditable else { return .rejected(.readOnly) }
+        let replacement = render(key: key, value: value, blockStyle: property.lineRange.count > 1, comment: property.trailingComment)
+        return .edit(TextEdit(range: property.utf16Range, replacement: replacement))
+    }
+
+    private static func applyRename(from: String, to: String, model: FrontmatterPropertyModel) -> FrontmatterWriteResult {
+        guard isValidKey(to) else { return .rejected(.invalidKey) }
+        guard let property = findPropertyEntry(from, in: model) else { return .rejected(.unknownKey) }
+        guard property.isEditable, let value = editValue(property.kind) else { return .rejected(.readOnly) }
+        guard from == to || findPropertyEntry(to, in: model) == nil else { return .rejected(.duplicateKey) }
+        let replacement = render(key: to, value: value, blockStyle: property.lineRange.count > 1, comment: property.trailingComment)
+        return .edit(TextEdit(range: property.utf16Range, replacement: replacement))
+    }
+
+    private static func applyAdd(key: String, value: FrontmatterEditValue, model: FrontmatterPropertyModel) -> FrontmatterWriteResult {
+        guard isValidKey(key) else { return .rejected(.invalidKey) }
+        guard findPropertyEntry(key, in: model) == nil else { return .rejected(.duplicateKey) }
+        guard model.properties.count < YAMLSupportLimits.maxProperties else { return .rejected(.readOnly) }
+        let insertRange = TextRange(location: model.closingDelimiterOffset, length: 0)
+        return .edit(TextEdit(range: insertRange, replacement: render(key: key, value: value, blockStyle: false, comment: nil)))
+    }
+
+    private static func applyRemove(key: String, model: FrontmatterPropertyModel) -> FrontmatterWriteResult {
+        guard let property = findPropertyEntry(key, in: model) else { return .rejected(.unknownKey) }
+        return .edit(TextEdit(range: property.utf16Range, replacement: ""))
     }
 }

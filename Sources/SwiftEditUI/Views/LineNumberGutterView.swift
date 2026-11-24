@@ -43,85 +43,91 @@ public struct LineNumberGutterProjection: Equatable, Sendable {
     /// - Returns: Clamped `LineNumberGutterProjection` with at least line `1`.
     public static func evaluate(text: String, caretLocation: Int, fontSizePoints: Double) -> LineNumberGutterProjection {
         let clampedCaret = max(0, caretLocation)
-        if let fast = text.utf8.withContiguousStorageIfAvailable({ buf -> LineNumberGutterProjection in
-            let count = buf.count
-            guard let base = buf.baseAddress, count > 0 else {
-                return LineNumberGutterProjection(lineCount: 1, activeLine: 1, fontSizePoints: fontSizePoints)
-            }
-            var totalLines = 1
-            var activeLine = 1
-            var utf16Offset = 0
-            var i = 0
-            while i < count {
-                let b = base[i]
-                if b == 0x0A {
-                    totalLines += 1
-                    utf16Offset += 1
-                    i += 1
-                    if utf16Offset <= clampedCaret { activeLine += 1 }
-                } else if b == 0x0D {
-                    totalLines += 1
-                    let beforeBreak = utf16Offset
-                    if i + 1 < count && base[i + 1] == 0x0A {
-                        utf16Offset += 2
-                        i += 2
-                        if beforeBreak + 1 < clampedCaret { activeLine += 1 }
-                    } else {
-                        utf16Offset += 1
-                        i += 1
-                        if utf16Offset <= clampedCaret { activeLine += 1 }
-                    }
-                } else if b < 0x80 {
-                    utf16Offset += 1
-                    i += 1
-                } else if b < 0xE0 {
-                    utf16Offset += 1
-                    i += 2
-                } else if b < 0xF0 {
-                    utf16Offset += 1
-                    i += 3
-                } else {
-                    utf16Offset += 2
-                    i += 4
-                }
-            }
-            return LineNumberGutterProjection(
-                lineCount: totalLines,
-                activeLine: min(max(1, activeLine), totalLines),
-                fontSizePoints: fontSizePoints
-            )
+        if let fast = text.utf8.withContiguousStorageIfAvailable({ buf in
+            evaluateContiguousUTF8(buf, clampedCaret: clampedCaret, fontSizePoints: fontSizePoints)
         }) {
             return fast
         }
+        return evaluateUTF16Fallback(text: text, clampedCaret: clampedCaret, fontSizePoints: fontSizePoints)
+    }
 
-        let utf16 = text.utf16
-        let boundedCaret = min(clampedCaret, utf16.count)
+    private static func evaluateContiguousUTF8(
+        _ buf: UnsafeBufferPointer<UInt8>,
+        clampedCaret: Int,
+        fontSizePoints: Double
+    ) -> LineNumberGutterProjection {
+        let count = buf.count
+        guard let base = buf.baseAddress, count > 0 else {
+            return LineNumberGutterProjection(lineCount: 1, activeLine: 1, fontSizePoints: fontSizePoints)
+        }
         var totalLines = 1
         var activeLine = 1
-        var offset = 0
-        var idx = utf16.startIndex
-        while idx < utf16.endIndex {
-            let unit = utf16[idx]
+        var utf16Offset = 0
+        var i = 0
+        while i < count {
+            advanceUTF8GutterStep(base: base, count: count, clampedCaret: clampedCaret, i: &i, utf16Offset: &utf16Offset, totalLines: &totalLines, activeLine: &activeLine)
+        }
+        return LineNumberGutterProjection(
+            lineCount: totalLines,
+            activeLine: min(max(1, activeLine), totalLines),
+            fontSizePoints: fontSizePoints
+        )
+    }
+
+    private static func advanceUTF8GutterStep(
+        base: UnsafePointer<UInt8>,
+        count: Int,
+        clampedCaret: Int,
+        i: inout Int,
+        utf16Offset: inout Int,
+        totalLines: inout Int,
+        activeLine: inout Int
+    ) {
+        let b = base[i]
+        if b == 0x0A {
+            totalLines += 1; utf16Offset += 1; i += 1
+            if utf16Offset <= clampedCaret { activeLine += 1 }
+            return
+        }
+        if b == 0x0D {
+            totalLines += 1
+            let isCRLF = (i + 1 < count && base[i + 1] == 0x0A)
+            let beforeBreak = utf16Offset
+            utf16Offset += isCRLF ? 2 : 1
+            i += isCRLF ? 2 : 1
+            let crossed = isCRLF ? (beforeBreak + 1 < clampedCaret) : (utf16Offset <= clampedCaret)
+            if crossed { activeLine += 1 }
+            return
+        }
+        if b < 0x80 { utf16Offset += 1; i += 1 }
+        else if b < 0xE0 { utf16Offset += 1; i += 2 }
+        else if b < 0xF0 { utf16Offset += 1; i += 3 }
+        else { utf16Offset += 2; i += 4 }
+    }
+
+    private static func evaluateUTF16Fallback(
+        text: String,
+        clampedCaret: Int,
+        fontSizePoints: Double
+    ) -> LineNumberGutterProjection {
+        let units = Array(text.utf16)
+        let boundedCaret = min(clampedCaret, units.count)
+        var totalLines = 1
+        var activeLine = 1
+        var idx = 0
+        while idx < units.count {
+            let unit = units[idx]
             if unit == 0x0A {
-                totalLines += 1
-                idx = utf16.index(after: idx)
-                offset += 1
-                if offset <= boundedCaret { activeLine += 1 }
+                totalLines += 1; idx += 1
+                if idx <= boundedCaret { activeLine += 1 }
             } else if unit == 0x0D {
                 totalLines += 1
-                let next = utf16.index(after: idx)
-                let step = (next < utf16.endIndex && utf16[next] == 0x0A) ? 2 : 1
-                idx = (step == 2) ? utf16.index(after: next) : next
-                let beforeBreak = offset
-                offset += step
-                if step == 2 {
-                    if beforeBreak + 1 < boundedCaret { activeLine += 1 }
-                } else {
-                    if offset <= boundedCaret { activeLine += 1 }
-                }
+                let isCRLF = (idx + 1 < units.count && units[idx + 1] == 0x0A)
+                let beforeBreak = idx
+                idx += isCRLF ? 2 : 1
+                if isCRLF ? (beforeBreak + 1 < boundedCaret) : (idx <= boundedCaret) { activeLine += 1 }
             } else {
-                idx = utf16.index(after: idx)
-                offset += 1
+                idx += 1
             }
         }
         return LineNumberGutterProjection(

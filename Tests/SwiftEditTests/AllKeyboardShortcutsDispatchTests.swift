@@ -269,4 +269,77 @@ struct AllKeyboardShortcutsDispatchTests {
         #expect(overlayBlocksInlineCode == false)
         #expect(overlayAllowsOptBackslash == true && model.navigatorState != nil)
     }
+
+    @Test("P8: Table-driven shortcut and cheat-sheet dispatchers stay within cyclomatic <= 15 and cognitive <= 25 while preserving every command")
+    func p8TableDrivenDispatchersSatisfyComplexityAndCommandParity() throws {
+        // GIVEN live shortcut dispatcher, cheat-sheet dispatcher, and root key monitor files
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let files = [
+            "Sources/SwiftEditUI/Views/SwiftEditShortcutDispatcher.swift",
+            "Sources/SwiftEditUI/Workbench/SwiftEditWorkbenchModel+ContextualMenuAndShortcuts.swift",
+            "Sources/SwiftEditUI/Views/SwiftEditRootView+LifecycleSheetsAlertsAndKeyMonitor.swift",
+        ]
+        let sources: [(filePath: String, content: String)] = try files.map { rel in
+            (rel, try String(contentsOf: repoRoot.appendingPathComponent(rel), encoding: .utf8))
+        }
+        let (model, _, dir) = Self.makeWorkbench()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // WHEN checking complexity budgets and invoking representative cheat-sheet commands across categories
+        let violations = CodeModularityFitnessScanner.verifyMethodComplexityBudgets(
+            sources: sources,
+            maxCyclomatic: 15,
+            maxCognitive: 25
+        )
+        model.performCheatSheetCommand(.toggleWordWrap)
+        let toggledWrap = !model.isWordWrapEnabled
+        model.performCheatSheetCommand(.zoomIn)
+        let zoomedPercent = model.zoomController.zoomPercent
+
+        // THEN all three dispatchers satisfy cyclomatic <= 15 and cognitive <= 25 and preserve command semantics
+        #expect(violations.isEmpty, "Dispatcher complexity violations:\n\(violations.map(\.description).joined(separator: "\n"))")
+        #expect(toggledWrap)
+        #expect(zoomedPercent > 100)
+    }
+
+    @Test("N9 [Security]: Table-driven SwiftEditShortcutDispatcher rejects unmapped and malformed chords fail-closed")
+    func n9TableDrivenDispatcherRejectsUnmappedAndMalformedChordsFailClosed() {
+        // GIVEN a clean workbench model
+        let (model, _, dir) = Self.makeWorkbench()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // WHEN dispatching unmapped chords and malformed multi-character/NUL/BiDi chords
+        let unmappedCmdZ = SwiftEditShortcutDispatcher.dispatch(
+            ShortcutKeyEvent(characters: "z", modifiers: [.command]),
+            model: model
+        )
+        let unmappedCtrlOpt = SwiftEditShortcutDispatcher.dispatch(
+            ShortcutKeyEvent(characters: "s", modifiers: [.control, .option]),
+            model: model
+        )
+        let malformedOversized = SwiftEditShortcutDispatcher.dispatch(
+            ShortcutKeyEvent(characters: "/", charactersIgnoringModifiers: "malformed_long_payload", modifiers: [.command]),
+            model: model
+        )
+        let malformedNul = SwiftEditShortcutDispatcher.dispatch(
+            ShortcutKeyEvent(characters: "n\0", charactersIgnoringModifiers: "n", modifiers: [.command]),
+            model: model
+        )
+        let malformedBiDi = SwiftEditShortcutDispatcher.dispatch(
+            ShortcutKeyEvent(characters: "n\u{202E}", charactersIgnoringModifiers: "n", modifiers: [.command]),
+            model: model
+        )
+
+        // THEN every unmapped or malformed chord fails closed without mutating workbench state
+        #expect(!unmappedCmdZ)
+        #expect(!unmappedCtrlOpt)
+        #expect(!malformedOversized)
+        #expect(!malformedNul)
+        #expect(!malformedBiDi)
+        #expect(!model.isCheatSheetPresented)
+        #expect(model.tabSession.tabs.count == 1)
+    }
 }

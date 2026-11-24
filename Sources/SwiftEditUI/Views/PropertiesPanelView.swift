@@ -194,10 +194,10 @@ struct PropertiesPanelView: View {
             TextField("value", text: $newValue)
                 .textFieldStyle(.plain)
                 .appFont(size: 12, monospaced: true)
-                .onSubmit(addProperty)
+                .onSubmit { addProperty() }
                 .accessibilityLabel("New property value")
                 .frame(maxWidth: 420, alignment: .leading)
-            Button(action: addProperty) { AppIconView(.plus, size: 12).minimumHitTarget() }
+            Button { addProperty() } label: { AppIconView(.plus, size: 12).minimumHitTarget() }
                 .buttonStyle(.plain)
                 .foregroundStyle(palette.chromeAccent.swiftUIColor)
                 .disabled(newKey.trimmingCharacters(in: .whitespaces).isEmpty)

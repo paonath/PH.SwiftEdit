@@ -41,135 +41,35 @@ public struct SwiftEditCommands: Commands {
     @CommandsBuilder
     private var appInfoCommands: some Commands {
         CommandGroup(replacing: .appInfo) {
-            Button("About SwiftEdit") {
-                model?.isAboutSheetPresented = true
-            }
-            .disabled(model == nil)
-            Button("Check for Updates…") {
-                model?.checkForUpdates()
-            }
-            .disabled(model == nil)
+            Self.appInfoContent(model: model)
         }
     }
 
     @CommandsBuilder
     private var newItemCommands: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New Document") { model?.newUntitledTab() }
-                .keyboardShortcut("n", modifiers: .command)
-                .disabled(model == nil)
-            Button("Open File…") { model?.openFileViaPanel() }
-                .keyboardShortcut("o", modifiers: .command)
-                .disabled(model == nil)
-            Button("Open Folder…") { model?.openFolderViaPanel() }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
-                .disabled(model == nil)
-            Button("Open All Files in Folder…") { model?.openAllFilesInFolderViaPanel() }
-                .keyboardShortcut("o", modifiers: [.command, .shift, .option])
-                .disabled(model == nil)
-            Menu("Open Recent") {
-                if let entries = model?.recentFiles, !entries.isEmpty {
-                    ForEach(entries, id: \.standardizedPath) { entry in
-                        Button(entry.displayName) {
-                            model?.openRecentFile(entry)
-                        }
-                    }
-                    Divider()
-                    Button("Clear Recent") {
-                        model?.clearRecentFiles()
-                    }
-                } else {
-                    Text("No Recent Files")
-                }
-            }
+            Self.newItemContent(model: model)
         }
     }
 
     @CommandsBuilder
     private var saveItemCommands: some Commands {
         CommandGroup(replacing: .saveItem) {
-            Button("Save") { model?.saveActiveDocument() }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(model?.safetyBanner.canSave != true)
-            Button("Save As…") { model?.saveActiveDocumentAsViaPanel() }
-                .keyboardShortcut("s", modifiers: [.command, .shift])
-                .disabled(model?.safetyBanner.canSave != true)
-            Divider()
-            Button("Close Document") { model?.requestCloseActiveTab() }
-                .keyboardShortcut("w", modifiers: [.command, .shift])
-                .disabled(model == nil)
+            Self.saveItemContent(model: model)
         }
     }
 
     @CommandsBuilder
     private var pasteboardAfterCommands: some Commands {
         CommandGroup(after: .pasteboard) {
-            Divider()
-            Button("Duplicate Line or Selection") { model?.performCommandD() }
-                .keyboardShortcut("d", modifiers: .command)
-                .disabled(model?.safetyBanner.canSave != true)
-            Button("Format Markdown Document") { model?.formatActiveDocument() }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-                .disabled(model?.safetyBanner.canFormat != true)
-            Button("Format Markdown Section") { model?.formatActiveSection() }
-                .keyboardShortcut("f", modifiers: [.command, .shift, .option])
-                .disabled(model?.safetyBanner.canFormat != true)
-            Divider()
-            Button("Find…") { model?.presentFindBar(mode: .find) }
-                .keyboardShortcut("f", modifiers: .command)
-                .disabled(model == nil)
-            Button("Find and Replace…") { model?.presentFindBar(mode: .findAndReplace) }
-                .keyboardShortcut("f", modifiers: [.command, .option])
-                .disabled(model == nil)
-            Button("Go to Line…") { model?.presentFindBar(mode: .goToLine) }
-                .keyboardShortcut("g", modifiers: .command)
-                .disabled(model == nil)
-            Divider()
-            Button("Contextual Actions…") { model?.presentElementContextualMenu() }
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(model?.canPresentElementContextualMenu != true)
+            Self.pasteboardAfterContent(model: model)
         }
     }
 
     @CommandsBuilder
     private var sidebarAfterCommands: some Commands {
         CommandGroup(after: .sidebar) {
-            Button("Toggle Folder Navigator") { model?.toggleLeftSidebar() }
-                .keyboardShortcut("b", modifiers: .command)
-                .disabled(model == nil)
-            Divider()
-            Button("Zoom In") { model?.zoomController.zoomIn() }
-                .keyboardShortcut("+", modifiers: .command)
-                .disabled(model == nil)
-            Button("Zoom Out") { model?.zoomController.zoomOut() }
-                .keyboardShortcut("-", modifiers: .command)
-                .disabled(model == nil)
-            Button("Actual Size (100%)") { model?.zoomController.resetZoom() }
-                .keyboardShortcut("0", modifiers: .command)
-                .disabled(model == nil)
-            Divider()
-            // Live log tail of the active file (`REQ-LOG`): runs in the background, the file stays writable.
-            Button("Log Tail (Direct)") { model?.startLogTail(mode: .direct) }
-                .keyboardShortcut("l", modifiers: .command)
-                .disabled(model == nil)
-            Button("Log Tail (Inverse, Newest First)") { model?.startLogTail(mode: .inverse) }
-                .keyboardShortcut("l", modifiers: [.command, .shift])
-                .disabled(model == nil)
-            Button("Stop Log Tail") { model?.stopLogTail() }
-                .disabled(model?.activeLogTail?.isRunning != true)
-            Divider()
-            Button(model?.isWordWrapEnabled == false ? "Enable Word Wrap" : "Disable Word Wrap") {
-                model?.toggleWordWrap()
-            }
-            .keyboardShortcut("w", modifiers: .command)
-            .disabled(model == nil)
-            Button(model?.showDiffPane == true ? "Hide File Compare" : "Show File Compare") { model?.toggleDiffPane() }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
-                .disabled(model == nil)
-            Divider()
-            Button("Toggle Terminal Panel") { model?.toggleTerminalPanel() }
-                .keyboardShortcut("j", modifiers: .command)
-                .disabled(model == nil)
+            Self.sidebarAfterContent(model: model)
         }
     }
 
@@ -177,30 +77,179 @@ public struct SwiftEditCommands: Commands {
     private var printItemCommands: some Commands {
         // Replaces the system Print item so Cmd+P toggles the in-memory Markdown preview and never reaches the print spooler (SEC-004).
         CommandGroup(replacing: .printItem) {
-            Button(model?.showMarkdownPreview == true ? "Hide Markdown Preview" : "Show Markdown Preview") {
-                model?.toggleMarkdownPreview()
-            }
-            .keyboardShortcut("p", modifiers: .command)
-            .disabled(model == nil)
+            Self.printItemContent(model: model)
         }
     }
 
     @CommandsBuilder
     private var navigateMenu: some Commands {
         CommandMenu("Navigate") {
-            Button("Document Navigator") { model?.toggleDocumentNavigator() }
-                .keyboardShortcut("\\", modifiers: .option)
-                .disabled(model?.isNavigatorEnabled != true && model?.navigatorState == nil)
-            Button(model?.isDistractionFree == true ? "Exit Distraction-Free" : "Distraction-Free") { model?.toggleDistractionFree() }
-                .keyboardShortcut("1", modifiers: .option)
-                .disabled(model == nil)
+            Self.navigateMenuContent(model: model)
         }
     }
 
     @CommandsBuilder
     private var markdownMenu: some Commands {
         CommandMenu("Markdown") {
-          Group {
+            Self.markdownMenuContent(model: model)
+        }
+    }
+
+    @CommandsBuilder
+    private var helpCommands: some Commands {
+        CommandGroup(replacing: .help) {
+            Self.helpCommandsContent(model: model)
+        }
+    }
+}
+
+extension SwiftEditCommands {
+    @ViewBuilder
+    static func appInfoContent(model: SwiftEditWorkbenchModel?) -> some View {
+        Button("About SwiftEdit") {
+            model?.isAboutSheetPresented = true
+        }
+        .disabled(model == nil)
+        Button("Check for Updates…") {
+            model?.checkForUpdates()
+        }
+        .disabled(model == nil)
+    }
+
+    @ViewBuilder
+    static func newItemContent(model: SwiftEditWorkbenchModel?) -> some View {
+        Button("New Document") { model?.newUntitledTab() }
+            .keyboardShortcut("n", modifiers: .command)
+            .disabled(model == nil)
+        Button("Open File…") { model?.openFileViaPanel() }
+            .keyboardShortcut("o", modifiers: .command)
+            .disabled(model == nil)
+        Button("Open Folder…") { model?.openFolderViaPanel() }
+            .keyboardShortcut("o", modifiers: [.command, .shift])
+            .disabled(model == nil)
+        Button("Open All Files in Folder…") { model?.openAllFilesInFolderViaPanel() }
+            .keyboardShortcut("o", modifiers: [.command, .shift, .option])
+            .disabled(model == nil)
+        Menu("Open Recent") {
+            if let entries = model?.recentFiles, entries.isEmpty == false {
+                ForEach(entries, id: \.standardizedPath) { entry in
+                    Button(entry.displayName) {
+                        model?.openRecentFile(entry)
+                    }
+                }
+                Divider()
+                Button("Clear Recent") {
+                    model?.clearRecentFiles()
+                }
+            } else {
+                Text("No Recent Files")
+            }
+        }
+    }
+
+    @ViewBuilder
+    static func saveItemContent(model: SwiftEditWorkbenchModel?) -> some View {
+        Button("Save") { model?.saveActiveDocument() }
+            .keyboardShortcut("s", modifiers: .command)
+            .disabled(model?.safetyBanner.canSave != true)
+        Button("Save As…") { model?.saveActiveDocumentAsViaPanel() }
+            .keyboardShortcut("s", modifiers: [.command, .shift])
+            .disabled(model?.safetyBanner.canSave != true)
+        Divider()
+        Button("Close Document") { model?.requestCloseActiveTab() }
+            .keyboardShortcut("w", modifiers: [.command, .shift])
+            .disabled(model == nil)
+    }
+
+    @ViewBuilder
+    static func pasteboardAfterContent(model: SwiftEditWorkbenchModel?) -> some View {
+        Divider()
+        Button("Duplicate Line or Selection") { model?.performCommandD() }
+            .keyboardShortcut("d", modifiers: .command)
+            .disabled(model?.safetyBanner.canSave != true)
+        Button("Format Markdown Document") { model?.formatActiveDocument() }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .disabled(model?.safetyBanner.canFormat != true)
+        Button("Format Markdown Section") { model?.formatActiveSection() }
+            .keyboardShortcut("f", modifiers: [.command, .shift, .option])
+            .disabled(model?.safetyBanner.canFormat != true)
+        Divider()
+        Button("Find…") { model?.presentFindBar(mode: .find) }
+            .keyboardShortcut("f", modifiers: .command)
+            .disabled(model == nil)
+        Button("Find and Replace…") { model?.presentFindBar(mode: .findAndReplace) }
+            .keyboardShortcut("f", modifiers: [.command, .option])
+            .disabled(model == nil)
+        Button("Go to Line…") { model?.presentFindBar(mode: .goToLine) }
+            .keyboardShortcut("g", modifiers: .command)
+            .disabled(model == nil)
+        Divider()
+        Button("Contextual Actions…") { model?.presentElementContextualMenu() }
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(model?.canPresentElementContextualMenu != true)
+    }
+
+    @ViewBuilder
+    static func sidebarAfterContent(model: SwiftEditWorkbenchModel?) -> some View {
+        Button("Toggle Folder Navigator") { model?.toggleLeftSidebar() }
+            .keyboardShortcut("b", modifiers: .command)
+            .disabled(model == nil)
+        Divider()
+        Button("Zoom In") { model?.zoomController.zoomIn() }
+            .keyboardShortcut("+", modifiers: .command)
+            .disabled(model == nil)
+        Button("Zoom Out") { model?.zoomController.zoomOut() }
+            .keyboardShortcut("-", modifiers: .command)
+            .disabled(model == nil)
+        Button("Actual Size (100%)") { model?.zoomController.resetZoom() }
+            .keyboardShortcut("0", modifiers: .command)
+            .disabled(model == nil)
+        Divider()
+        Button("Log Tail (Direct)") { model?.startLogTail(mode: .direct) }
+            .keyboardShortcut("l", modifiers: .command)
+            .disabled(model == nil)
+        Button("Log Tail (Inverse, Newest First)") { model?.startLogTail(mode: .inverse) }
+            .keyboardShortcut("l", modifiers: [.command, .shift])
+            .disabled(model == nil)
+        Button("Stop Log Tail") { model?.stopLogTail() }
+            .disabled(model?.activeLogTail?.isRunning != true)
+        Divider()
+        Button(model?.isWordWrapEnabled == false ? "Enable Word Wrap" : "Disable Word Wrap") {
+            model?.toggleWordWrap()
+        }
+        .keyboardShortcut("w", modifiers: .command)
+        .disabled(model == nil)
+        Button(model?.showDiffPane == true ? "Hide File Compare" : "Show File Compare") { model?.toggleDiffPane() }
+            .keyboardShortcut("d", modifiers: [.command, .shift])
+            .disabled(model == nil)
+        Divider()
+        Button("Toggle Terminal Panel") { model?.toggleTerminalPanel() }
+            .keyboardShortcut("j", modifiers: .command)
+            .disabled(model == nil)
+    }
+
+    @ViewBuilder
+    static func printItemContent(model: SwiftEditWorkbenchModel?) -> some View {
+        Button(model?.showMarkdownPreview == true ? "Hide Markdown Preview" : "Show Markdown Preview") {
+            model?.toggleMarkdownPreview()
+        }
+        .keyboardShortcut("p", modifiers: .command)
+        .disabled(model == nil)
+    }
+
+    @ViewBuilder
+    static func navigateMenuContent(model: SwiftEditWorkbenchModel?) -> some View {
+        Button("Document Navigator") { model?.toggleDocumentNavigator() }
+            .keyboardShortcut("\\", modifiers: .option)
+            .disabled(model?.isNavigatorEnabled != true && model?.navigatorState == nil)
+        Button(model?.isDistractionFree == true ? "Exit Distraction-Free" : "Distraction-Free") { model?.toggleDistractionFree() }
+            .keyboardShortcut("1", modifiers: .option)
+            .disabled(model == nil)
+    }
+
+    @ViewBuilder
+    static func markdownMenuContent(model: SwiftEditWorkbenchModel?) -> some View {
+        Group {
             Group {
                 Button("Bold") { model?.applyMarkdownCommand(.bold) }.keyboardShortcut("b", modifiers: [.command, .shift])
                 Button("Italic") { model?.applyMarkdownCommand(.italic) }.keyboardShortcut("i", modifiers: .command)
@@ -224,34 +273,46 @@ public struct SwiftEditCommands: Commands {
                         .keyboardShortcut(KeyEquivalent(Character(String(level))), modifiers: [.command, .control])
                 }
             }
-          }
-          .disabled(model?.isMarkdownMenuEnabled != true)
         }
+        .disabled(model?.isMarkdownMenuEnabled != true)
     }
 
-    @CommandsBuilder
-    private var helpCommands: some Commands {
-        CommandGroup(replacing: .help) {
-            Button("SwiftEdit Help") {
-                model?.isHelpSheetPresented = true
-            }
-            .keyboardShortcut("?", modifiers: [.command, .shift])
-            .disabled(model == nil)
-            Button("Keyboard Shortcuts CheatSheet") {
-                model?.isCheatSheetPresented = true
-            }
-            .keyboardShortcut("/", modifiers: .command)
-            .disabled(model == nil)
-            Button(model?.isShortcutsPanelVisible == true ? "Hide Keyboard Shortcuts Panel" : "Show Keyboard Shortcuts Panel") {
-                model?.toggleShortcutsPanel()
-            }
-            .keyboardShortcut("/", modifiers: [.command, .option])
-            .disabled(model == nil)
-            Divider()
-            Button("About SwiftEdit") {
-                model?.isAboutSheetPresented = true
-            }
-            .disabled(model == nil)
+    @ViewBuilder
+    static func helpCommandsContent(model: SwiftEditWorkbenchModel?) -> some View {
+        Button("SwiftEdit Help") {
+            model?.isHelpSheetPresented = true
+        }
+        .keyboardShortcut("?", modifiers: [.command, .shift])
+        .disabled(model == nil)
+        Button("Keyboard Shortcuts CheatSheet") {
+            model?.isCheatSheetPresented = true
+        }
+        .keyboardShortcut("/", modifiers: .command)
+        .disabled(model == nil)
+        Button(model?.isShortcutsPanelVisible == true ? "Hide Keyboard Shortcuts Panel" : "Show Keyboard Shortcuts Panel") {
+            model?.toggleShortcutsPanel()
+        }
+        .keyboardShortcut("/", modifiers: [.command, .option])
+        .disabled(model == nil)
+        Divider()
+        Button("About SwiftEdit") {
+            model?.isAboutSheetPresented = true
+        }
+        .disabled(model == nil)
+    }
+
+    @ViewBuilder
+    static func combinedMenuPreview(model: SwiftEditWorkbenchModel?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            appInfoContent(model: model)
+            newItemContent(model: model)
+            saveItemContent(model: model)
+            pasteboardAfterContent(model: model)
+            sidebarAfterContent(model: model)
+            printItemContent(model: model)
+            navigateMenuContent(model: model)
+            markdownMenuContent(model: model)
+            helpCommandsContent(model: model)
         }
     }
 }

@@ -462,4 +462,26 @@ struct PerformanceCachingAndSecurityLintTests {
         #expect(coord.bufferAdapter.scopedTransactionCount == txAfterFirst)
         #expect(coord.activeBracketPair?.openOffset == 5)
     }
+
+    @Test("N9 [Security]: Decomposed MarkdownLinterInlineSecurityPass sub-passes catch javascript:, vbscript:, data:text/html, file:, ../ traversal, and U+202E BiDi scalars (CWE-79 / CWE-22)")
+    func n9DecomposedInlineSecuritySubPassesCatchAllVectors() {
+        // GIVEN a Markdown document containing all 5 inline URI/path/BiDi attack vectors
+        let payload = """
+        [xss1](javascript:alert(1))
+        [xss2](vbscript:msgbox(1))
+        [xss3](data:text/html,<script>alert(1)</script>)
+        [local](file:///etc/passwd)
+        ![trav](../../etc/passwd)
+        [bidi](https://example.com/\u{202E}txt.exe)
+        """
+        let snapshot = DocumentSession(text: payload).snapshot
+
+        // WHEN running MarkdownLintAndFormatEngine.lint under allConstructs
+        let outcome = MarkdownLintAndFormatEngine.lint(snapshot: snapshot, profile: .allConstructs)
+        let diagnostics = outcome.completedValue?.diagnostics ?? []
+
+        // THEN every single unsafe line (1 through 6) produces at least one error-level security diagnostic
+        let flaggedLines = Set(diagnostics.filter { $0.severity == .error }.map(\.line))
+        #expect(flaggedLines.isSuperset(of: [1, 2, 3, 4, 5, 6]), "Flagged lines: \(flaggedLines)")
+    }
 }

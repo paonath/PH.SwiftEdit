@@ -65,40 +65,59 @@ public enum MarkdownHeadingOutlineEngine {
     }
 
     private static func parse(_ slice: ArraySlice<UInt16>, offset: Int) -> MarkdownHeading? {
-        guard slice.count <= MarkdownLineIndex.maxLineUTF16 else { return nil }
-        let start = slice.startIndex
+        guard slice.count <= MarkdownLineIndex.maxLineUTF16,
+              let opened = consumeATXOpeningMarker(slice) else { return nil }
+        let titleRange = trimATXHeadingBodyBounds(slice, from: opened.bodyStart, to: opened.trimmedEnd)
+        let title = decodeATXHeadingTitle(slice, range: titleRange)
+        return MarkdownHeading(level: opened.level, title: title, utf16Offset: offset)
+    }
+}
+
+extension MarkdownHeadingOutlineEngine {
+    private static func consumeATXOpeningMarker(_ slice: ArraySlice<UInt16>) -> (level: Int, bodyStart: Int, trimmedEnd: Int)? {
+        var i = slice.startIndex
         var end = slice.endIndex
-        var i = start
         var spaces = 0
         while i < end, spaces < 4, slice[i] == 0x20 { i += 1; spaces += 1 }
         guard spaces <= 3, i < end, slice[i] == 0x23 else { return nil }
 
-        // Trim trailing CR/space/tab only on lines that actually begin with `#`.
-        while end > i {
-            let u = slice[end - 1]
-            if u == 0x0D || u == 0x20 || u == 0x09 { end -= 1 } else { break }
-        }
+        while end > i, isHeadingTrailingTrimUnit(slice[end - 1]) { end -= 1 }
 
         var level = 0
         while i < end, slice[i] == 0x23 { level += 1; i += 1 }
-        guard (1...6).contains(level) else { return nil }
-        guard i == end || slice[i] == 0x20 || slice[i] == 0x09 else { return nil }
+        guard (1...6).contains(level), i == end || isHeadingHorizontalSpace(slice[i]) else { return nil }
+        return (level, i, end)
+    }
 
-        // Trim optional closing `#` run preceded by space/tab (or covering the whole body).
+    private static func trimATXHeadingBodyBounds(_ slice: ArraySlice<UInt16>, from start: Int, to initialEnd: Int) -> Range<Int> {
+        var i = start
+        var end = initialEnd
         var bodyEnd = end
         while bodyEnd > i, slice[bodyEnd - 1] == 0x23 { bodyEnd -= 1 }
-        if bodyEnd < end, bodyEnd == i || slice[bodyEnd - 1] == 0x20 || slice[bodyEnd - 1] == 0x09 {
+        if bodyEnd < end, bodyEnd == i || isHeadingHorizontalSpace(slice[bodyEnd - 1]) {
             end = bodyEnd
         }
+        while i < end, isHeadingHorizontalSpace(slice[i]) { i += 1 }
+        while end > i, isHeadingHorizontalSpace(slice[end - 1]) { end -= 1 }
+        return i..<end
+    }
 
-        // Trim leading/trailing ASCII space/tab before decoding to String.
-        while i < end, slice[i] == 0x20 || slice[i] == 0x09 { i += 1 }
-        while end > i, slice[end - 1] == 0x20 || slice[end - 1] == 0x09 { end -= 1 }
-        let rawTitle = String(decoding: slice[i..<end], as: UTF16.self)
-        let title = (i < end && (slice[i] >= 0x80 || slice[end - 1] >= 0x80))
-            ? rawTitle.trimmingCharacters(in: .whitespaces)
-            : rawTitle
-        return MarkdownHeading(level: level, title: title, utf16Offset: offset)
+    private static func decodeATXHeadingTitle(_ slice: ArraySlice<UInt16>, range: Range<Int>) -> String {
+        let rawTitle = String(decoding: slice[range], as: UTF16.self)
+        guard !range.isEmpty, slice[range.lowerBound] >= 0x80 || slice[range.upperBound - 1] >= 0x80 else {
+            return rawTitle
+        }
+        return rawTitle.trimmingCharacters(in: .whitespaces)
+    }
+
+    @inline(__always)
+    private static func isHeadingTrailingTrimUnit(_ u: UInt16) -> Bool {
+        u == 0x0D || u == 0x20 || u == 0x09
+    }
+
+    @inline(__always)
+    private static func isHeadingHorizontalSpace(_ u: UInt16) -> Bool {
+        u == 0x20 || u == 0x09
     }
 }
 

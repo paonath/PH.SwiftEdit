@@ -27,99 +27,7 @@ public struct LogTailBuffer: Sendable, Equatable {
         guard !data.isEmpty else { return }
         data.withUnsafeBytes { rawBuffer in
             let bytes = rawBuffer.bindMemory(to: UInt8.self)
-            let count = bytes.count
-            guard let base = bytes.baseAddress, count > 0 else { return }
-            var cursor = 0
-            if startsMidLine {
-                guard let hit = memchr(base, 0x0A, count) else { return }
-                let foundNL = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
-                cursor = foundNL + 1
-                partial.removeAll(keepingCapacity: true)
-            }
-
-            // Collect newline positions in the remaining slice using SIMD-accelerated `memchr` so that if a single
-            // chunk carries more than `maxLines` lines (e.g. initial 8 MiB tail window), we only decode the
-            // trailing `maxLines` lines instead of allocating and immediately discarding the rest.
-            var newlineOffsets: [Int] = []
-            newlineOffsets.reserveCapacity(min(Self.maxLines + 1, max(16, (count - cursor) / 64)))
-            var scan = cursor
-            while scan < count {
-                guard let hit = memchr(base + scan, 0x0A, count - scan) else { break }
-                let nlPos = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
-                newlineOffsets.append(nlPos)
-                scan = nlPos + 1
-            }
-
-            if !newlineOffsets.isEmpty {
-                let firstNewlineIndex: Int
-                if newlineOffsets.count > Self.maxLines {
-                    firstNewlineIndex = newlineOffsets.count - Self.maxLines
-                    // Everything before `newlineOffsets[firstNewlineIndex - 1]` is dropped; partial is superseded.
-                    lines.removeAll(keepingCapacity: true)
-                    partial.removeAll(keepingCapacity: true)
-                    cursor = newlineOffsets[firstNewlineIndex - 1] + 1
-                } else {
-                    firstNewlineIndex = 0
-                }
-
-                let decodedCount = newlineOffsets.count - firstNewlineIndex
-                if lines.count + decodedCount > Self.maxLines {
-                    let drop = lines.count + decodedCount - Self.maxLines
-                    if drop >= lines.count {
-                        lines.removeAll(keepingCapacity: true)
-                    } else {
-                        lines.removeFirst(drop)
-                    }
-                }
-                lines.reserveCapacity(min(Self.maxLines, lines.count + decodedCount))
-
-                var segStart = cursor
-                for nlIdx in firstNewlineIndex..<newlineOffsets.count {
-                    let nlPos = newlineOffsets[nlIdx]
-                    if partial.isEmpty {
-                        var segEnd = nlPos
-                        if segEnd > segStart && bytes[segEnd - 1] == 0x0D {
-                            segEnd -= 1
-                        }
-                        if segEnd == segStart {
-                            lines.append("")
-                        } else {
-                            let slice = UnsafeBufferPointer(rebasing: bytes[segStart..<segEnd])
-                            lines.append(String(decoding: slice, as: UTF8.self))
-                        }
-                    } else {
-                        var segEnd = nlPos
-                        if segEnd > segStart && bytes[segEnd - 1] == 0x0D {
-                            segEnd -= 1
-                            if segEnd > segStart {
-                                partial.append(contentsOf: bytes[segStart..<segEnd])
-                            }
-                        } else if segEnd > segStart {
-                            partial.append(contentsOf: bytes[segStart..<segEnd])
-                        } else if partial.last == 0x0D {
-                            partial.removeLast()
-                        }
-                        lines.append(String(decoding: partial, as: UTF8.self))
-                        partial.removeAll(keepingCapacity: true)
-                    }
-                    segStart = nlPos + 1
-                }
-                cursor = segStart
-            }
-
-            if cursor < count {
-                let remaining = count - cursor
-                let cap = 1 << 20
-                if remaining >= cap {
-                    partial.removeAll(keepingCapacity: true)
-                    partial.append(contentsOf: bytes[(count - cap)..<count])
-                } else {
-                    partial.append(contentsOf: bytes[cursor..<count])
-                    if partial.count > cap {
-                        partial.removeFirst(partial.count - cap)
-                    }
-                }
-            }
+            logTailIngestContiguousBytes(bytes, startsMidLine: startsMidLine)
         }
     }
 
@@ -140,6 +48,130 @@ public struct LogTailBuffer: Sendable, Equatable {
 
     public func text(count: Int, mode: LogTailMode) -> String {
         textAndCount(count: count, mode: mode).text
+    }
+}
+
+private extension LogTailBuffer {
+    static let partialCapBytes = 1 << 20
+
+    mutating func logTailIngestContiguousBytes(_ bytes: UnsafeBufferPointer<UInt8>, startsMidLine: Bool) {
+        guard let base = bytes.baseAddress, bytes.count > 0 else { return }
+        guard var cursor = logTailInitialCursor(base: base, count: bytes.count, startsMidLine: startsMidLine) else {
+            return
+        }
+
+        let newlineOffsets = Self.logTailCollectNewlineOffsets(base: base, count: bytes.count, from: cursor)
+        if !newlineOffsets.isEmpty {
+            cursor = logTailConsumeCompleteLines(bytes: bytes, newlineOffsets: newlineOffsets, initialCursor: cursor)
+        }
+        if cursor < bytes.count {
+            logTailRetainTrailingPartial(bytes: bytes, from: cursor)
+        }
+    }
+
+    mutating func logTailInitialCursor(base: UnsafePointer<UInt8>, count: Int, startsMidLine: Bool) -> Int? {
+        guard startsMidLine else { return 0 }
+        guard let hit = memchr(base, 0x0A, count) else { return nil }
+        let foundNL = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
+        partial.removeAll(keepingCapacity: true)
+        return foundNL + 1
+    }
+
+    static func logTailCollectNewlineOffsets(base: UnsafePointer<UInt8>, count: Int, from cursor: Int) -> [Int] {
+        var newlineOffsets: [Int] = []
+        newlineOffsets.reserveCapacity(min(maxLines + 1, max(16, (count - cursor) / 64)))
+        var scan = cursor
+        while scan < count, let hit = memchr(base + scan, 0x0A, count - scan) {
+            let nlPos = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
+            newlineOffsets.append(nlPos)
+            scan = nlPos + 1
+        }
+        return newlineOffsets
+    }
+
+    mutating func logTailConsumeCompleteLines(
+        bytes: UnsafeBufferPointer<UInt8>,
+        newlineOffsets: [Int],
+        initialCursor: Int
+    ) -> Int {
+        let (firstNewlineIndex, startCursor) = logTailTrimWindowForIncomingLines(
+            newlineOffsets: newlineOffsets,
+            initialCursor: initialCursor
+        )
+        var segStart = startCursor
+        for nlIdx in firstNewlineIndex..<newlineOffsets.count {
+            let nlPos = newlineOffsets[nlIdx]
+            logTailAppendCompletedSegment(bytes: bytes, segStart: segStart, nlPos: nlPos)
+            segStart = nlPos + 1
+        }
+        return segStart
+    }
+
+    mutating func logTailTrimWindowForIncomingLines(
+        newlineOffsets: [Int],
+        initialCursor: Int
+    ) -> (firstIndex: Int, cursor: Int) {
+        var firstNewlineIndex = 0
+        var cursor = initialCursor
+        if newlineOffsets.count > Self.maxLines {
+            firstNewlineIndex = newlineOffsets.count - Self.maxLines
+            lines.removeAll(keepingCapacity: true)
+            partial.removeAll(keepingCapacity: true)
+            cursor = newlineOffsets[firstNewlineIndex - 1] + 1
+        }
+
+        let decodedCount = newlineOffsets.count - firstNewlineIndex
+        if lines.count + decodedCount > Self.maxLines {
+            let drop = lines.count + decodedCount - Self.maxLines
+            if drop >= lines.count {
+                lines.removeAll(keepingCapacity: true)
+            } else {
+                lines.removeFirst(drop)
+            }
+        }
+        lines.reserveCapacity(min(Self.maxLines, lines.count + decodedCount))
+        return (firstNewlineIndex, cursor)
+    }
+
+    mutating func logTailAppendCompletedSegment(bytes: UnsafeBufferPointer<UInt8>, segStart: Int, nlPos: Int) {
+        if partial.isEmpty {
+            let segEnd = (nlPos > segStart && bytes[nlPos - 1] == 0x0D) ? (nlPos - 1) : nlPos
+            if segEnd == segStart {
+                lines.append("")
+            } else {
+                let slice = UnsafeBufferPointer(rebasing: bytes[segStart..<segEnd])
+                lines.append(String(decoding: slice, as: UTF8.self))
+            }
+            return
+        }
+        logTailFlushPartialWithSegment(bytes: bytes, segStart: segStart, nlPos: nlPos)
+    }
+
+    mutating func logTailFlushPartialWithSegment(bytes: UnsafeBufferPointer<UInt8>, segStart: Int, nlPos: Int) {
+        if nlPos > segStart {
+            let segEnd = bytes[nlPos - 1] == 0x0D ? (nlPos - 1) : nlPos
+            if segEnd > segStart {
+                partial.append(contentsOf: bytes[segStart..<segEnd])
+            }
+        } else if partial.last == 0x0D {
+            partial.removeLast()
+        }
+        lines.append(String(decoding: partial, as: UTF8.self))
+        partial.removeAll(keepingCapacity: true)
+    }
+
+    mutating func logTailRetainTrailingPartial(bytes: UnsafeBufferPointer<UInt8>, from cursor: Int) {
+        let count = bytes.count
+        let remaining = count - cursor
+        if remaining >= Self.partialCapBytes {
+            partial.removeAll(keepingCapacity: true)
+            partial.append(contentsOf: bytes[(count - Self.partialCapBytes)..<count])
+        } else {
+            partial.append(contentsOf: bytes[cursor..<count])
+            if partial.count > Self.partialCapBytes {
+                partial.removeFirst(partial.count - Self.partialCapBytes)
+            }
+        }
     }
 }
 

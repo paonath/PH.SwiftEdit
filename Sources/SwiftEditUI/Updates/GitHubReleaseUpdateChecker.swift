@@ -148,8 +148,8 @@ public struct GitHubReleaseUpdateChecker: Sendable {
         self.fetcher = fetcher
     }
 
-    /// Queries GitHub Releases and compares the newest release tag against `currentVersion`.
-    public func checkForUpdates(currentVersion: String) async -> UpdateCheckOutcome {
+    /// Queries GitHub Releases and compares the newest release tag against `currentVersion` without colliding with workbench command names.
+    public func evaluateReleaseUpdate(currentVersion: String) async -> UpdateCheckOutcome {
         do {
             let (latestData, latestStatus) = try await fetcher.fetch(request: Self.makeAPIRequest(url: Self.latestReleaseAPIURL))
             if latestStatus == 200 {

@@ -69,143 +69,6 @@ public enum DocumentSearchEngine {
         return .completed(matches)
     }
 
-    /// Scans contiguous UTF-8 bytes directly for an ASCII query without `NSString` bridging.
-    /// Returns `nil` in case-insensitive mode if the text contains non-ASCII bytes so Unicode case folding falls back to `NSString`.
-    private static func findASCIIUTF8(
-        query: String,
-        in text: String,
-        isCaseSensitive: Bool,
-        maxMatches: Int
-    ) -> EngineEvaluationOutcome<[TextRange]>? {
-        text.utf8.withContiguousStorageIfAvailable { textBuf -> EngineEvaluationOutcome<[TextRange]>? in
-            let n = textBuf.count
-            guard let textBase = textBuf.baseAddress else { return .completed([]) }
-            let qBytes = Array(query.utf8)
-            let m = qBytes.count
-            guard m > 0 && m <= n else { return .completed([]) }
-
-            if !isCaseSensitive {
-                var qLower = qBytes
-                for idx in 0..<m {
-                    let b = qLower[idx]
-                    if b >= 0x41 && b <= 0x5A { qLower[idx] = b | 0x20 }
-                }
-                let firstLower = qLower[0]
-                let firstUpper: UInt8 = (firstLower >= 0x61 && firstLower <= 0x7A) ? (firstLower & ~0x20) : firstLower
-                let lastLower = qLower[m - 1]
-                let lastUpper: UInt8 = (lastLower >= 0x61 && lastLower <= 0x7A) ? (lastLower & ~0x20) : lastLower
-
-                var matches: [TextRange] = []
-                matches.reserveCapacity(min(32, maxMatches))
-                let limit = n - m
-                var i = 0
-                while i <= limit {
-                    let b = textBase[i]
-                    if b >= 0x80 { return nil }
-                    if b == firstLower || b == firstUpper {
-                        let tail = textBase[i + m - 1]
-                        if tail >= 0x80 { return nil }
-                        if m == 1 || tail == lastLower || tail == lastUpper {
-                            var matched = true
-                            var j = 1
-                            let innerEnd = m - 1
-                            while j < innerEnd {
-                                var tb = textBase[i + j]
-                                if tb >= 0x80 { return nil }
-                                if tb >= 0x41 && tb <= 0x5A { tb |= 0x20 }
-                                if tb != qLower[j] {
-                                    matched = false
-                                    break
-                                }
-                                j += 1
-                            }
-                            if matched {
-                                if matches.count >= maxMatches {
-                                    return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
-                                }
-                                matches.append(TextRange(location: i, length: m))
-                                i += m
-                                continue
-                            }
-                        }
-                    }
-                    i += 1
-                }
-                while i < n {
-                    if textBase[i] >= 0x80 { return nil }
-                    i += 1
-                }
-                return .completed(matches)
-            } else {
-                // Case-sensitive ASCII query: works on ANY UTF-8 buffer (ASCII or Unicode) because ASCII bytes never occur inside multi-byte sequences.
-                let firstByte = qBytes[0]
-                let lastByte = qBytes[m - 1]
-                var matches: [TextRange] = []
-                matches.reserveCapacity(min(32, maxMatches))
-                let limit = n - m
-                var i = 0
-                var utf16Offset = 0
-
-                return qBytes.withUnsafeBufferPointer { qBuf in
-                    guard let qBase = qBuf.baseAddress else { return .completed([]) }
-                    while i <= limit {
-                        let b = textBase[i]
-                        if b == firstByte {
-                            let matched: Bool
-                            if m == 1 {
-                                matched = true
-                            } else if textBase[i + m - 1] != lastByte {
-                                matched = false
-                            } else if m == 2 {
-                                matched = true
-                            } else {
-                                matched = memcmp(textBase.advanced(by: i + 1), qBase.advanced(by: 1), m - 2) == 0
-                            }
-                            if matched {
-                                if matches.count >= maxMatches {
-                                    return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
-                                }
-                                matches.append(TextRange(location: utf16Offset, length: m))
-                                i += m
-                                utf16Offset += m
-                                continue
-                            }
-                            utf16Offset += 1
-                            i += 1
-                        } else if b < 0x80 {
-                            utf16Offset += 1
-                            i += 1
-                        } else if b < 0xE0 {
-                            utf16Offset += 1
-                            i += 2
-                        } else if b < 0xF0 {
-                            utf16Offset += 1
-                            i += 3
-                        } else {
-                            utf16Offset += 2
-                            i += 4
-                        }
-                    }
-                    return .completed(matches)
-                }
-            }
-        } ?? nil
-    }
-
-    private static func precheck(query: String, snapshot: DocumentSnapshot) -> DegradedEvaluationReason? {
-        if snapshot.isBinaryReadOnly {
-            return .binarySnapshot
-        }
-        if snapshot.isDegradedPlainText {
-            return .degradedPlainTextSnapshot
-        }
-        let queryUTF16Count = query.utf16.count
-        if queryUTF16Count > maxQueryUTF16Units {
-            return .inputTooLarge(byteCount: queryUTF16Count)
-        }
-        return nil
-    }
-
     /// Produces a non-overlapping `[TextEdit]` batch replacing every literal occurrence of `query` with `replacement` for atomic execution via `DocumentSession.applyTextEdits`.
     public static func replaceAll(
         query: String,
@@ -228,5 +91,216 @@ public enum DocumentSearchEngine {
             return nil
         }
         return UTF16LineBreakScanner.lineContentRange(forLine: lineNumber, in: snapshot.text)
+    }
+}
+
+private extension DocumentSearchEngine {
+    static func precheck(query: String, snapshot: DocumentSnapshot) -> DegradedEvaluationReason? {
+        if snapshot.isBinaryReadOnly {
+            return .binarySnapshot
+        }
+        if snapshot.isDegradedPlainText {
+            return .degradedPlainTextSnapshot
+        }
+        let queryUTF16Count = query.utf16.count
+        if queryUTF16Count > maxQueryUTF16Units {
+            return .inputTooLarge(byteCount: queryUTF16Count)
+        }
+        return nil
+    }
+
+    /// Scans contiguous UTF-8 bytes directly for an ASCII query without `NSString` bridging.
+    /// Returns `nil` in case-insensitive mode if the text contains non-ASCII bytes so Unicode case folding falls back to `NSString`.
+    static func findASCIIUTF8(
+        query: String,
+        in text: String,
+        isCaseSensitive: Bool,
+        maxMatches: Int
+    ) -> EngineEvaluationOutcome<[TextRange]>? {
+        text.utf8.withContiguousStorageIfAvailable { textBuf -> EngineEvaluationOutcome<[TextRange]>? in
+            guard let textBase = textBuf.baseAddress else { return .completed([]) }
+            let qBytes = Array(query.utf8)
+            guard !qBytes.isEmpty, qBytes.count <= textBuf.count else { return .completed([]) }
+            if isCaseSensitive {
+                return docSearchFindCaseSensitiveASCII(
+                    qBytes: qBytes,
+                    textBase: textBase,
+                    textCount: textBuf.count,
+                    maxMatches: maxMatches
+                )
+            }
+            return docSearchFindCaseInsensitiveASCII(
+                qBytes: qBytes,
+                textBase: textBase,
+                textCount: textBuf.count,
+                maxMatches: maxMatches
+            )
+        } ?? nil
+    }
+
+    @inline(__always)
+    static func docSearchLowerASCIIByte(_ byte: UInt8) -> UInt8 {
+        (byte >= 0x41 && byte <= 0x5A) ? (byte | 0x20) : byte
+    }
+
+    @inline(__always)
+    static func docSearchUTF8Step(forLeadByte lead: UInt8) -> (bytes: Int, utf16: Int) {
+        if lead < 0x80 { return (1, 1) }
+        if lead < 0xE0 { return (2, 1) }
+        if lead < 0xF0 { return (3, 1) }
+        return (4, 2)
+    }
+
+    static func docSearchFindCaseInsensitiveASCII(
+        qBytes: [UInt8],
+        textBase: UnsafePointer<UInt8>,
+        textCount: Int,
+        maxMatches: Int
+    ) -> EngineEvaluationOutcome<[TextRange]>? {
+        let qLower = qBytes.map(docSearchLowerASCIIByte)
+        var matches: [TextRange] = []
+        matches.reserveCapacity(min(32, maxMatches))
+        let limit = textCount - qLower.count
+        var index = 0
+
+        while index <= limit {
+            guard let matched = docSearchMatchCaseInsensitiveAt(
+                index: index,
+                qLower: qLower,
+                textBase: textBase
+            ) else {
+                return nil
+            }
+            if matched {
+                if matches.count >= maxMatches {
+                    return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
+                }
+                matches.append(TextRange(location: index, length: qLower.count))
+                index += qLower.count
+            } else {
+                index += 1
+            }
+        }
+
+        guard docSearchIsRemainingASCII(textBase: textBase, from: index, count: textCount) else {
+            return nil
+        }
+        return .completed(matches)
+    }
+
+    static func docSearchMatchCaseInsensitiveAt(
+        index: Int,
+        qLower: [UInt8],
+        textBase: UnsafePointer<UInt8>
+    ) -> Bool? {
+        let lead = textBase[index]
+        if lead >= 0x80 { return nil }
+        guard docSearchLowerASCIIByte(lead) == qLower[0] else { return false }
+        let m = qLower.count
+        if m == 1 { return true }
+        let tail = textBase[index + m - 1]
+        if tail >= 0x80 { return nil }
+        guard docSearchLowerASCIIByte(tail) == qLower[m - 1] else { return false }
+        return docSearchCompareMiddleCaseInsensitive(index: index, qLower: qLower, textBase: textBase)
+    }
+
+    static func docSearchCompareMiddleCaseInsensitive(
+        index: Int,
+        qLower: [UInt8],
+        textBase: UnsafePointer<UInt8>
+    ) -> Bool? {
+        var j = 1
+        let innerEnd = qLower.count - 1
+        while j < innerEnd {
+            let tb = textBase[index + j]
+            if tb >= 0x80 { return nil }
+            if docSearchLowerASCIIByte(tb) != qLower[j] { return false }
+            j += 1
+        }
+        return true
+    }
+
+    static func docSearchIsRemainingASCII(
+        textBase: UnsafePointer<UInt8>,
+        from startIndex: Int,
+        count: Int
+    ) -> Bool {
+        var i = startIndex
+        while i < count {
+            if textBase[i] >= 0x80 { return false }
+            i += 1
+        }
+        return true
+    }
+
+    static func docSearchFindCaseSensitiveASCII(
+        qBytes: [UInt8],
+        textBase: UnsafePointer<UInt8>,
+        textCount: Int,
+        maxMatches: Int
+    ) -> EngineEvaluationOutcome<[TextRange]> {
+        qBytes.withUnsafeBufferPointer { qBuf in
+            guard let qBase = qBuf.baseAddress else { return .completed([]) }
+            return docSearchScanCaseSensitiveBuffer(
+                qBase: qBase,
+                queryLength: qBuf.count,
+                textBase: textBase,
+                textCount: textCount,
+                maxMatches: maxMatches
+            )
+        }
+    }
+
+    static func docSearchScanCaseSensitiveBuffer(
+        qBase: UnsafePointer<UInt8>,
+        queryLength m: Int,
+        textBase: UnsafePointer<UInt8>,
+        textCount n: Int,
+        maxMatches: Int
+    ) -> EngineEvaluationOutcome<[TextRange]> {
+        let firstByte = qBase[0]
+        let lastByte = qBase[m - 1]
+        var matches: [TextRange] = []
+        matches.reserveCapacity(min(32, maxMatches))
+        let limit = n - m
+        var index = 0
+        var utf16Offset = 0
+
+        while index <= limit {
+            let b = textBase[index]
+            if b == firstByte,
+               docSearchMatchesCaseSensitiveSlice(
+                   at: index,
+                   textBase: textBase,
+                   qBase: qBase,
+                   length: m,
+                   lastByte: lastByte
+               ) {
+                if matches.count >= maxMatches {
+                    return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
+                }
+                matches.append(TextRange(location: utf16Offset, length: m))
+                index += m
+                utf16Offset += m
+            } else {
+                let step = docSearchUTF8Step(forLeadByte: b)
+                utf16Offset += step.utf16
+                index += step.bytes
+            }
+        }
+        return .completed(matches)
+    }
+
+    static func docSearchMatchesCaseSensitiveSlice(
+        at index: Int,
+        textBase: UnsafePointer<UInt8>,
+        qBase: UnsafePointer<UInt8>,
+        length m: Int,
+        lastByte: UInt8
+    ) -> Bool {
+        if m == 1 { return true }
+        guard textBase[index + m - 1] == lastByte else { return false }
+        if m == 2 { return true }
+        return memcmp(textBase.advanced(by: index + 1), qBase.advanced(by: 1), m - 2) == 0
     }
 }

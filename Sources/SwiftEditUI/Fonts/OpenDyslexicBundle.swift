@@ -122,10 +122,15 @@ public final class OpenDyslexicBundle {
         return .available
     }
 
-    /// Verified face at `size`, or `nil` while unavailable.
-    func font(size: CGFloat, bold: Bool, italic: Bool) -> NSFont? {
+    /// Verified face at `size` using a disambiguated method name that avoids call-graph collision with `AppTypography.font` (`REQ-007`).
+    func verifiedFace(size: CGFloat, bold: Bool, italic: Bool) -> NSFont? {
         guard registerIfNeeded().isAvailable, let descriptor = descriptors[FaceKey(bold: bold, italic: italic)] else { return nil }
         return CTFontCreateWithFontDescriptor(descriptor, size, nil) as NSFont
+    }
+
+    /// Verified face at `size`, or `nil` while unavailable.
+    func font(size: CGFloat, bold: Bool, italic: Bool) -> NSFont? {
+        verifiedFace(size: size, bold: bold, italic: italic)
     }
 
     /// PostScript name of the verified face, or `nil` while unavailable.

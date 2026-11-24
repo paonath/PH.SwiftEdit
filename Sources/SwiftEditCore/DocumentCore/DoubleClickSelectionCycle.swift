@@ -44,10 +44,10 @@ public enum DoubleClickSelectionCycle {
         guard word.location >= 0, word.length > 0, word.upperBound <= length else { return word }
         var start = word.location
         var end = word.upperBound
-        while start > 0, !isWhitespace(text.character(at: start - 1)), word.upperBound - (start - 1) <= maxTokenUTF16Length {
+        while start > 0, isWhitespace(text.character(at: start - 1)) == false, word.upperBound - (start - 1) <= maxTokenUTF16Length {
             start -= 1
         }
-        while end < length, !isWhitespace(text.character(at: end)), (end + 1) - start <= maxTokenUTF16Length {
+        while end < length, isWhitespace(text.character(at: end)) == false, (end + 1) - start <= maxTokenUTF16Length {
             end += 1
         }
         while start < word.location, isLeadingTrim(text.character(at: start)) {

@@ -58,12 +58,16 @@ public enum SwiftEditShortcutDispatcher {
         dispatch(ShortcutKeyEvent(event: event), model: model, isEditingOverlayTextField: isEditingOverlayTextField)
     }
 
-    /// Evaluates `key` against the active `SwiftEditWorkbenchModel`; returns `true` when consumed.
+    /// Evaluates `key` against the active `SwiftEditWorkbenchModel`, failing closed on malformed, NUL-embedded, or BiDi-tainted chord payloads (`REQ-008`, `SEC-012`).
     public static func dispatch(
         _ key: ShortcutKeyEvent,
         model: SwiftEditWorkbenchModel,
         isEditingOverlayTextField: Bool = false
     ) -> Bool {
+        guard isWellFormedChordString(key.characters),
+              isWellFormedChordString(key.charactersIgnoringModifiers) else {
+            return false
+        }
         let chars = key.characters.lowercased()
         let charsIgnored = key.charactersIgnoringModifiers.lowercased()
 
@@ -112,6 +116,51 @@ public enum SwiftEditShortcutDispatcher {
         return false
     }
 
+    private struct CommandTableEntry {
+        let blocksOnOverlayField: Bool
+        let run: @MainActor (SwiftEditWorkbenchModel) -> Bool
+    }
+
+    private static let commandOnlyTable: [String: CommandTableEntry] = [
+        "l": CommandTableEntry(blocksOnOverlayField: true) { $0.startLogTail(mode: .direct); return true },
+        "j": CommandTableEntry(blocksOnOverlayField: false) { $0.toggleTerminalPanel(); return true },
+        "n": CommandTableEntry(blocksOnOverlayField: false) { $0.newUntitledTab(); return true },
+        "o": CommandTableEntry(blocksOnOverlayField: false) { $0.openFileViaPanel(); return true },
+        "s": CommandTableEntry(blocksOnOverlayField: false) { if $0.safetyBanner.canSave { $0.saveActiveDocument() }; return true },
+        "w": CommandTableEntry(blocksOnOverlayField: false) { $0.toggleWordWrap(); return true },
+        "f": CommandTableEntry(blocksOnOverlayField: false) { $0.presentFindBar(mode: .find); return true },
+        "g": CommandTableEntry(blocksOnOverlayField: false) { $0.presentFindBar(mode: .goToLine); return true },
+        "b": CommandTableEntry(blocksOnOverlayField: false) { $0.toggleLeftSidebar(); return true },
+        "+": CommandTableEntry(blocksOnOverlayField: false) { $0.zoomController.zoomIn(); return true },
+        "=": CommandTableEntry(blocksOnOverlayField: false) { $0.zoomController.zoomIn(); return true },
+        "-": CommandTableEntry(blocksOnOverlayField: false) { $0.zoomController.zoomOut(); return true },
+        "0": CommandTableEntry(blocksOnOverlayField: false) { $0.zoomController.resetZoom(); return true },
+        "p": CommandTableEntry(blocksOnOverlayField: false) { $0.toggleMarkdownPreview(); return true },
+        "/": CommandTableEntry(blocksOnOverlayField: false) { $0.isCheatSheetPresented = true; return true },
+        "d": CommandTableEntry(blocksOnOverlayField: true) { if $0.safetyBanner.canSave { $0.performCommandD() }; return true },
+        "i": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.italic) }; return true },
+        "e": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.inlineCode) }; return true },
+        "k": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.link) }; return true },
+        "\r": CommandTableEntry(blocksOnOverlayField: true) { $0.presentElementContextualMenu() },
+        "\u{3}": CommandTableEntry(blocksOnOverlayField: true) { $0.presentElementContextualMenu() },
+    ]
+
+    private static let commandShiftTable: [String: CommandTableEntry] = [
+        "w": CommandTableEntry(blocksOnOverlayField: false) { $0.requestCloseActiveTab(); return true },
+        "d": CommandTableEntry(blocksOnOverlayField: false) { $0.toggleDiffPane(); return true },
+        "o": CommandTableEntry(blocksOnOverlayField: false) { $0.openFolderViaPanel(); return true },
+        "s": CommandTableEntry(blocksOnOverlayField: false) { if $0.safetyBanner.canSave { $0.saveActiveDocumentAsViaPanel() }; return true },
+        "f": CommandTableEntry(blocksOnOverlayField: false) { if $0.safetyBanner.canFormat { $0.formatActiveDocument() }; return true },
+        "b": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.bold) }; return true },
+        "x": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.strikethrough) }; return true },
+        "c": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.codeFence) }; return true },
+        "i": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.image) }; return true },
+        "l": CommandTableEntry(blocksOnOverlayField: true) { $0.startLogTail(mode: .inverse); return true },
+        ".": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.blockquote) }; return true },
+        ">": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.blockquote) }; return true },
+        "m": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.toggleDiagnosticsPopover() }; return true },
+    ]
+
     private static func dispatchCommandOnly(
         _ key: ShortcutKeyEvent,
         chars: String,
@@ -119,83 +168,29 @@ public enum SwiftEditShortcutDispatcher {
         model: SwiftEditWorkbenchModel,
         isEditingOverlayTextField: Bool
     ) -> Bool {
-        switch charsIgnored {
-        case "l":
-            guard !isEditingOverlayTextField else { return false }
-            model.startLogTail(mode: .direct)
-            return true
-        case "j":
-            model.toggleTerminalPanel()
-            return true
-        case "n":
-            model.newUntitledTab()
-            return true
-        case "o":
-            model.openFileViaPanel()
-            return true
-        case "s":
-            if model.safetyBanner.canSave { model.saveActiveDocument() }
-            return true
-        case "w":
-            model.toggleWordWrap()
-            return true
-        case "f":
-            model.presentFindBar(mode: .find)
-            return true
-        case "g":
-            model.presentFindBar(mode: .goToLine)
-            return true
-        case "b":
-            model.toggleLeftSidebar()
-            return true
-        case "+", "=":
+        if let entry = commandOnlyTable[charsIgnored] {
+            guard !(entry.blocksOnOverlayField && isEditingOverlayTextField) else { return false }
+            return entry.run(model)
+        }
+        return dispatchCommandOnlyHardwareKeyFallback(key, chars: chars, model: model)
+    }
+
+    private static func dispatchCommandOnlyHardwareKeyFallback(
+        _ key: ShortcutKeyEvent,
+        chars: String,
+        model: SwiftEditWorkbenchModel
+    ) -> Bool {
+        switch key.keyCode {
+        case numpadPlusKeyCode:
             model.zoomController.zoomIn()
             return true
-        case "-":
+        case numpadMinusKeyCode:
             model.zoomController.zoomOut()
             return true
-        case "0":
+        case numpadZeroKeyCode:
             model.zoomController.resetZoom()
             return true
-        case "p":
-            model.toggleMarkdownPreview()
-            return true
-        case "/":
-            model.isCheatSheetPresented = true
-            return true
-        case "d":
-            guard !isEditingOverlayTextField else { return false }
-            if model.safetyBanner.canSave { model.performCommandD() }
-            return true
-        case "i":
-            guard !isEditingOverlayTextField else { return false }
-            if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.italic) }
-            return true
-        case "e":
-            guard !isEditingOverlayTextField else { return false }
-            if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.inlineCode) }
-            return true
-        case "k":
-            guard !isEditingOverlayTextField else { return false }
-            if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.link) }
-            return true
-        case "\r", "\u{3}":
-            // Cmd+Return / Cmd+Enter: contextual action palette, with or without a selection (`REQ-020-04`, `REQ-021-05`).
-            guard !isEditingOverlayTextField else { return false }
-            return model.presentElementContextualMenu()
         default:
-            if key.keyCode == numpadPlusKeyCode {
-                model.zoomController.zoomIn()
-                return true
-            }
-            if key.keyCode == numpadMinusKeyCode {
-                model.zoomController.zoomOut()
-                return true
-            }
-            if key.keyCode == numpadZeroKeyCode {
-                model.zoomController.resetZoom()
-                return true
-            }
             if chars == "/" {
                 model.isCheatSheetPresented = true
                 return true
@@ -219,58 +214,16 @@ public enum SwiftEditShortcutDispatcher {
             model.zoomController.zoomIn()
             return true
         }
-        switch charsIgnored {
-        case "w":
-            model.requestCloseActiveTab()
-            return true
-        case "d":
-            model.toggleDiffPane()
-            return true
-        case "o":
-            model.openFolderViaPanel()
-            return true
-        case "s":
-            if model.safetyBanner.canSave { model.saveActiveDocumentAsViaPanel() }
-            return true
-        case "f":
-            if model.safetyBanner.canFormat { model.formatActiveDocument() }
-            return true
-        case "b":
-            guard !isEditingOverlayTextField else { return false }
-            if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.bold) }
-            return true
-        case "x":
-            guard !isEditingOverlayTextField else { return false }
-            if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.strikethrough) }
-            return true
-        case "c":
-            guard !isEditingOverlayTextField else { return false }
-            if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.codeFence) }
-            return true
-        case "i":
-            guard !isEditingOverlayTextField else { return false }
-            if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.image) }
-            return true
-        case "l":
-            guard !isEditingOverlayTextField else { return false }
-            model.startLogTail(mode: .inverse)
-            return true
-        case ".", ">":
+        if let entry = commandShiftTable[charsIgnored] {
+            guard !(entry.blocksOnOverlayField && isEditingOverlayTextField) else { return false }
+            return entry.run(model)
+        }
+        if key.keyCode == ansiPeriodKeyCode || chars == ":" || chars == ">" {
             guard !isEditingOverlayTextField else { return false }
             if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.blockquote) }
             return true
-        case "m":
-            guard !isEditingOverlayTextField else { return false }
-            if model.isMarkdownMenuEnabled { model.toggleDiagnosticsPopover() }
-            return true
-        default:
-            if key.keyCode == ansiPeriodKeyCode || chars == ":" || chars == ">" {
-                guard !isEditingOverlayTextField else { return false }
-                if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.blockquote) }
-                return true
-            }
-            return false
         }
+        return false
     }
 
     private static func dispatchCommandOption(
@@ -330,6 +283,22 @@ public enum SwiftEditShortcutDispatcher {
         guard let level else { return false }
         if model.isMarkdownMenuEnabled {
             model.applyMarkdownCommand(.heading(level: level))
+        }
+        return true
+    }
+}
+
+extension SwiftEditShortcutDispatcher {
+    /// Rejects oversized, NUL-embedded, or BiDi/control-tainted chord strings (allowing only Return `\r` and Enter `\u{3}` control keys).
+    fileprivate static func isWellFormedChordString(_ value: String) -> Bool {
+        let scalars = value.unicodeScalars
+        guard scalars.count <= 2 else { return false }
+        for scalar in scalars {
+            let v = scalar.value
+            if v == 0x0D || v == 0x03 { continue }
+            if v < 0x20 || v == 0x7F || (v >= 0x202A && v <= 0x202E) || (v >= 0x2066 && v <= 0x2069) {
+                return false
+            }
         }
         return true
     }

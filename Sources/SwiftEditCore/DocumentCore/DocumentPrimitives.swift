@@ -60,27 +60,51 @@ public enum LineEnding: String, CaseIterable, Codable, Sendable {
     /// - Parameter rawText: Decoded string prior to canonical `\n` normalization.
     /// - Returns: `.crlf` if any `U+000D U+000A` pair exists, `.cr` if any bare `U+000D` exists, otherwise `.lf`.
     public static func detect(in rawText: String) -> LineEnding {
-        if let result = rawText.utf8.withContiguousStorageIfAvailable({ buf -> LineEnding in
-            guard let base = buf.baseAddress, !buf.isEmpty else { return .lf }
-            let count = buf.count
-            var pos = 0
-            var sawBareCR = false
-            while pos < count {
-                guard let hit = memchr(base + pos, 0x0D, count - pos) else {
-                    break
-                }
-                let crIdx = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
-                if crIdx + 1 < count && base[crIdx + 1] == 0x0A {
-                    return .crlf
-                }
-                sawBareCR = true
-                pos = crIdx + 1
-            }
-            return sawBareCR ? .cr : .lf
+        rawText.utf8.withContiguousStorageIfAvailable(lineEndingDetectContiguous)
+            ?? lineEndingDetectFallback(in: rawText.utf8)
+    }
+
+    /// Normalizes `\r\n` pairs and bare `\r` scalars into single `\n` (`U+000A`) breaks in one UTF-8 pass (zero-copy fast path when no `\r` is present).
+    public static func normalizeToLF(_ rawText: String) -> String {
+        if let normalized = rawText.utf8.withContiguousStorageIfAvailable({ buf in
+            lineEndingNormalizeContiguous(buf, original: rawText)
         }) {
-            return result
+            return normalized
         }
-        let bytes = rawText.utf8
+        return lineEndingNormalizeFallback(rawText)
+    }
+
+    /// Re-applies the document's wire line-break convention (`\n`, `\r\n`, or `\r`) prior to byte serialization.
+    public func apply(toCanonicalLF canonicalLF: String) -> String {
+        switch self {
+        case .lf:
+            return canonicalLF
+        case .crlf:
+            return Self.lineEndingApplyCRLF(to: canonicalLF)
+        case .cr:
+            return Self.lineEndingApplyCR(to: canonicalLF)
+        }
+    }
+}
+
+private extension LineEnding {
+    static func lineEndingDetectContiguous(_ buf: UnsafeBufferPointer<UInt8>) -> LineEnding {
+        guard let base = buf.baseAddress, !buf.isEmpty else { return .lf }
+        let count = buf.count
+        var pos = 0
+        var sawBareCR = false
+        while pos < count, let hit = memchr(base + pos, 0x0D, count - pos) {
+            let crIdx = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
+            if crIdx + 1 < count && base[crIdx + 1] == 0x0A {
+                return .crlf
+            }
+            sawBareCR = true
+            pos = crIdx + 1
+        }
+        return sawBareCR ? .cr : .lf
+    }
+
+    static func lineEndingDetectFallback(in bytes: String.UTF8View) -> LineEnding {
         var index = bytes.startIndex
         var sawBareCR = false
         while index < bytes.endIndex {
@@ -97,43 +121,44 @@ public enum LineEnding: String, CaseIterable, Codable, Sendable {
         return sawBareCR ? .cr : .lf
     }
 
-    /// Normalizes `\r\n` pairs and bare `\r` scalars into single `\n` (`U+000A`) breaks in one UTF-8 pass (zero-copy fast path when no `\r` is present).
-    public static func normalizeToLF(_ rawText: String) -> String {
-        if let fastResult = rawText.utf8.withContiguousStorageIfAvailable({ buf -> String? in
-            guard let base = buf.baseAddress, !buf.isEmpty else { return rawText }
-            let count = buf.count
-            guard let firstHit = memchr(base, 0x0D, count) else {
-                return rawText
-            }
-            let firstCR = UnsafePointer(firstHit.assumingMemoryBound(to: UInt8.self)) - base
-            return String(unsafeUninitializedCapacity: count) { dst in
-                var outLen = 0
-                if firstCR > 0 {
-                    dst.baseAddress!.update(from: base, count: firstCR)
-                    outLen = firstCR
-                }
-                var i = firstCR
-                while i < count {
-                    let b = base[i]
-                    if b == 0x0D {
-                        dst[outLen] = 0x0A
-                        outLen += 1
-                        if i + 1 < count && base[i + 1] == 0x0A {
-                            i += 2
-                        } else {
-                            i += 1
-                        }
-                    } else {
-                        dst[outLen] = b
-                        outLen += 1
-                        i += 1
-                    }
-                }
-                return outLen
-            }
-        }), let normalized = fastResult {
-            return normalized
+    static func lineEndingNormalizeContiguous(_ buf: UnsafeBufferPointer<UInt8>, original: String) -> String {
+        guard let base = buf.baseAddress, !buf.isEmpty else { return original }
+        let count = buf.count
+        guard let firstHit = memchr(base, 0x0D, count) else { return original }
+        let firstCR = UnsafePointer(firstHit.assumingMemoryBound(to: UInt8.self)) - base
+        return String(unsafeUninitializedCapacity: count) { dst in
+            lineEndingCopyNormalizedBytes(base: base, count: count, firstCR: firstCR, into: dst)
         }
+    }
+
+    static func lineEndingCopyNormalizedBytes(
+        base: UnsafePointer<UInt8>,
+        count: Int,
+        firstCR: Int,
+        into dst: UnsafeMutableBufferPointer<UInt8>
+    ) -> Int {
+        var outLen = 0
+        if firstCR > 0 {
+            dst.baseAddress!.update(from: base, count: firstCR)
+            outLen = firstCR
+        }
+        var index = firstCR
+        while index < count {
+            let b = base[index]
+            if b == 0x0D {
+                dst[outLen] = 0x0A
+                outLen += 1
+                index += (index + 1 < count && base[index + 1] == 0x0A) ? 2 : 1
+            } else {
+                dst[outLen] = b
+                outLen += 1
+                index += 1
+            }
+        }
+        return outLen
+    }
+
+    static func lineEndingNormalizeFallback(_ rawText: String) -> String {
         guard rawText.utf8.contains(0x0D) else { return rawText }
         var outBytes: [UInt8] = []
         outBytes.reserveCapacity(rawText.utf8.count)
@@ -144,85 +169,102 @@ public enum LineEnding: String, CaseIterable, Codable, Sendable {
             let nextIndex = bytes.index(after: index)
             if b == 0x0D {
                 outBytes.append(0x0A)
-                if nextIndex < bytes.endIndex && bytes[nextIndex] == 0x0A {
-                    index = bytes.index(after: nextIndex)
-                    continue
-                }
+                let isCRLF = nextIndex < bytes.endIndex && bytes[nextIndex] == 0x0A
+                index = isCRLF ? bytes.index(after: nextIndex) : nextIndex
             } else {
                 outBytes.append(b)
+                index = nextIndex
             }
-            index = nextIndex
         }
         return String(decoding: outBytes, as: UTF8.self)
     }
 
-    /// Re-applies the document's wire line-break convention (`\n`, `\r\n`, or `\r`) prior to byte serialization.
-    public func apply(toCanonicalLF canonicalLF: String) -> String {
-        switch self {
-        case .lf:
-            return canonicalLF
-        case .crlf:
-            if let fast = canonicalLF.utf8.withContiguousStorageIfAvailable({ buf -> String in
-                guard let base = buf.baseAddress, !buf.isEmpty else { return canonicalLF }
-                let count = buf.count
-                guard let firstHit = memchr(base, 0x0A, count) else { return canonicalLF }
-                var lfCount = 0
-                var scanPos = UnsafePointer(firstHit.assumingMemoryBound(to: UInt8.self)) - base
-                while scanPos < count {
-                    lfCount += 1
-                    let nextStart = scanPos + 1
-                    guard nextStart < count, let hit = memchr(base + nextStart, 0x0A, count - nextStart) else {
-                        break
-                    }
-                    scanPos = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
-                }
-                return String(unsafeUninitializedCapacity: count + lfCount) { dst in
-                    let dstBase = dst.baseAddress!
-                    var srcPos = 0
-                    var dstPos = 0
-                    var nextLF = UnsafePointer(firstHit.assumingMemoryBound(to: UInt8.self)) - base
-                    while true {
-                        let segLen = nextLF - srcPos
-                        if segLen > 0 {
-                            (dstBase + dstPos).update(from: base + srcPos, count: segLen)
-                            dstPos += segLen
-                        }
-                        dstBase[dstPos] = 0x0D
-                        dstBase[dstPos + 1] = 0x0A
-                        dstPos += 2
-                        srcPos = nextLF + 1
-                        guard srcPos < count, let hit = memchr(base + srcPos, 0x0A, count - srcPos) else {
-                            break
-                        }
-                        nextLF = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
-                    }
-                    let tail = count - srcPos
-                    if tail > 0 {
-                        (dstBase + dstPos).update(from: base + srcPos, count: tail)
-                        dstPos += tail
-                    }
-                    return dstPos
-                }
-            }) {
-                return fast
+    static func lineEndingApplyCRLF(to canonicalLF: String) -> String {
+        if let fast = canonicalLF.utf8.withContiguousStorageIfAvailable({ buf in
+            lineEndingExpandLFToCRLF(buf, original: canonicalLF)
+        }) {
+            return fast
+        }
+        return canonicalLF.replacingOccurrences(of: "\n", with: "\r\n")
+    }
+
+    static func lineEndingExpandLFToCRLF(_ buf: UnsafeBufferPointer<UInt8>, original: String) -> String {
+        guard let base = buf.baseAddress, !buf.isEmpty else { return original }
+        let count = buf.count
+        guard let firstHit = memchr(base, 0x0A, count) else { return original }
+        let firstLF = UnsafePointer(firstHit.assumingMemoryBound(to: UInt8.self)) - base
+        let lfCount = lineEndingCountRemainingLFs(base: base, count: count, firstLF: firstLF)
+        return String(unsafeUninitializedCapacity: count + lfCount) { dst in
+            lineEndingWriteCRLFSegments(base: base, count: count, firstLF: firstLF, into: dst)
+        }
+    }
+
+    static func lineEndingCountRemainingLFs(base: UnsafePointer<UInt8>, count: Int, firstLF: Int) -> Int {
+        var lfCount = 0
+        var scanPos = firstLF
+        while scanPos < count {
+            lfCount += 1
+            let nextStart = scanPos + 1
+            guard nextStart < count, let hit = memchr(base + nextStart, 0x0A, count - nextStart) else {
+                break
             }
-            return canonicalLF.replacingOccurrences(of: "\n", with: "\r\n")
-        case .cr:
-            if let fast = canonicalLF.utf8.withContiguousStorageIfAvailable({ buf -> String in
-                guard let base = buf.baseAddress, !buf.isEmpty else { return canonicalLF }
-                let count = buf.count
-                guard memchr(base, 0x0A, count) != nil else { return canonicalLF }
-                return String(unsafeUninitializedCapacity: count) { dst in
-                    for i in 0..<count {
-                        let b = base[i]
-                        dst[i] = (b == 0x0A) ? 0x0D : b
-                    }
-                    return count
-                }
-            }) {
-                return fast
+            scanPos = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
+        }
+        return lfCount
+    }
+
+    static func lineEndingWriteCRLFSegments(
+        base: UnsafePointer<UInt8>,
+        count: Int,
+        firstLF: Int,
+        into dst: UnsafeMutableBufferPointer<UInt8>
+    ) -> Int {
+        let dstBase = dst.baseAddress!
+        var srcPos = 0
+        var dstPos = 0
+        var nextLF = firstLF
+        while true {
+            let segLen = nextLF - srcPos
+            if segLen > 0 {
+                (dstBase + dstPos).update(from: base + srcPos, count: segLen)
+                dstPos += segLen
             }
-            return canonicalLF.replacingOccurrences(of: "\n", with: "\r")
+            dstBase[dstPos] = 0x0D
+            dstBase[dstPos + 1] = 0x0A
+            dstPos += 2
+            srcPos = nextLF + 1
+            guard srcPos < count, let hit = memchr(base + srcPos, 0x0A, count - srcPos) else {
+                break
+            }
+            nextLF = UnsafePointer(hit.assumingMemoryBound(to: UInt8.self)) - base
+        }
+        let tail = count - srcPos
+        if tail > 0 {
+            (dstBase + dstPos).update(from: base + srcPos, count: tail)
+            dstPos += tail
+        }
+        return dstPos
+    }
+
+    static func lineEndingApplyCR(to canonicalLF: String) -> String {
+        if let fast = canonicalLF.utf8.withContiguousStorageIfAvailable({ buf in
+            lineEndingReplaceLFWithCR(buf, original: canonicalLF)
+        }) {
+            return fast
+        }
+        return canonicalLF.replacingOccurrences(of: "\n", with: "\r")
+    }
+
+    static func lineEndingReplaceLFWithCR(_ buf: UnsafeBufferPointer<UInt8>, original: String) -> String {
+        guard let base = buf.baseAddress, !buf.isEmpty else { return original }
+        let count = buf.count
+        guard memchr(base, 0x0A, count) != nil else { return original }
+        return String(unsafeUninitializedCapacity: count) { dst in
+            for i in 0..<count {
+                let b = base[i]
+                dst[i] = (b == 0x0A) ? 0x0D : b
+            }
+            return count
         }
     }
 }

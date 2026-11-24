@@ -47,107 +47,6 @@ public enum SmartListOutcome: Equatable, Sendable {
     case notApplicable
 }
 
-/// A parsed Markdown list line (UTF-16 offsets relative to the line start).
-struct MarkdownListLine: Equatable {
-    enum Kind: Equatable {
-        case bullet(marker: UInt16, taskState: UInt16?)
-        case ordered(number: Int, delimiter: UInt16)
-    }
-
-    let indent: Int
-    let kind: Kind
-    /// Length of the marker including its trailing space (excluding indent).
-    let markerLength: Int
-    var prefixLength: Int { indent + markerLength }
-}
-
-/// Shared zero-regex list-line grammar used by the list engine, the smart newline engine, and the outline lint rule (`BC-004`, `BC-011`).
-enum MarkdownListGrammar {
-    static let space: UInt16 = 0x20
-    static let maxOrderedNumber = 999_999_999
-    static let maxLineUTF16 = 4096
-
-    /// Parses `line` as a CommonMark list item (`- `, `* `, `+ `, task checkbox, or `N. ` / `N) `); leading tabs make a line non-list.
-    static func parseListLine(_ line: ArraySlice<UInt16>) -> MarkdownListLine? {
-        var idx = line.startIndex
-        while idx < line.endIndex, line[idx] == space { idx += 1 }
-        let indent = idx - line.startIndex
-        guard idx < line.endIndex else { return nil }
-        let first = line[idx]
-
-        if first == 0x2D || first == 0x2A || first == 0x2B {
-            guard idx + 1 < line.endIndex, line[idx + 1] == space else { return nil }
-            if idx + 5 < line.endIndex,
-               line[idx + 2] == 0x5B, line[idx + 4] == 0x5D, line[idx + 5] == space,
-               line[idx + 3] == space || line[idx + 3] == 0x78 || line[idx + 3] == 0x58 {
-                return MarkdownListLine(indent: indent, kind: .bullet(marker: first, taskState: line[idx + 3]), markerLength: 6)
-            }
-            return MarkdownListLine(indent: indent, kind: .bullet(marker: first, taskState: nil), markerLength: 2)
-        }
-
-        var number = 0
-        var digits = 0
-        var cursor = idx
-        while cursor < line.endIndex, line[cursor] >= 0x30, line[cursor] <= 0x39 {
-            digits += 1
-            guard digits <= 9 else { return nil }
-            number = number * 10 + Int(line[cursor] - 0x30)
-            cursor += 1
-        }
-        guard digits > 0, cursor + 1 < line.endIndex,
-              line[cursor] == 0x2E || line[cursor] == 0x29,
-              line[cursor + 1] == space else { return nil }
-        return MarkdownListLine(indent: indent, kind: .ordered(number: number, delimiter: line[cursor]), markerLength: digits + 2)
-    }
-
-    /// Returns `true` when `line` begins (after `>= 2` spaces) with a pseudo-outline marker: one letter `a...y` / `A...Y` followed by `. `, or `D.D `.
-    static func isPseudoOutlineMarker(_ line: ArraySlice<UInt16>) -> Bool {
-        pseudoOutlineContinuation(line) != nil
-    }
-
-    /// Parses a pseudo-outline marker and returns `(markerLength, nextMarker)` for the next sibling (`a.` -> `b.`, `1.1` -> `1.2`), or `nil` when absent or not continuable.
-    static func pseudoOutlineContinuation(_ line: ArraySlice<UInt16>) -> (indent: Int, markerLength: Int, nextMarker: String)? {
-        var idx = line.startIndex
-        while idx < line.endIndex, line[idx] == space { idx += 1 }
-        let indent = idx - line.startIndex
-        guard indent >= 2, idx < line.endIndex else { return nil }
-        let first = line[idx]
-
-        let isLower = first >= 0x61 && first <= 0x79
-        let isUpper = first >= 0x41 && first <= 0x59
-        if isLower || isUpper {
-            guard idx + 2 < line.endIndex, line[idx + 1] == 0x2E, line[idx + 2] == space else { return nil }
-            let next = String(UnicodeScalar(UInt8(first + 1)))
-            return (indent, 3, next + ". ")
-        }
-
-        guard first >= 0x30, first <= 0x39 else { return nil }
-        var cursor = idx
-        var majorDigits = 0
-        while cursor < line.endIndex, line[cursor] >= 0x30, line[cursor] <= 0x39 {
-            majorDigits += 1
-            guard majorDigits <= 9 else { return nil }
-            cursor += 1
-        }
-        guard cursor < line.endIndex, line[cursor] == 0x2E else { return nil }
-        let majorEnd = cursor
-        cursor += 1
-        var minor = 0
-        var minorDigits = 0
-        while cursor < line.endIndex, line[cursor] >= 0x30, line[cursor] <= 0x39 {
-            minorDigits += 1
-            guard minorDigits <= 9 else { return nil }
-            minor = minor * 10 + Int(line[cursor] - 0x30)
-            cursor += 1
-        }
-        guard minorDigits > 0, cursor < line.endIndex, line[cursor] == space else { return nil }
-        let major = String(decoding: line[idx..<majorEnd], as: UTF16.self)
-        let (nextMinor, overflow) = minor.addingReportingOverflow(1)
-        guard !overflow, nextMinor <= maxOrderedNumber else { return nil }
-        return (indent, cursor + 1 - idx, "\(major).\(nextMinor) ")
-    }
-}
-
 /// Pure zero-regex `Tab` / `Shift+Tab` list indentation engine (`BC-004`, `BC-006`, `BC-011`, `SEC-012`).
 ///
 /// Contract (Three-Tier, CommonMark 0.31.2 valid):
@@ -218,36 +117,55 @@ public enum MarkdownSmartListEngine {
 
     private static func splitLines(_ units: [UInt16]) -> [Line]? {
         var lines: [Line] = []
-        var start = 0
         var fence: (char: UInt16, count: Int)?
-        var cursor = 0
+        var start = 0
         while true {
-            var end = cursor
-            while end < units.count, units[end] != 0x0A, units[end] != 0x0D { end += 1 }
+            let end = findLineBreakOffset(in: units, from: start)
             let slice = units[start..<end]
-            if slice.count > MarkdownListGrammar.maxLineUTF16 { return nil }
-
-            let kind: LineKind
-            if let open = fence {
-                kind = .fenced
-                if isClosingFence(slice, char: open.char, minCount: open.count) { fence = nil }
-            } else if let opened = openingFence(slice) {
-                fence = opened
-                kind = .fenced
-            } else if slice.allSatisfy({ $0 == MarkdownListGrammar.space || $0 == 0x09 }) {
-                kind = .blank
-            } else if let item = MarkdownListGrammar.parseListLine(slice) {
-                kind = .list(item)
-            } else {
-                kind = .other(indent: slice.prefix(while: { $0 == MarkdownListGrammar.space }).count)
-            }
+            guard slice.count <= MarkdownListGrammar.maxLineUTF16 else { return nil }
+            let kind = classifySmartListLine(slice, fence: &fence)
             lines.append(Line(start: start, end: end, kind: kind))
-
-            guard end < units.count else { break }
-            if units[end] == 0x0D, end + 1 < units.count, units[end + 1] == 0x0A { cursor = end + 2 } else { cursor = end + 1 }
-            start = cursor
+            guard let nextStart = advancePastLineBreak(in: units, from: end) else { break }
+            start = nextStart
         }
         return lines
+    }
+
+    private static func findLineBreakOffset(in units: [UInt16], from start: Int) -> Int {
+        var end = start
+        while end < units.count, units[end] != 0x0A, units[end] != 0x0D {
+            end += 1
+        }
+        return end
+    }
+
+    private static func advancePastLineBreak(in units: [UInt16], from lineEnd: Int) -> Int? {
+        guard lineEnd < units.count else { return nil }
+        if units[lineEnd] == 0x0D, lineEnd + 1 < units.count, units[lineEnd + 1] == 0x0A {
+            return lineEnd + 2
+        }
+        return lineEnd + 1
+    }
+
+    private static func classifySmartListLine(
+        _ slice: ArraySlice<UInt16>,
+        fence: inout (char: UInt16, count: Int)?
+    ) -> LineKind {
+        if let open = fence {
+            if isClosingFence(slice, char: open.char, minCount: open.count) { fence = nil }
+            return .fenced
+        }
+        if let opened = openingFence(slice) {
+            fence = opened
+            return .fenced
+        }
+        if slice.allSatisfy({ $0 == MarkdownListGrammar.space || $0 == 0x09 }) {
+            return .blank
+        }
+        if let item = MarkdownListGrammar.parseListLine(slice) {
+            return .list(item)
+        }
+        return .other(indent: slice.prefix(while: { $0 == MarkdownListGrammar.space }).count)
     }
 
     private static func openingFence(_ line: ArraySlice<UInt16>) -> (char: UInt16, count: Int)? {

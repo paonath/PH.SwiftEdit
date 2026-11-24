@@ -15,7 +15,7 @@ public final class JSONPreferencesStore: PreferencesProviding, @unchecked Sendab
     private var batchDirty = false
     private var directoryEnsured = false
 
-    private enum JSONValue: Codable, Equatable {
+    fileprivate enum JSONValue: Codable, Equatable {
         case string(String)
         case int(Int)
         case double(Double)
@@ -176,48 +176,7 @@ public final class JSONPreferencesStore: PreferencesProviding, @unchecked Sendab
     }
 
     public func set(_ value: Any?, forKey defaultName: String) {
-        lock.lock()
-        let encoded: JSONValue?
-        if let value {
-            if let b = value as? Bool {
-                encoded = .bool(b)
-            } else if let i = value as? Int {
-                encoded = .int(i)
-            } else if let d = value as? Double {
-                encoded = .double(d)
-            } else if let s = value as? String {
-                encoded = .string(s)
-            } else if let data = value as? Data {
-                encoded = .base64Data(data.base64EncodedString())
-            } else {
-                encoded = .string(String(describing: value))
-            }
-        } else {
-            encoded = nil
-        }
-
-        let changed: Bool
-        if let encoded {
-            changed = storage[defaultName] != encoded
-            storage[defaultName] = encoded
-        } else {
-            changed = storage.removeValue(forKey: defaultName) != nil
-        }
-
-        let shouldFlush: Bool
-        if changed {
-            if batchDepth > 0 {
-                batchDirty = true
-                shouldFlush = false
-            } else {
-                shouldFlush = true
-            }
-        } else {
-            shouldFlush = false
-        }
-        lock.unlock()
-
-        if shouldFlush {
+        if prefsApplyValueUnderLock(value, forKey: defaultName) {
             flushLatestSnapshotToDisk()
         }
     }
@@ -225,14 +184,49 @@ public final class JSONPreferencesStore: PreferencesProviding, @unchecked Sendab
     public func removeObject(forKey defaultName: String) {
         set(nil, forKey: defaultName)
     }
+}
 
-    private static func loadFromDisk(at url: URL) -> [String: JSONValue] {
+private extension JSONPreferencesStore {
+    func prefsApplyValueUnderLock(_ value: Any?, forKey defaultName: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let encoded = value.map(Self.prefsEncodeAnyValue)
+        let changed = prefsUpdateStorageEntry(encoded, forKey: defaultName)
+        guard changed else { return false }
+
+        if batchDepth > 0 {
+            batchDirty = true
+            return false
+        }
+        return true
+    }
+
+    func prefsUpdateStorageEntry(_ encoded: JSONValue?, forKey key: String) -> Bool {
+        if let encoded {
+            let changed = storage[key] != encoded
+            storage[key] = encoded
+            return changed
+        }
+        return storage.removeValue(forKey: key) != nil
+    }
+
+    static func prefsEncodeAnyValue(_ value: Any) -> JSONValue {
+        if let b = value as? Bool { return .bool(b) }
+        if let i = value as? Int { return .int(i) }
+        if let d = value as? Double { return .double(d) }
+        if let s = value as? String { return .string(s) }
+        if let data = value as? Data { return .base64Data(data.base64EncodedString()) }
+        return .string(String(describing: value))
+    }
+
+    static func loadFromDisk(at url: URL) -> [String: JSONValue] {
         guard let data = try? Data(contentsOf: url), !data.isEmpty else { return [:] }
         return (try? JSONDecoder().decode([String: JSONValue].self, from: data)) ?? [:]
     }
 
     /// Serializes disk writes under `writeLock` and snapshots `storage` inside it so concurrent writers can never overwrite newer settings with an older snapshot.
-    private func flushLatestSnapshotToDisk() {
+    func flushLatestSnapshotToDisk() {
         writeLock.lock()
         defer { writeLock.unlock() }
         lock.lock()

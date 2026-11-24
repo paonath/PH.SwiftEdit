@@ -65,136 +65,13 @@ public enum MarkdownPreviewProjector {
     ) -> GFMPreviewDocument? {
         guard showPreview, isMarkdownDocument, !snapshot.isBinaryReadOnly, !snapshot.isDegradedPlainText else { return nil }
         let index = lineIndex ?? MarkdownLineIndex(text: snapshot.text)
-        var blocks: [GFMPreviewBlock] = []
-        var paragraph: [String] = []
-        var paragraphStart = 0
-        let fences = index.fences
-        var fenceCursor = 0
-
-        func currentFence(at line: Int) -> (open: Int, close: Int)? {
-            while fenceCursor < fences.count && fences[fenceCursor].close < line {
-                fenceCursor += 1
-            }
-            if fenceCursor < fences.count && fences[fenceCursor].open <= line {
-                return fences[fenceCursor]
-            }
-            return nil
-        }
-
-        func text(_ line: Int) -> String {
-            let s = index.lineSlice(line)
-            return String(decoding: s.prefix(MarkdownLineIndex.maxLineUTF16), as: UTF16.self)
-        }
-        func isBlank(_ line: Int) -> Bool { index.lineSlice(line).allSatisfy { $0 == 0x20 || $0 == 0x09 } }
-        func flush() {
-            if !paragraph.isEmpty {
-                blocks.append(.paragraph(text: paragraph.joined(separator: "\n"), sourceLine: paragraphStart + 1))
-                paragraph.removeAll(keepingCapacity: true)
-            }
-        }
-        func isHTMLStart(_ s: ArraySlice<UInt16>) -> Bool {
-            var i = s.startIndex
-            while i < s.endIndex, s[i] == 0x20 { i += 1 }
-            guard i + 1 < s.endIndex, s[i] == 0x3C else { return false }
-            let n = s[i + 1]
-            return (n >= 0x41 && n <= 0x5A) || (n >= 0x61 && n <= 0x7A) || n == 0x2F || n == 0x21
-        }
-        func isTableStart(_ line: Int) -> Bool {
-            guard line + 1 < index.lineCount else { return false }
-            let slice = index.lineSlice(line)
-            var i = slice.startIndex
-            while i < slice.endIndex, slice[i] == 0x20 { i += 1 }
-            return i < slice.endIndex && slice[i] == 0x7C && GFMTableEditEngine.isDelimiterRowSlice(index.lineSlice(line + 1))
-        }
-
+        var state = PreviewProjectionState(index: index)
         var line = 0
         while line < index.lineCount {
-            if let span = currentFence(at: line) {
-                flush()
-                let open = line
-                let closed = span.close > span.open && isClosingFence(index, openLine: span.open, closeLine: span.close)
-                let bodyEnd = closed ? span.close : span.close + 1
-                let body = ((open + 1)..<max(open + 1, bodyEnd)).map(text)
-                blocks.append(.code(text: body.joined(separator: "\n"), sourceLine: open + 1))
-                line = span.close + 1
-                continue
-            }
-            let slice = index.lineSlice(line)
-            if isBlank(line) { flush(); line += 1; continue }
-            let trimmed = slice.drop(while: { $0 == 0x20 })
-            if trimmed.first == 0x23 {
-                var level = 0
-                var j = trimmed.startIndex
-                while j < trimmed.endIndex, trimmed[j] == 0x23 { level += 1; j += 1 }
-                if level <= 6, j == trimmed.endIndex || trimmed[j] == 0x20 {
-                    flush()
-                    blocks.append(.heading(level: level, text: String(decoding: trimmed[j...], as: UTF16.self).trimmingCharacters(in: .whitespaces), sourceLine: line + 1))
-                    line += 1; continue
-                }
-            }
-            if isThematic(trimmed) { flush(); blocks.append(.thematicBreak(sourceLine: line + 1)); line += 1; continue }
-            if trimmed.first == 0x3E {
-                flush()
-                var body = String(decoding: trimmed.dropFirst(), as: UTF16.self)
-                if body.hasPrefix(" ") { body.removeFirst() }
-                blocks.append(.quote(text: body, sourceLine: line + 1)); line += 1; continue
-            }
-            if let item = MarkdownListGrammar.parseListLine(slice) {
-                flush()
-                let body = String(decoding: slice.dropFirst(item.prefixLength), as: UTF16.self)
-                var ordered = false
-                var task: Bool?
-                switch item.kind {
-                case .ordered: ordered = true
-                case .bullet(_, let state): task = state.map { $0 != 0x20 }
-                }
-                blocks.append(.listItem(text: body, ordered: ordered, indent: item.indent, taskChecked: task, sourceLine: line + 1))
-                line += 1; continue
-            }
-            if isTableStart(line) {
-                flush()
-                let header = GFMTableEditEngine.cells(slice)
-                var rows: [[String]] = []
-                var end = line + 2
-                while end < index.lineCount, !isBlank(end), index.lineSlice(end).drop(while: { $0 == 0x20 }).first == 0x7C, rows.count < GFMTableEditEngine.maxRows {
-                    rows.append(GFMTableEditEngine.cells(index.lineSlice(end))); end += 1
-                }
-                if header.count <= GFMTableEditEngine.maxColumns, rows.allSatisfy({ $0.count <= GFMTableEditEngine.maxColumns }) {
-                    blocks.append(.table(header: header, rows: rows, sourceLine: line + 1))
-                } else {
-                    blocks.append(.paragraph(text: (line..<end).map(text).joined(separator: "\n"), sourceLine: line + 1))
-                }
-                line = end; continue
-            }
-            if isHTMLStart(slice) {
-                flush()
-                let start = line
-                let firstLine = text(line)
-                var raw: [String] = [firstLine]
-                line += 1
-                if !isSingleLineClosedHTML(firstLine) {
-                    while line < index.lineCount, !isBlank(line) {
-                        let nextSlice = index.lineSlice(line)
-                        if currentFence(at: line) != nil
-                            || isTableStart(line)
-                            || isATXHeading(nextSlice)
-                            || isThematic(nextSlice.drop(while: { $0 == 0x20 }))
-                            || MarkdownListGrammar.parseListLine(nextSlice) != nil {
-                            break
-                        }
-                        raw.append(text(line))
-                        line += 1
-                    }
-                }
-                blocks.append(.inertHTML(text: raw.joined(separator: "\n"), sourceLine: start + 1))
-                continue
-            }
-            if paragraph.isEmpty { paragraphStart = line }
-            paragraph.append(text(line))
-            line += 1
+            line = advancePreviewProjectionLine(at: line, state: &state)
         }
-        flush()
-        return GFMPreviewDocument(revision: snapshot.revision, blocks: blocks)
+        flushPreviewParagraph(&state)
+        return GFMPreviewDocument(revision: snapshot.revision, blocks: state.blocks)
     }
 
     /// Computes 1-based ordinals for all blocks in a single `O(B)` forward stack pass (`BUG-014`).
@@ -358,6 +235,186 @@ public enum MarkdownPreviewProjector {
     }
 }
 
+extension MarkdownPreviewProjector {
+    private struct PreviewProjectionState {
+        let index: MarkdownLineIndex
+        var blocks: [GFMPreviewBlock] = []
+        var paragraph: [String] = []
+        var paragraphStart: Int = 0
+        var fenceCursor: Int = 0
+    }
+
+    private static func advancePreviewProjectionLine(at line: Int, state: inout PreviewProjectionState) -> Int {
+        if let span = activePreviewFence(at: line, state: &state) {
+            return consumePreviewFenceBlock(at: line, span: span, state: &state)
+        }
+        if isPreviewBlankLine(state.index, line: line) {
+            flushPreviewParagraph(&state)
+            return line + 1
+        }
+        let slice = state.index.lineSlice(line)
+        if let singleBlock = matchPreviewSingleLineBlock(at: line, slice: slice) {
+            flushPreviewParagraph(&state)
+            state.blocks.append(singleBlock)
+            return line + 1
+        }
+        if isPreviewTableStart(state.index, line: line) {
+            return consumePreviewTableBlock(at: line, slice: slice, state: &state)
+        }
+        if isPreviewHTMLStart(slice) {
+            return consumePreviewHTMLBlock(at: line, state: &state)
+        }
+        if state.paragraph.isEmpty { state.paragraphStart = line }
+        state.paragraph.append(previewLineText(state.index, line: line))
+        return line + 1
+    }
+
+    private static func activePreviewFence(at line: Int, state: inout PreviewProjectionState) -> (open: Int, close: Int)? {
+        let fences = state.index.fences
+        while state.fenceCursor < fences.count && fences[state.fenceCursor].close < line {
+            state.fenceCursor += 1
+        }
+        if state.fenceCursor < fences.count && fences[state.fenceCursor].open <= line {
+            return fences[state.fenceCursor]
+        }
+        return nil
+    }
+
+    private static func previewLineText(_ index: MarkdownLineIndex, line: Int) -> String {
+        let s = index.lineSlice(line)
+        return String(decoding: s.prefix(MarkdownLineIndex.maxLineUTF16), as: UTF16.self)
+    }
+
+    private static func isPreviewBlankLine(_ index: MarkdownLineIndex, line: Int) -> Bool {
+        index.lineSlice(line).allSatisfy { $0 == 0x20 || $0 == 0x09 }
+    }
+
+    private static func flushPreviewParagraph(_ state: inout PreviewProjectionState) {
+        guard !state.paragraph.isEmpty else { return }
+        state.blocks.append(.paragraph(text: state.paragraph.joined(separator: "\n"), sourceLine: state.paragraphStart + 1))
+        state.paragraph.removeAll(keepingCapacity: true)
+    }
+
+    private static func consumePreviewFenceBlock(
+        at open: Int,
+        span: (open: Int, close: Int),
+        state: inout PreviewProjectionState
+    ) -> Int {
+        flushPreviewParagraph(&state)
+        let closed = span.close > span.open && isClosingFence(state.index, openLine: span.open, closeLine: span.close)
+        let bodyEnd = closed ? span.close : span.close + 1
+        let body = ((open + 1)..<max(open + 1, bodyEnd)).map { previewLineText(state.index, line: $0) }
+        state.blocks.append(.code(text: body.joined(separator: "\n"), sourceLine: open + 1))
+        return span.close + 1
+    }
+
+    private static func matchPreviewSingleLineBlock(at line: Int, slice: ArraySlice<UInt16>) -> GFMPreviewBlock? {
+        let trimmed = slice.drop(while: { $0 == 0x20 })
+        if let heading = parsePreviewHeadingBlock(trimmed, sourceLine: line + 1) {
+            return heading
+        }
+        if isThematic(trimmed) {
+            return .thematicBreak(sourceLine: line + 1)
+        }
+        if trimmed.first == 0x3E {
+            var body = String(decoding: trimmed.dropFirst(), as: UTF16.self)
+            if body.hasPrefix(" ") { body.removeFirst() }
+            return .quote(text: body, sourceLine: line + 1)
+        }
+        return parsePreviewListItemBlock(slice, sourceLine: line + 1)
+    }
+
+    private static func parsePreviewHeadingBlock(_ trimmed: ArraySlice<UInt16>, sourceLine: Int) -> GFMPreviewBlock? {
+        guard trimmed.first == 0x23 else { return nil }
+        var level = 0
+        var j = trimmed.startIndex
+        while j < trimmed.endIndex, trimmed[j] == 0x23 { level += 1; j += 1 }
+        guard level <= 6, j == trimmed.endIndex || trimmed[j] == 0x20 else { return nil }
+        let title = String(decoding: trimmed[j...], as: UTF16.self).trimmingCharacters(in: .whitespaces)
+        return .heading(level: level, text: title, sourceLine: sourceLine)
+    }
+
+    private static func parsePreviewListItemBlock(_ slice: ArraySlice<UInt16>, sourceLine: Int) -> GFMPreviewBlock? {
+        guard let item = MarkdownListGrammar.parseListLine(slice) else { return nil }
+        let body = String(decoding: slice.dropFirst(item.prefixLength), as: UTF16.self)
+        switch item.kind {
+        case .ordered:
+            return .listItem(text: body, ordered: true, indent: item.indent, taskChecked: nil, sourceLine: sourceLine)
+        case .bullet(_, let state):
+            return .listItem(text: body, ordered: false, indent: item.indent, taskChecked: state.map { $0 != 0x20 }, sourceLine: sourceLine)
+        }
+    }
+}
+
+extension MarkdownPreviewProjector {
+    private static func isPreviewHTMLStart(_ s: ArraySlice<UInt16>) -> Bool {
+        var i = s.startIndex
+        while i < s.endIndex, s[i] == 0x20 { i += 1 }
+        guard i + 1 < s.endIndex, s[i] == 0x3C else { return false }
+        let n = s[i + 1]
+        return (n >= 0x41 && n <= 0x5A) || (n >= 0x61 && n <= 0x7A) || n == 0x2F || n == 0x21
+    }
+
+    private static func isPreviewTableStart(_ index: MarkdownLineIndex, line: Int) -> Bool {
+        guard line + 1 < index.lineCount else { return false }
+        let slice = index.lineSlice(line)
+        var i = slice.startIndex
+        while i < slice.endIndex, slice[i] == 0x20 { i += 1 }
+        return i < slice.endIndex && slice[i] == 0x7C && GFMTableEditEngine.isDelimiterRowSlice(index.lineSlice(line + 1))
+    }
+
+    private static func consumePreviewTableBlock(
+        at line: Int,
+        slice: ArraySlice<UInt16>,
+        state: inout PreviewProjectionState
+    ) -> Int {
+        flushPreviewParagraph(&state)
+        let header = GFMTableEditEngine.cells(slice)
+        var rows: [[String]] = []
+        var end = line + 2
+        while end < state.index.lineCount, isPreviewTableBodyRow(state.index, line: end), rows.count < GFMTableEditEngine.maxRows {
+            rows.append(GFMTableEditEngine.cells(state.index.lineSlice(end)))
+            end += 1
+        }
+        if header.count <= GFMTableEditEngine.maxColumns, rows.allSatisfy({ $0.count <= GFMTableEditEngine.maxColumns }) {
+            state.blocks.append(.table(header: header, rows: rows, sourceLine: line + 1))
+        } else {
+            let fallback = (line..<end).map { previewLineText(state.index, line: $0) }.joined(separator: "\n")
+            state.blocks.append(.paragraph(text: fallback, sourceLine: line + 1))
+        }
+        return end
+    }
+
+    private static func isPreviewTableBodyRow(_ index: MarkdownLineIndex, line: Int) -> Bool {
+        guard !isPreviewBlankLine(index, line: line) else { return false }
+        return index.lineSlice(line).drop(while: { $0 == 0x20 }).first == 0x7C
+    }
+
+    private static func consumePreviewHTMLBlock(at start: Int, state: inout PreviewProjectionState) -> Int {
+        flushPreviewParagraph(&state)
+        let firstLine = previewLineText(state.index, line: start)
+        var raw: [String] = [firstLine]
+        var line = start + 1
+        if isSingleLineClosedHTML(firstLine) == false {
+            while line < state.index.lineCount, shouldTerminatePreviewHTMLBlock(at: line, state: &state) == false {
+                raw.append(previewLineText(state.index, line: line))
+                line += 1
+            }
+        }
+        state.blocks.append(.inertHTML(text: raw.joined(separator: "\n"), sourceLine: start + 1))
+        return line
+    }
+
+    private static func shouldTerminatePreviewHTMLBlock(at line: Int, state: inout PreviewProjectionState) -> Bool {
+        if isPreviewBlankLine(state.index, line: line) { return true }
+        if activePreviewFence(at: line, state: &state) != nil { return true }
+        if isPreviewTableStart(state.index, line: line) { return true }
+        let nextSlice = state.index.lineSlice(line)
+        if isATXHeading(nextSlice) || isThematic(nextSlice.drop(while: { $0 == 0x20 })) { return true }
+        return MarkdownListGrammar.parseListLine(nextSlice) != nil
+    }
+}
+
 public enum ImageBlockReason: Equatable, Sendable {
     case remoteOrData, outOfScope, forbiddenExtension, tooLarge, tooManyPixels, tooManyImages, symlink, unreadable
 }
@@ -394,27 +451,13 @@ public struct PreviewResourceAndLinkGate: Sendable {
     }
 
     public func admitImage(reference: String, admittedCount: Int = 0) -> ImageAdmission {
-        let ref = reference.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lower = ref.lowercased()
-        if ref.isEmpty || lower.contains("://") || lower.hasPrefix("data:") || ref.hasPrefix("//") { return .blocked(.remoteOrData) }
-        let decoded = ref.removingPercentEncoding ?? ref
-        let url = (decoded.hasPrefix("/") ? URL(fileURLWithPath: decoded) : documentDirectory.appendingPathComponent(decoded)).standardizedFileURL
-        let rootPath = scopeRoot.path.hasSuffix("/") ? scopeRoot.path : scopeRoot.path + "/"
-        guard url.path.hasPrefix(rootPath) else { return .blocked(.outOfScope) }
-        guard Self.allowedExtensions.contains(url.pathExtension.lowercased()) else { return .blocked(.forbiddenExtension) }
-        guard admittedCount < Self.maxImagesPerDocument else { return .blocked(.tooManyImages) }
-        do {
-            let attrs = try fileSystem.fileAttributes(at: url, withinScope: scopeRoot)
-            if attrs.isSymbolicLink { return .blocked(.symlink) }
-            guard attrs.byteSize <= Self.maxBytes else { return .blocked(.tooLarge) }
-            let data = try fileSystem.readData(at: url, maxBytes: Int(Self.maxBytes), withinScope: scopeRoot)
-            guard let size = Self.pixelSize(of: data) else { return .blocked(.unreadable) }
-            guard size.width <= Self.maxPixelEdge, size.height <= Self.maxPixelEdge, size.width * size.height <= Self.maxPixels else { return .blocked(.tooManyPixels) }
-            return .admitted(url: url, targetMaxPixel: min(Self.thumbnailMaxPixel, max(size.width, size.height)))
-        } catch DomainError.securityScopeViolation {
-            return .blocked(.outOfScope)
-        } catch {
-            return .blocked(.unreadable)
+        switch resolveAdmittedImageData(reference: reference, admittedCount: admittedCount) {
+        case .failure(let reason):
+            return .blocked(reason)
+        case .success(let resolved):
+            guard let size = Self.pixelSize(of: resolved.data) else { return .blocked(.unreadable) }
+            guard Self.isWithinPixelBounds(width: size.width, height: size.height) else { return .blocked(.tooManyPixels) }
+            return .admitted(url: resolved.url, targetMaxPixel: min(Self.thumbnailMaxPixel, max(size.width, size.height)))
         }
     }
 
@@ -423,51 +466,25 @@ public struct PreviewResourceAndLinkGate: Sendable {
         guard case .admitted(let url, let target) = admitted,
               let data = try? fileSystem.readData(at: url, maxBytes: Int(Self.maxBytes), withinScope: scopeRoot),
               let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: target
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        return Self.createDownsampledThumbnail(from: source, targetMaxPixel: target)
     }
 
     /// Single-read admission + thumbnail decode avoiding duplicate `<= 16 MiB` disk reads for local raster preview images (`SEC-002`, `SEC-003`).
     public func admitAndLoadThumbnail(reference: String, admittedCount: Int = 0) -> (admission: ImageAdmission, thumbnail: CGImage?) {
-        let ref = reference.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lower = ref.lowercased()
-        if ref.isEmpty || lower.contains("://") || lower.hasPrefix("data:") || ref.hasPrefix("//") { return (.blocked(.remoteOrData), nil) }
-        let decoded = ref.removingPercentEncoding ?? ref
-        let url = (decoded.hasPrefix("/") ? URL(fileURLWithPath: decoded) : documentDirectory.appendingPathComponent(decoded)).standardizedFileURL
-        let rootPath = scopeRoot.path.hasSuffix("/") ? scopeRoot.path : scopeRoot.path + "/"
-        guard url.path.hasPrefix(rootPath) else { return (.blocked(.outOfScope), nil) }
-        guard Self.allowedExtensions.contains(url.pathExtension.lowercased()) else { return (.blocked(.forbiddenExtension), nil) }
-        guard admittedCount < Self.maxImagesPerDocument else { return (.blocked(.tooManyImages), nil) }
-        do {
-            let attrs = try fileSystem.fileAttributes(at: url, withinScope: scopeRoot)
-            if attrs.isSymbolicLink { return (.blocked(.symlink), nil) }
-            guard attrs.byteSize <= Self.maxBytes else { return (.blocked(.tooLarge), nil) }
-            let data = try fileSystem.readData(at: url, maxBytes: Int(Self.maxBytes), withinScope: scopeRoot)
-            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                  let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-                  let w = props[kCGImagePropertyPixelWidth] as? Int,
-                  let h = props[kCGImagePropertyPixelHeight] as? Int else {
+        switch resolveAdmittedImageData(reference: reference, admittedCount: admittedCount) {
+        case .failure(let reason):
+            return (.blocked(reason), nil)
+        case .success(let resolved):
+            guard let source = CGImageSourceCreateWithData(resolved.data as CFData, nil),
+                  let size = Self.sourcePixelSize(of: source) else {
                 return (.blocked(.unreadable), nil)
             }
-            guard w <= Self.maxPixelEdge, h <= Self.maxPixelEdge, w * h <= Self.maxPixels else {
+            guard Self.isWithinPixelBounds(width: size.width, height: size.height) else {
                 return (.blocked(.tooManyPixels), nil)
             }
-            let target = min(Self.thumbnailMaxPixel, max(w, h))
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: target
-            ]
-            let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-            return (.admitted(url: url, targetMaxPixel: target), image)
-        } catch DomainError.securityScopeViolation {
-            return (.blocked(.outOfScope), nil)
-        } catch {
-            return (.blocked(.unreadable), nil)
+            let target = min(Self.thumbnailMaxPixel, max(size.width, size.height))
+            let image = Self.createDownsampledThumbnail(from: source, targetMaxPixel: target)
+            return (.admitted(url: resolved.url, targetMaxPixel: target), image)
         }
     }
 
@@ -510,9 +527,81 @@ public struct PreviewResourceAndLinkGate: Sendable {
     }
 
     private static func pixelSize(of data: Data) -> (width: Int, height: Int)? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return sourcePixelSize(of: source)
+    }
+}
+
+extension PreviewResourceAndLinkGate {
+    private enum ResolvedImageOutcome {
+        case success((url: URL, data: Data))
+        case failure(ImageBlockReason)
+    }
+
+    private func resolveAdmittedImageData(reference: String, admittedCount: Int) -> ResolvedImageOutcome {
+        switch resolveScopedImageURL(reference: reference, admittedCount: admittedCount) {
+        case .failure(let reason):
+            return .failure(reason)
+        case .success(let url):
+            return readScopedImageBytes(at: url)
+        }
+    }
+
+    private enum ScopedImageURLOutcome {
+        case success(URL)
+        case failure(ImageBlockReason)
+    }
+
+    private func resolveScopedImageURL(reference: String, admittedCount: Int) -> ScopedImageURLOutcome {
+        let ref = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !Self.isRemoteOrDataImageReference(ref) else { return .failure(.remoteOrData) }
+        let decoded = ref.removingPercentEncoding ?? ref
+        let candidate = decoded.hasPrefix("/") ? URL(fileURLWithPath: decoded) : documentDirectory.appendingPathComponent(decoded)
+        let url = candidate.standardizedFileURL
+        let rootPath = scopeRoot.path.hasSuffix("/") ? scopeRoot.path : scopeRoot.path + "/"
+        guard url.path.hasPrefix(rootPath) else { return .failure(.outOfScope) }
+        guard Self.allowedExtensions.contains(url.pathExtension.lowercased()) else { return .failure(.forbiddenExtension) }
+        guard admittedCount < Self.maxImagesPerDocument else { return .failure(.tooManyImages) }
+        return .success(url)
+    }
+
+    private static func isRemoteOrDataImageReference(_ ref: String) -> Bool {
+        if ref.isEmpty || ref.hasPrefix("//") { return true }
+        let lower = ref.lowercased()
+        return lower.contains("://") || lower.hasPrefix("data:")
+    }
+
+    private func readScopedImageBytes(at url: URL) -> ResolvedImageOutcome {
+        do {
+            let attrs = try fileSystem.fileAttributes(at: url, withinScope: scopeRoot)
+            if attrs.isSymbolicLink { return .failure(.symlink) }
+            guard attrs.byteSize <= Self.maxBytes else { return .failure(.tooLarge) }
+            let data = try fileSystem.readData(at: url, maxBytes: Int(Self.maxBytes), withinScope: scopeRoot)
+            return .success((url, data))
+        } catch DomainError.securityScopeViolation {
+            return .failure(.outOfScope)
+        } catch {
+            return .failure(.unreadable)
+        }
+    }
+
+    private static func sourcePixelSize(of source: CGImageSource) -> (width: Int, height: Int)? {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int,
+              let h = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
         return (w, h)
+    }
+
+    private static func isWithinPixelBounds(width: Int, height: Int) -> Bool {
+        width <= maxPixelEdge && height <= maxPixelEdge && width * height <= maxPixels
+    }
+
+    private static func createDownsampledThumbnail(from source: CGImageSource, targetMaxPixel: Int) -> CGImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: targetMaxPixel
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 }

@@ -198,75 +198,11 @@ public enum SearchDiffAndBracketEngine {
 
     static func firstOverlongLine(in text: String, limit: Int) -> (line: Int, utf16Length: Int)? {
         if let fast = text.utf8.withContiguousStorageIfAvailable({ buf -> (line: Int, utf16Length: Int)? in
-            let count = buf.count
-            guard let base = buf.baseAddress, count > 0 else { return nil }
-            var lineNumber = 1
-            var currentLineLength = 0
-            var i = 0
-            while i < count {
-                let b = base[i]
-                if b == 0x0A {
-                    if currentLineLength > limit { return (lineNumber, currentLineLength) }
-                    lineNumber += 1
-                    currentLineLength = 0
-                    i += 1
-                } else if b == 0x0D {
-                    if currentLineLength > limit { return (lineNumber, currentLineLength) }
-                    lineNumber += 1
-                    currentLineLength = 0
-                    if i + 1 < count && base[i + 1] == 0x0A {
-                        i += 2
-                    } else {
-                        i += 1
-                    }
-                } else if b < 0x80 {
-                    currentLineLength += 1
-                    i += 1
-                } else if b < 0xE0 {
-                    currentLineLength += 1
-                    i += 2
-                } else if b < 0xF0 {
-                    currentLineLength += 1
-                    i += 3
-                } else {
-                    currentLineLength += 2
-                    i += 4
-                }
-            }
-            if currentLineLength > limit { return (lineNumber, currentLineLength) }
-            return nil
+            bracketFirstOverlongContiguous(in: buf, limit: limit)
         }) {
             return fast
         }
-        let units = text.utf16
-        var index = units.startIndex
-        var lineNumber = 1
-        var currentLineLength = 0
-
-        while index < units.endIndex {
-            let unit = units[index]
-            if unit == 0x0D || unit == 0x0A {
-                if currentLineLength > limit {
-                    return (lineNumber, currentLineLength)
-                }
-                lineNumber += 1
-                currentLineLength = 0
-                let nextIndex = units.index(after: index)
-                if unit == 0x0D, nextIndex < units.endIndex, units[nextIndex] == 0x0A {
-                    index = units.index(after: nextIndex)
-                } else {
-                    index = nextIndex
-                }
-            } else {
-                currentLineLength += 1
-                index = units.index(after: index)
-            }
-        }
-
-        if currentLineLength > limit {
-            return (lineNumber, currentLineLength)
-        }
-        return nil
+        return bracketFirstOverlongUTF16(in: text.utf16, limit: limit)
     }
 
     private struct DelimiterStackScanner {
@@ -294,80 +230,72 @@ public enum SearchDiffAndBracketEngine {
             var contiguous = text
             contiguous.makeContiguousUTF8()
             return contiguous.utf8.withContiguousStorageIfAvailable { buf -> (line: Int, utf16Length: Int)? in
-                let count = buf.count
-                guard let base = buf.baseAddress, count > 0 else { return nil }
-                var lineNumber = 1
-                var currentLineLength = 0
-                var utf16Offset = 0
-                var i = 0
-                while i < count {
-                    let b = base[i]
-                    if b < 0x80 {
-                        if b == 0x0A {
-                            if currentLineLength > limit { return (lineNumber, currentLineLength) }
-                            lineNumber += 1
-                            currentLineLength = 0
-                            utf16Offset += 1
-                            i += 1
-                            continue
-                        } else if b == 0x0D {
-                            if currentLineLength > limit { return (lineNumber, currentLineLength) }
-                            lineNumber += 1
-                            currentLineLength = 0
-                            if i + 1 < count && base[i + 1] == 0x0A {
-                                utf16Offset += 2
-                                i += 2
-                            } else {
-                                utf16Offset += 1
-                                i += 1
-                            }
-                            continue
-                        }
-                        switch b {
-                        case Self.openParen, Self.openBracket, Self.openBrace:
-                            let slot = pairSlots.count
-                            pairSlots.append(nil)
-                            stack.append(OpenEntry(offset: utf16Offset, byte: b, depth: stack.count, slotIndex: slot))
-                        case Self.closeParen, Self.closeBracket, Self.closeBrace:
-                            let expectedOpen = Self.matchingOpenerByte(for: b)
-                            if let top = stack.last, top.byte == expectedOpen {
-                                _ = stack.popLast()
-                                pairSlots[top.slotIndex] = BracketPairSpan(
-                                    openOffset: top.offset,
-                                    closeOffset: utf16Offset,
-                                    openSymbol: Self.character(for: top.byte),
-                                    closeSymbol: Self.character(for: b),
-                                    nestingDepth: top.depth
-                                )
-                                matchedCount += 1
-                            } else {
-                                unbalancedClosers.append(UnbalancedBracket(offset: utf16Offset, symbol: Self.character(for: b)))
-                            }
-                        default:
-                            break
-                        }
-                        currentLineLength += 1
-                        utf16Offset += 1
-                        i += 1
-                    } else if b < 0xE0 {
-                        currentLineLength += 1
-                        utf16Offset += 1
-                        i += 2
-                    } else if b < 0xF0 {
-                        currentLineLength += 1
-                        utf16Offset += 1
-                        i += 3
-                    } else {
-                        currentLineLength += 2
-                        utf16Offset += 2
-                        i += 4
-                    }
-                }
-                if currentLineLength > limit {
-                    return (lineNumber, currentLineLength)
-                }
-                return nil
+                scanContiguousUTF8(buf, limit: limit)
             } ?? nil
+        }
+
+        private mutating func scanContiguousUTF8(
+            _ buf: UnsafeBufferPointer<UInt8>,
+            limit: Int
+        ) -> (line: Int, utf16Length: Int)? {
+            guard let base = buf.baseAddress, buf.count > 0 else { return nil }
+            var lineNumber = 1
+            var currentLineLength = 0
+            var utf16Offset = 0
+            var index = 0
+
+            while index < buf.count {
+                let b = base[index]
+                if b == 0x0A || b == 0x0D {
+                    if currentLineLength > limit { return (lineNumber, currentLineLength) }
+                    let step = (b == 0x0D && index + 1 < buf.count && base[index + 1] == 0x0A) ? 2 : 1
+                    lineNumber += 1
+                    currentLineLength = 0
+                    utf16Offset += step
+                    index += step
+                } else if b < 0x80 {
+                    recordASCIIDelimiterIfPresent(b, atUTF16Offset: utf16Offset)
+                    currentLineLength += 1
+                    utf16Offset += 1
+                    index += 1
+                } else {
+                    let step = SearchDiffAndBracketEngine.bracketUTF8Step(forLeadByte: b)
+                    currentLineLength += step.utf16
+                    utf16Offset += step.utf16
+                    index += step.bytes
+                }
+            }
+            return currentLineLength > limit ? (lineNumber, currentLineLength) : nil
+        }
+
+        private mutating func recordASCIIDelimiterIfPresent(_ byte: UInt8, atUTF16Offset utf16Offset: Int) {
+            switch byte {
+            case Self.openParen, Self.openBracket, Self.openBrace:
+                let slot = pairSlots.count
+                pairSlots.append(nil)
+                stack.append(OpenEntry(offset: utf16Offset, byte: byte, depth: stack.count, slotIndex: slot))
+            case Self.closeParen, Self.closeBracket, Self.closeBrace:
+                recordClosingDelimiter(byte, atUTF16Offset: utf16Offset)
+            default:
+                break
+            }
+        }
+
+        private mutating func recordClosingDelimiter(_ closerByte: UInt8, atUTF16Offset utf16Offset: Int) {
+            let expectedOpen = Self.matchingOpenerByte(for: closerByte)
+            if let top = stack.last, top.byte == expectedOpen {
+                _ = stack.popLast()
+                pairSlots[top.slotIndex] = BracketPairSpan(
+                    openOffset: top.offset,
+                    closeOffset: utf16Offset,
+                    openSymbol: Self.character(for: top.byte),
+                    closeSymbol: Self.character(for: closerByte),
+                    nestingDepth: top.depth
+                )
+                matchedCount += 1
+            } else {
+                unbalancedClosers.append(UnbalancedBracket(offset: utf16Offset, symbol: Self.character(for: closerByte)))
+            }
         }
 
         func finalizedSortedMatchedPairsAndParents() -> ([BracketPairSpan], [Int]) {
@@ -436,8 +364,74 @@ public enum SearchDiffAndBracketEngine {
             }
         }
     }
+}
 
-    private static func lastOpenAtOrBefore(_ target: Int, in pairs: [BracketPairSpan]) -> Int? {
+private extension SearchDiffAndBracketEngine {
+    struct BracketAncestorWalk {
+        var exactMatch: BracketPairSpan?
+        var innerEnclosing: BracketPairSpan?
+        var enclosing: [BracketPairSpan] = []
+    }
+
+    @inline(__always)
+    static func bracketUTF8Step(forLeadByte lead: UInt8) -> (bytes: Int, utf16: Int) {
+        if lead < 0x80 { return (1, 1) }
+        if lead < 0xE0 { return (2, 1) }
+        if lead < 0xF0 { return (3, 1) }
+        return (4, 2)
+    }
+
+    static func bracketFirstOverlongContiguous(
+        in buf: UnsafeBufferPointer<UInt8>,
+        limit: Int
+    ) -> (line: Int, utf16Length: Int)? {
+        guard let base = buf.baseAddress, buf.count > 0 else { return nil }
+        var lineNumber = 1
+        var currentLineLength = 0
+        var index = 0
+
+        while index < buf.count {
+            let b = base[index]
+            if b == 0x0A || b == 0x0D {
+                if currentLineLength > limit { return (lineNumber, currentLineLength) }
+                lineNumber += 1
+                currentLineLength = 0
+                index += (b == 0x0D && index + 1 < buf.count && base[index + 1] == 0x0A) ? 2 : 1
+            } else {
+                let step = bracketUTF8Step(forLeadByte: b)
+                currentLineLength += step.utf16
+                index += step.bytes
+            }
+        }
+        return currentLineLength > limit ? (lineNumber, currentLineLength) : nil
+    }
+
+    static func bracketFirstOverlongUTF16(
+        in units: String.UTF16View,
+        limit: Int
+    ) -> (line: Int, utf16Length: Int)? {
+        var index = units.startIndex
+        var lineNumber = 1
+        var currentLineLength = 0
+
+        while index < units.endIndex {
+            let unit = units[index]
+            let nextIndex = units.index(after: index)
+            if unit == 0x0D || unit == 0x0A {
+                if currentLineLength > limit { return (lineNumber, currentLineLength) }
+                lineNumber += 1
+                currentLineLength = 0
+                let isCRLF = unit == 0x0D && nextIndex < units.endIndex && units[nextIndex] == 0x0A
+                index = isCRLF ? units.index(after: nextIndex) : nextIndex
+            } else {
+                currentLineLength += 1
+                index = nextIndex
+            }
+        }
+        return currentLineLength > limit ? (lineNumber, currentLineLength) : nil
+    }
+
+    static func lastOpenAtOrBefore(_ target: Int, in pairs: [BracketPairSpan]) -> Int? {
         guard !pairs.isEmpty else { return nil }
         var low = 0
         var high = pairs.count
@@ -453,7 +447,7 @@ public enum SearchDiffAndBracketEngine {
     }
 
     /// Fused `O(log N + depth)` resolution computing `activePair` and (optionally) `enclosingPairs` in a single binary search.
-    private static func resolveActiveAndEnclosing(
+    static func resolveActiveAndEnclosing(
         at caret: Int,
         in pairs: [BracketPairSpan],
         parentIndices: [Int],
@@ -463,47 +457,74 @@ public enum SearchDiffAndBracketEngine {
             return (nil, [])
         }
 
-        var exactMatch: BracketPairSpan?
-        var innerEnclosing: BracketPairSpan?
-        var enclosing: [BracketPairSpan] = []
+        let walked = bracketWalkAncestorsAtCaret(
+            from: idx,
+            caret: caret,
+            in: pairs,
+            parentIndices: parentIndices,
+            collectEnclosing: collectEnclosing
+        )
+        if let exactMatch = walked.exactMatch {
+            return (exactMatch, walked.enclosing)
+        }
 
-        var curr = idx
+        if caret > 0 {
+            let prevStart = pairs[idx].openOffset < caret ? idx : (idx - 1)
+            if let adjacent = bracketFindAdjacentPrecedingPair(
+                from: prevStart,
+                caret: caret,
+                in: pairs,
+                parentIndices: parentIndices
+            ) {
+                return (adjacent, walked.enclosing)
+            }
+        }
+
+        return (walked.innerEnclosing, walked.enclosing)
+    }
+
+    static func bracketWalkAncestorsAtCaret(
+        from startIdx: Int,
+        caret: Int,
+        in pairs: [BracketPairSpan],
+        parentIndices: [Int],
+        collectEnclosing: Bool
+    ) -> BracketAncestorWalk {
+        var walk = BracketAncestorWalk()
+        var curr = startIdx
         while curr >= 0 {
-            let p = pairs[curr]
-            if exactMatch == nil && (p.openOffset == caret || p.closeOffset == caret) {
-                exactMatch = p
+            let pair = pairs[curr]
+            if walk.exactMatch == nil && (pair.openOffset == caret || pair.closeOffset == caret) {
+                walk.exactMatch = pair
             }
-            if innerEnclosing == nil && p.openOffset < caret && caret < p.closeOffset {
-                innerEnclosing = p
+            if walk.innerEnclosing == nil && pair.openOffset < caret && caret < pair.closeOffset {
+                walk.innerEnclosing = pair
             }
-            if collectEnclosing && p.openOffset <= caret && caret <= p.closeOffset {
-                enclosing.append(p)
+            if collectEnclosing && pair.openOffset <= caret && caret <= pair.closeOffset {
+                walk.enclosing.append(pair)
             }
             curr = parentIndices[curr]
         }
-
-        if collectEnclosing && enclosing.count > 1 {
-            enclosing.reverse()
+        if collectEnclosing && walk.enclosing.count > 1 {
+            walk.enclosing.reverse()
         }
+        return walk
+    }
 
-        if let exactMatch {
-            return (exactMatch, enclosing)
-        }
-
-        // Check caret - 1 (caret immediately after an opener or closer) without a second binary search:
-        // since `pairs` is sorted by strictly increasing `openOffset`, `lastOpenAtOrBefore(caret - 1)` is either `idx` (if `pairs[idx].openOffset < caret`) or `idx - 1` (if `pairs[idx].openOffset == caret`).
-        if caret > 0 {
-            let prevIdx = pairs[idx].openOffset < caret ? idx : (idx - 1)
-            var prevCurr = prevIdx
-            while prevCurr >= 0 {
-                let p = pairs[prevCurr]
-                if p.openOffset + 1 == caret || p.closeOffset + 1 == caret {
-                    return (p, enclosing)
-                }
-                prevCurr = parentIndices[prevCurr]
+    static func bracketFindAdjacentPrecedingPair(
+        from startIdx: Int,
+        caret: Int,
+        in pairs: [BracketPairSpan],
+        parentIndices: [Int]
+    ) -> BracketPairSpan? {
+        var curr = startIdx
+        while curr >= 0 {
+            let pair = pairs[curr]
+            if pair.openOffset + 1 == caret || pair.closeOffset + 1 == caret {
+                return pair
             }
+            curr = parentIndices[curr]
         }
-
-        return (innerEnclosing, enclosing)
+        return nil
     }
 }

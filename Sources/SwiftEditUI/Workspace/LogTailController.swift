@@ -1,12 +1,19 @@
 import Foundation
+import os
 import SwiftEditCore
 
-/// Background engine of one live tail (`tail -F` semantics) (`REQ-LOG`, `UI-012`).
+/// Bounded descriptor accounting snapshot for `LogTailWorker` rotation verification (`CWE-400`, `REQ-007`).
+struct LogTailDescriptorMetrics: Equatable, Sendable {
+    var openCount = 0
+    var rotationDisarms = 0
+}
+
+/// Background engine of one live tail (`tail -F` semantics) (`REQ-LOG`, `UI-012`, `CWE-400`, `CWE-674`).
 ///
-/// All file access runs on a private serial queue: a kqueue `DispatchSource` (event-only descriptor, which never blocks
-/// writers, renames or deletions) wakes it on writes, and a 1 s timer covers rotation and file systems without vnode
-/// events — the same strategy as macOS `tail -F`. Each step reads only the appended bytes (bounded window), so the app
-/// and the writing process are never blocked.
+/// All file access runs on a private serial queue: a kqueue `DispatchSource` (`O_EVTONLY | O_CLOEXEC`, which never blocks
+/// writers, renames, or deletions) wakes it on writes, and a 1 s timer covers rotation and file systems without vnode
+/// events — the same strategy as macOS `tail -F`. Rotation/delete events disarm the active `vnode` non-recursively and
+/// release `fd` via `setCancelHandler` so rapid rotations cannot recurse or leak descriptors (`CWE-400`, `CWE-674`).
 final class LogTailWorker: @unchecked Sendable {
     private let queue = DispatchQueue(label: "it.ph.SwiftEdit.logtail", qos: .utility)
     private let url: URL
@@ -17,8 +24,13 @@ final class LogTailWorker: @unchecked Sendable {
     private var running = false
     /// Monotonic delivery counter, so the main actor can discard snapshots that arrive out of order.
     private var sequence: UInt64 = 0
+    private let metricsLock = OSAllocatedUnfairLock(initialState: LogTailDescriptorMetrics())
     private let deliver: @Sendable (Result<LogTailBuffer, Error>, UInt64) -> Void
     var isWatchingFileEvents: Bool { queue.sync { vnode != nil } }
+    var descriptorMetrics: LogTailDescriptorMetrics {
+        queue.sync {}
+        return metricsLock.withLock { $0 }
+    }
 
     init(url: URL, reader: any LogFileReading, deliver: @escaping @Sendable (Result<LogTailBuffer, Error>, UInt64) -> Void) {
         self.url = url
@@ -52,6 +64,7 @@ final class LogTailWorker: @unchecked Sendable {
             timer?.cancel(); timer = nil
             vnode?.cancel(); vnode = nil
         }
+        queue.sync {}
     }
 
     /// Synchronous poll returning the current buffer (tests and explicit refreshes); does not use `deliver`.
@@ -71,14 +84,24 @@ final class LogTailWorker: @unchecked Sendable {
         vnode?.cancel(); vnode = nil
         let fd = open(url.path, O_EVTONLY | O_CLOEXEC)
         guard fd >= 0 else { return }
+        let lock = metricsLock
+        lock.withLock { $0.openCount += 1 }
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .extend, .delete, .rename, .attrib], queue: queue)
         source.setEventHandler { [weak self, weak source] in
             guard let self, let source else { return }
             let events = source.data
-            self.pollLocked(force: false)
-            if events.contains(.delete) || events.contains(.rename) { self.armVnodeLocked() } // rotation: watch the new file
+            self.readAndDeliverSnapshotLocked(force: false)
+            if events.contains(.delete) || events.contains(.rename) {
+                // Disarm rotated/deleted descriptor without recursive re-entry; timer/pollNow re-arms on the new file (`REQ-007`, `CWE-400`).
+                lock.withLock { $0.rotationDisarms += 1 }
+                self.vnode?.cancel()
+                self.vnode = nil
+            }
         }
-        source.setCancelHandler { close(fd) }
+        source.setCancelHandler {
+            close(fd)
+            lock.withLock { $0.openCount = max(0, $0.openCount - 1) }
+        }
         source.resume()
         vnode = source
     }
@@ -87,6 +110,12 @@ final class LogTailWorker: @unchecked Sendable {
         guard running else { return }
         // The log may not exist yet or may have been recreated after rotation: keep trying to watch its events.
         if vnode == nil { armVnodeLocked() }
+        readAndDeliverSnapshotLocked(force: force)
+    }
+
+    /// Leaf snapshot reader shared by `pollLocked` and `armVnodeLocked` to maintain a strictly acyclic call graph (`REQ-007`).
+    private func readAndDeliverSnapshotLocked(force: Bool) {
+        guard running else { return }
         do {
             let changed = try session.poll(using: reader)
             if changed || force { sequence &+= 1; deliver(.success(session.buffer), sequence) }
@@ -95,6 +124,15 @@ final class LogTailWorker: @unchecked Sendable {
             deliver(.failure(error), sequence)
         }
     }
+}
+
+/// Non-observable background worker and sequencing state owned by `LogTailController` (`REQ-LOG`, `REQ-002`).
+private struct LogTailRuntimeState {
+    var buffer = LogTailBuffer()
+    var worker: LogTailWorker?
+    let reader: any LogFileReading
+    var lastSequence: UInt64 = 0
+    var sessionToken: UInt64 = 0
 }
 
 /// Main-actor state of the Log function for one tab: mode, line count, live text and errors (`REQ-LOG`).
@@ -114,43 +152,43 @@ public final class LogTailController {
     public private(set) var errorMessage: String?
     /// Monotonic change counter used as the tail view's `BufferRevision`.
     public private(set) var generation: UInt64 = 1
-    @ObservationIgnored private var buffer = LogTailBuffer()
-    @ObservationIgnored nonisolated(unsafe) private var worker: LogTailWorker?
-    @ObservationIgnored private let reader: any LogFileReading
+    @ObservationIgnored nonisolated(unsafe) fileprivate var runtime: LogTailRuntimeState
 
     public init(tabID: DocumentID, url: URL, mode: LogTailMode, lineCount: Int = LogTailController.defaultLineCount, reader: any LogFileReading = LocalLogFileReader()) {
         self.tabID = tabID
         self.url = url
         self.mode = mode
         self.lineCount = Self.clamp(lineCount)
-        self.reader = reader
+        self.runtime = LogTailRuntimeState(reader: reader)
     }
 
     deinit {
-        worker?.stop()
+        runtime.worker?.stop()
     }
+}
 
+extension LogTailController {
     static func clamp(_ count: Int) -> Int { min(max(1, count), LogTailBuffer.maxLines) }
 
     public func start() {
         guard !isRunning else { return }
         isRunning = true
-        sessionToken &+= 1
-        let activeToken = sessionToken
-        lastSequence = 0
+        runtime.sessionToken &+= 1
+        let activeToken = runtime.sessionToken
+        runtime.lastSequence = 0
         errorMessage = nil
-        let worker = LogTailWorker(url: url, reader: reader) { [weak self] result, sequence in
+        let worker = LogTailWorker(url: url, reader: runtime.reader) { [weak self] result, sequence in
             Task { @MainActor in self?.receive(result, sequence: sequence, sessionToken: activeToken) }
         }
-        self.worker = worker
+        runtime.worker = worker
         worker.start()
     }
 
     /// Stops listening; the last snapshot stays visible until the panel is closed.
     public func stop() {
-        sessionToken &+= 1
-        worker?.stop()
-        worker = nil
+        runtime.sessionToken &+= 1
+        runtime.worker?.stop()
+        runtime.worker = nil
         isRunning = false
     }
 
@@ -169,18 +207,15 @@ public final class LogTailController {
 
     /// Performs one synchronous poll and applies it immediately (tests and the panel's refresh).
     func pollNow() {
-        guard let worker else { return }
+        guard let worker = runtime.worker else { return }
         apply(worker.pollNow())
     }
 
-    @ObservationIgnored private var lastSequence: UInt64 = 0
-    @ObservationIgnored private var sessionToken: UInt64 = 0
-
     /// Applies a worker delivery unless it belongs to a superseded session or a newer sequence was already applied.
     func receive(_ result: Result<LogTailBuffer, Error>, sequence: UInt64, sessionToken: UInt64? = nil) {
-        if let sessionToken, sessionToken != self.sessionToken { return }
-        guard sequence > lastSequence else { return }
-        lastSequence = sequence
+        if let sessionToken, sessionToken != runtime.sessionToken { return }
+        guard sequence > runtime.lastSequence else { return }
+        runtime.lastSequence = sequence
         apply(result)
     }
 
@@ -188,7 +223,7 @@ public final class LogTailController {
         guard isRunning else { return }
         switch result {
         case .success(let snapshot):
-            buffer = snapshot
+            runtime.buffer = snapshot
             errorMessage = nil
             reproject()
         case .failure(let error):
@@ -197,7 +232,7 @@ public final class LogTailController {
     }
 
     private func reproject() {
-        let projected = buffer.textAndCount(count: lineCount, mode: mode)
+        let projected = runtime.buffer.textAndCount(count: lineCount, mode: mode)
         guard projected.text != text || projected.lineCount != visibleLineCount else { return }
         text = projected.text
         visibleLineCount = projected.lineCount

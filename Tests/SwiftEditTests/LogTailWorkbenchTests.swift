@@ -95,4 +95,40 @@ struct LogTailWorkbenchTests {
         #expect(controller?.isRunning == false)
         #expect(big.logTails[tailOnlyID] == nil)
     }
+
+    @Test("N8 [Security]: rapid log delete/rename rotations close descriptors and re-arm non-recursively without descriptor leaks (CWE-400 / CWE-674)")
+    func n8RapidRotationClosesDescriptorsNonRecursively() throws {
+        // GIVEN a live LogTailWorker watching a real temporary log file on disk
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("swiftedit-rot-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let logURL = tempDir.appendingPathComponent("service.log")
+        try Data("epoch-0\n".utf8).write(to: logURL)
+
+        let worker = LogTailWorker(url: logURL, reader: LocalLogFileReader()) { _, _ in }
+        worker.start()
+        _ = worker.pollNow()
+        let activeOpenBeforeRotations = worker.descriptorMetrics.openCount
+
+        // WHEN 8 rapid rename + recreate rotations hit the watched file
+        for epoch in 1...8 {
+            let rotatedURL = tempDir.appendingPathComponent("service.log.\(epoch)")
+            try FileManager.default.moveItem(at: logURL, to: rotatedURL)
+            try Data("epoch-\(epoch)\n".utf8).write(to: logURL)
+            usleep(8_000)
+            _ = worker.pollNow()
+        }
+        let metricsWhileRunning = worker.descriptorMetrics
+        let latestBuffer = try worker.pollNow().get()
+        worker.stop()
+        usleep(10_000)
+        let metricsAfterStop = worker.descriptorMetrics
+
+        // THEN at most 1 descriptor is open while active, rotations disarmed cleanly, latest epoch was read, and 0 descriptors remain open after stop
+        #expect(activeOpenBeforeRotations == 1)
+        #expect(metricsWhileRunning.openCount == 1)
+        #expect(metricsWhileRunning.rotationDisarms >= 1)
+        #expect(latestBuffer.text(count: 5, mode: .direct).contains("epoch-8"))
+        #expect(metricsAfterStop.openCount == 0)
+    }
 }

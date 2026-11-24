@@ -141,6 +141,47 @@ public enum DesktopWorkspaceValidator {
         isITerm2Installed: Bool,
         isITerm2Preferred: Bool
     ) throws -> TerminalLaunchResolution {
+        try resolveValidatedTerminalLaunch(
+            targetURL: targetURL,
+            withinScope: scopeURL,
+            explicitBundleIdentifier: explicitBundleIdentifier,
+            isITerm2Installed: isITerm2Installed,
+            isITerm2Preferred: isITerm2Preferred
+        )
+    }
+
+    /// Overload honoring `PreferredTerminalApp`: `.auto` defaults to macOS `Terminal.app` (`BUG-017`), `.terminal` forces `Terminal.app`, `.iTerm2` selects iTerm2 when installed, and explicit allowlisted bundle IDs remain strictly validated (`SEC-003`).
+    public static func resolveTerminalLaunch(
+        targetURL: URL,
+        withinScope scopeURL: URL?,
+        explicitBundleIdentifier: String? = nil,
+        preferredTerminal: PreferredTerminalApp = .auto,
+        isITerm2Installed: Bool
+    ) throws -> TerminalLaunchResolution {
+        let resolvedExplicit: String?
+        if let explicitBundleIdentifier {
+            resolvedExplicit = explicitBundleIdentifier
+        } else if preferredTerminal == .terminal {
+            resolvedExplicit = TerminalLaunchResolution.appleTerminalBundleIdentifier
+        } else {
+            resolvedExplicit = nil
+        }
+        return try resolveValidatedTerminalLaunch(
+            targetURL: targetURL,
+            withinScope: scopeURL,
+            explicitBundleIdentifier: resolvedExplicit,
+            isITerm2Installed: isITerm2Installed,
+            isITerm2Preferred: preferredTerminal == .iTerm2 && isITerm2Installed
+        )
+    }
+
+    private static func resolveValidatedTerminalLaunch(
+        targetURL: URL,
+        withinScope scopeURL: URL?,
+        explicitBundleIdentifier: String?,
+        isITerm2Installed: Bool,
+        isITerm2Preferred: Bool
+    ) throws -> TerminalLaunchResolution {
         let standardized = targetURL.standardizedFileURL
         try verifyItemConfinement(targetURL: standardized, withinScope: scopeURL)
 
@@ -171,31 +212,6 @@ public enum DesktopWorkspaceValidator {
         }
 
         return TerminalLaunchResolution(directoryURL: candidateDirectory, bundleIdentifier: bundleID)
-    }
-
-    /// Overload honoring `PreferredTerminalApp`: `.auto` defaults to macOS `Terminal.app` (`BUG-017`), `.terminal` forces `Terminal.app`, `.iTerm2` selects iTerm2 when installed, and explicit allowlisted bundle IDs remain strictly validated (`SEC-003`).
-    public static func resolveTerminalLaunch(
-        targetURL: URL,
-        withinScope scopeURL: URL?,
-        explicitBundleIdentifier: String? = nil,
-        preferredTerminal: PreferredTerminalApp = .auto,
-        isITerm2Installed: Bool
-    ) throws -> TerminalLaunchResolution {
-        let resolvedExplicit: String?
-        if let explicitBundleIdentifier {
-            resolvedExplicit = explicitBundleIdentifier
-        } else if preferredTerminal == .terminal {
-            resolvedExplicit = TerminalLaunchResolution.appleTerminalBundleIdentifier
-        } else {
-            resolvedExplicit = nil
-        }
-        return try resolveTerminalLaunch(
-            targetURL: targetURL,
-            withinScope: scopeURL,
-            explicitBundleIdentifier: resolvedExplicit,
-            isITerm2Installed: isITerm2Installed,
-            isITerm2Preferred: preferredTerminal == .iTerm2 && isITerm2Installed
-        )
     }
 }
 

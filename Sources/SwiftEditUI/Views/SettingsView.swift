@@ -88,7 +88,7 @@ final class SettingsViewModel {
         }
     }
 
-    private func entries(for role: TypographyRole) -> [FontCatalogEntry] {
+    private func catalogEntries(for role: TypographyRole) -> [FontCatalogEntry] {
         catalog.entries(matching: queries[role] ?? "")
     }
 
@@ -100,7 +100,7 @@ final class SettingsViewModel {
         let current = selected(for: role)
         let highlight = highlights[role]
         let prefix = role == .interface ? "Interface font" : "Editor font"
-        return entries(for: role).enumerated().map { index, entry in
+        return catalogEntries(for: role).enumerated().map { index, entry in
             let isSelected = entry.choice == current
             return SettingsFontRow(
                 title: entry.title,
@@ -118,7 +118,7 @@ final class SettingsViewModel {
 
     /// Arrow-key navigation; the highlight starts on the selected row and clamps at both ends.
     func moveHighlight(by delta: Int, for role: TypographyRole) {
-        let list = entries(for: role)
+        let list = catalogEntries(for: role)
         guard !list.isEmpty else { return }
         let start = highlights[role] ?? list.firstIndex { $0.choice == selected(for: role) } ?? 0
         highlights[role] = min(max(0, start + delta), list.count - 1)
@@ -126,7 +126,7 @@ final class SettingsViewModel {
 
     /// `Return` applies the highlighted row.
     func confirmHighlight(for role: TypographyRole) {
-        let list = entries(for: role)
+        let list = catalogEntries(for: role)
         guard let index = highlights[role], list.indices.contains(index) else { return }
         select(list[index].choice, for: role)
     }

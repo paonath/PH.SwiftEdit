@@ -2,48 +2,6 @@ import Foundation
 import SwiftEditCore
 import SwiftUI
 
-/// Presentation mode of the inline Find / Find & Replace / Go-to-Line bar (`Cmd+F`, `Cmd+H`, `Cmd+G`) (`UI-009`).
-public enum FindBarPresentationMode: String, Equatable, Sendable {
-    case hidden
-    case find
-    case findAndReplace
-    case goToLine
-}
-
-/// User resolution choice for closing a dirty tab (`Cmd+W`) or quitting with unsaved changes (`Cmd+Q`) (`BC-008`, `DATA-006`).
-public enum DirtyCloseDecision: Equatable, Sendable {
-    case save
-    case dontSave
-    case cancel
-}
-
-/// Value-type state backing `FindReplaceGoToLineBar` and `SwiftEditWorkbenchModel` search/navigation operations (`BC-004`, `BC-011`).
-public struct FindReplaceBarState: Equatable, Sendable {
-    public var mode: FindBarPresentationMode = .hidden
-    public var query: String = ""
-    public var replacement: String = ""
-    public var isCaseSensitive: Bool = false
-    public var goToLineText: String = ""
-    public var matches: [SwiftEditCore.TextRange] = []
-    public var activeMatchIndex: Int = 0
-
-    public init() {}
-
-    /// Advances `activeMatchIndex` forward modulo `matches.count` and returns the selected `TextRange` (`nil` when `matches` is empty).
-    public mutating func selectNextMatch() -> SwiftEditCore.TextRange? {
-        guard !matches.isEmpty else { return nil }
-        activeMatchIndex = (activeMatchIndex + 1) % matches.count
-        return matches[activeMatchIndex]
-    }
-
-    /// Moves `activeMatchIndex` backward modulo `matches.count` and returns the selected `TextRange` (`nil` when `matches` is empty).
-    public mutating func selectPreviousMatch() -> SwiftEditCore.TextRange? {
-        guard !matches.isEmpty else { return nil }
-        activeMatchIndex = (activeMatchIndex - 1 + matches.count) % matches.count
-        return matches[activeMatchIndex]
-    }
-}
-
 #if os(macOS)
 /// Inline Purple-themed bar supporting Find (`Cmd+F`), Find & Replace (`Opt+Cmd+F`), and Go to Line (`Cmd+G`) with `@FocusState` auto-focus and single Replace (`BUG-008`, `BUG-009`, `UI-001`, `UI-009`).
 public struct FindReplaceGoToLineBar: View {

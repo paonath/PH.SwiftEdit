@@ -143,6 +143,24 @@ public struct AppUpdateInstaller: Sendable {
         runningPID: Int32 = ProcessInfo.processInfo.processIdentifier,
         relaunch: Bool = true
     ) async throws {
+        let (verifiedZipURL, verifiedShaURL) = try Self.validateInstallTargets(
+            downloadURL: downloadURL,
+            targetBundleURL: targetBundleURL
+        )
+        let zipData = try await downloadAndVerifyArchive(zipURL: verifiedZipURL, shaURL: verifiedShaURL)
+        let workdir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftedit-autoupdate-\(UUID().uuidString)", isDirectory: true)
+        let extractedApp = try await extractVerifiedBundle(zipData: zipData, workdir: workdir)
+        try Self.launchPostExitSwapHelper(
+            extractedApp: extractedApp,
+            targetBundleURL: targetBundleURL,
+            runningPID: runningPID,
+            relaunch: relaunch,
+            workdir: workdir
+        )
+    }
+
+    private static func validateInstallTargets(downloadURL: URL, targetBundleURL: URL) throws -> (zipURL: URL, shaURL: URL) {
         guard let verifiedZipURL = GitHubReleaseUpdateChecker.verifiedGitHubHTTPSURL(downloadURL.absoluteString),
               verifiedZipURL.pathExtension.lowercased() == "zip" else {
             throw AppUpdateInstallError.unverifiedDownloadURL
@@ -157,82 +175,76 @@ public struct AppUpdateInstaller: Sendable {
         guard let verifiedShaURL = GitHubReleaseUpdateChecker.verifiedGitHubHTTPSURL(verifiedZipURL.absoluteString + ".sha256") else {
             throw AppUpdateInstallError.unverifiedDownloadURL
         }
+        return (verifiedZipURL, verifiedShaURL)
+    }
 
-        let (zipData, zipStatus) = try await fetcher.fetch(request: Self.makeDownloadRequest(url: verifiedZipURL))
+    private func downloadAndVerifyArchive(zipURL: URL, shaURL: URL) async throws -> Data {
+        let (zipData, zipStatus) = try await fetcher.fetch(request: Self.makeDownloadRequest(url: zipURL))
         guard zipStatus == 200 else { throw AppUpdateInstallError.downloadFailed(statusCode: zipStatus) }
         guard zipData.count <= Self.maxArchiveBytes else { throw AppUpdateInstallError.archiveTooLarge(zipData.count) }
-
-        let (shaData, shaStatus) = try await fetcher.fetch(request: Self.makeDownloadRequest(url: verifiedShaURL))
+        let (shaData, shaStatus) = try await fetcher.fetch(request: Self.makeDownloadRequest(url: shaURL))
         guard shaStatus == 200,
               let shaText = String(data: shaData, encoding: .utf8),
               Self.verifySHA256(data: zipData, checksumText: shaText) else {
             throw AppUpdateInstallError.checksumMismatch
         }
+        return zipData
+    }
 
-        let workdir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("swiftedit-autoupdate-\(UUID().uuidString)", isDirectory: true)
+    private func extractVerifiedBundle(zipData: Data, workdir: URL) async throws -> URL {
         let extractedDir = workdir.appendingPathComponent("extracted", isDirectory: true)
         try FileManager.default.createDirectory(at: extractedDir, withIntermediateDirectories: true)
-
         let zipFileURL = workdir.appendingPathComponent("update.zip")
         do {
             try zipData.write(to: zipFileURL, options: .atomic)
+            let (exitCode, stderrData) = try await Self.runDittoUnpack(zipFileURL: zipFileURL, extractedDir: extractedDir)
+            guard exitCode == 0 else {
+                let msg = String(data: stderrData, encoding: .utf8) ?? "ditto failed"
+                throw AppUpdateInstallError.extractionFailed(msg)
+            }
+            return try Self.resolveExtractedAppBundle(in: extractedDir)
         } catch {
             try? FileManager.default.removeItem(at: workdir)
             throw error
         }
+    }
 
-        // Run ditto off the cooperative async pool and drain stderr before waitUntilExit() to prevent 64 KiB pipe deadlock.
-        let (exitCode, stderrData): (Int32, Data)
-        do {
-            (exitCode, stderrData) = try await Task.detached(priority: .utility) {
-                let ditto = Process()
-                ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-                ditto.arguments = ["-x", "-k", zipFileURL.path, extractedDir.path]
-                let stderrPipe = Pipe()
-                ditto.standardError = stderrPipe
-                try ditto.run()
-                let errBytes = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                ditto.waitUntilExit()
-                return (ditto.terminationStatus, errBytes)
-            }.value
-        } catch {
-            try? FileManager.default.removeItem(at: workdir)
-            throw error
-        }
+    private static func runDittoUnpack(zipFileURL: URL, extractedDir: URL) async throws -> (Int32, Data) {
+        try await Task.detached(priority: .utility) {
+            let ditto = Process()
+            ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+            ditto.arguments = ["-x", "-k", zipFileURL.path, extractedDir.path]
+            let stderrPipe = Pipe()
+            ditto.standardError = stderrPipe
+            try ditto.run()
+            let errBytes = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            ditto.waitUntilExit()
+            return (ditto.terminationStatus, errBytes)
+        }.value
+    }
 
-        guard exitCode == 0 else {
-            let msg = String(data: stderrData, encoding: .utf8) ?? "ditto failed"
-            try? FileManager.default.removeItem(at: workdir)
-            throw AppUpdateInstallError.extractionFailed(msg)
-        }
-
+    private static func resolveExtractedAppBundle(in extractedDir: URL) throws -> URL {
         let candidatePrimary = extractedDir.appendingPathComponent("SwiftEdit.app", isDirectory: true)
+        if FileManager.default.fileExists(atPath: candidatePrimary.path) { return candidatePrimary }
         let candidateLegacy = extractedDir.appendingPathComponent("PH.SwiftEdit.app", isDirectory: true)
-        let extractedApp: URL
-        if FileManager.default.fileExists(atPath: candidatePrimary.path) {
-            extractedApp = candidatePrimary
-        } else if FileManager.default.fileExists(atPath: candidateLegacy.path) {
-            extractedApp = candidateLegacy
-        } else {
-            try? FileManager.default.removeItem(at: workdir)
-            throw AppUpdateInstallError.missingAppBundleInArchive
-        }
+        if FileManager.default.fileExists(atPath: candidateLegacy.path) { return candidateLegacy }
+        throw AppUpdateInstallError.missingAppBundleInArchive
+    }
 
-        let stripQuarantine = Self.shouldStripQuarantineAfterUpdate(existingAppURL: targetBundleURL)
-
+    private static func launchPostExitSwapHelper(
+        extractedApp: URL,
+        targetBundleURL: URL,
+        runningPID: Int32,
+        relaunch: Bool,
+        workdir: URL
+    ) throws {
+        let stripQuarantine = shouldStripQuarantineAfterUpdate(existingAppURL: targetBundleURL)
         let helper = Process()
         helper.executableURL = URL(fileURLWithPath: "/bin/sh")
         helper.arguments = [
-            "-c",
-            Self.postExitSwapScript,
-            "swiftedit-updater",
-            String(runningPID),
-            extractedApp.path,
-            targetBundleURL.standardizedFileURL.path,
-            stripQuarantine ? "1" : "0",
-            relaunch ? "1" : "0",
-            workdir.path,
+            "-c", postExitSwapScript, "swiftedit-updater", String(runningPID),
+            extractedApp.path, targetBundleURL.standardizedFileURL.path,
+            stripQuarantine ? "1" : "0", relaunch ? "1" : "0", workdir.path,
         ]
         helper.standardInput = nil
         helper.standardOutput = nil

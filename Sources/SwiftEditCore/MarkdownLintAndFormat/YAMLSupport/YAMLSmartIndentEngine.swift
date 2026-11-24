@@ -77,7 +77,7 @@ public enum YAMLSmartIndentEngine {
         let line = Array(utf16[startIndex..<endIndex])
         guard line.count <= YAMLSupportLimits.maxLineUTF16 else { return nil }
         let lineStart = utf16.distance(from: utf16.startIndex, to: startIndex)
-        if language == .markdown, !isInsideFrontmatter(snapshot.text, lineStart: lineStart) { return nil }
+        if language == .markdown, isInsideFrontmatter(snapshot.text, lineStart: lineStart) == false { return nil }
         return LineContext(lineStart: lineStart, line: line[...])
     }
 

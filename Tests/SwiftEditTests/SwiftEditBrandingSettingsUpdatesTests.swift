@@ -239,7 +239,7 @@ struct SwiftEditBrandingSettingsUpdatesTests {
         let checker = GitHubReleaseUpdateChecker(fetcher: fetcher)
 
         // WHEN checking from current version 0.0.1-alpha5
-        let outcome = await checker.checkForUpdates(currentVersion: "0.0.1-alpha5")
+        let outcome = await checker.evaluateReleaseUpdate(currentVersion: "0.0.1-alpha5")
 
         // THEN updateAvailable is returned with both verified release & download URLs
         #expect(outcome == .updateAvailable(
@@ -266,8 +266,8 @@ struct SwiftEditBrandingSettingsUpdatesTests {
         let emptyChecker = GitHubReleaseUpdateChecker(fetcher: StubHTTPFetcher(responses: [:]))
 
         // WHEN checking both
-        let sameOutcome = await upToDateChecker.checkForUpdates(currentVersion: "0.0.1-alpha5")
-        let noneOutcome = await emptyChecker.checkForUpdates(currentVersion: "0.0.1-alpha5")
+        let sameOutcome = await upToDateChecker.evaluateReleaseUpdate(currentVersion: "0.0.1-alpha5")
+        let noneOutcome = await emptyChecker.evaluateReleaseUpdate(currentVersion: "0.0.1-alpha5")
 
         // THEN current version is reported up to date / no releases found
         #expect(sameOutcome == .upToDate(currentVersion: "0.0.1-alpha5"))
@@ -295,7 +295,7 @@ struct SwiftEditBrandingSettingsUpdatesTests {
         ]))
 
         // WHEN checking updates and validating explicit URL helper
-        let outcome = await checker.checkForUpdates(currentVersion: "0.0.1-alpha5")
+        let outcome = await checker.evaluateReleaseUpdate(currentVersion: "0.0.1-alpha5")
         let verifiedHTTP = GitHubReleaseUpdateChecker.verifiedGitHubHTTPSURL("http://github.com/paonath/PH.SwiftEdit")
         let verifiedJS = GitHubReleaseUpdateChecker.verifiedGitHubHTTPSURL("javascript:alert(1)")
 

@@ -82,7 +82,7 @@ public struct RecentFilesStore: Sendable {
     private let fileSystem: any FileSystemProviding
     private let bookmarkCoder: any SecurityScopedBookmarkCoding
     private let securityScope: any SecurityScopedResourceAccessing
-    private let now: @Sendable () -> Date
+    private let clockNow: @Sendable () -> Date
 
     /// Creates a `RecentFilesStore` backed by an explicit `PreferencesProviding` seam (`InMemoryKeyValueStore` in tests) and injected I/O and clock seams.
     public init(
@@ -97,7 +97,7 @@ public struct RecentFilesStore: Sendable {
         self.fileSystem = fileSystem
         self.bookmarkCoder = bookmarkCoder
         self.securityScope = securityScope
-        self.now = now
+        self.clockNow = now
     }
 
     /// Creates a `RecentFilesStore` bound to an optional `UserDefaults` suite (or `.standard` when `nil`) and injected I/O and clock seams.
@@ -113,7 +113,7 @@ public struct RecentFilesStore: Sendable {
         self.fileSystem = fileSystem
         self.bookmarkCoder = bookmarkCoder
         self.securityScope = securityScope
-        self.now = now
+        self.clockNow = now
     }
 
     /// Validates `url` as an existing non-binary file (`<= 64 MiB`), deduplicates by standardized path, moves it to index `0`, and caps the list at `10`.
@@ -127,7 +127,7 @@ public struct RecentFilesStore: Sendable {
             standardizedPath: standardizedURL.path,
             displayName: standardizedURL.lastPathComponent,
             bookmarkData: bookmark,
-            lastOpenedAt: now()
+            lastOpenedAt: clockNow()
         )
         let updated = Self.deduplicateAndCap(inserting: freshEntry, into: entries())
         persist(updated)
