@@ -5,11 +5,11 @@ always_read:
   - "openspec/Constitution.md"
 specs:
   - id: "027-tokensave-zero-cycles-complexity-and-coverage-convergence"
-    status: "draft"
+    status: "implemented"
     date: "2026-11-24"
     capabilities: ["workbench-editor-and-linter-modular-decomposition"]
-    path: "openspec/changes/027-tokensave-zero-cycles-complexity-and-coverage-convergence"
-    summary: "TokenSave <=25 Member Flattening, Zero Recursion Cycles, Complexity <=15/<=25, Dead Code & >=85% Full Coverage"
+    path: "openspec/changes/archive/2026-11-24-027-tokensave-zero-cycles-complexity-and-coverage-convergence"
+    summary: "TokenSave Zero-Cycles, Member Flattening (<= 25), Complexity Ceiling, and >= 85% Full-Codebase Coverage Convergence"
   - id: "026-god-class-flattening-and-acyclicity"
     status: "implemented"
     date: "2026-11-24"

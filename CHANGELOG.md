@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-24 UTC
+Branch: main | Spec: 027-tokensave-zero-cycles-complexity-and-coverage-convergence
+
+### Added
+- Added `CodeModularityFitnessScanner` method-complexity, dead-private-symbol, and dependency-depth verifiers (`CodeModularityFitnessScanner+GraphAndComplexity.swift`, `CodeModularityFitnessScanner+ComplexityAndDepth.swift`, `CodeModularityFitnessTests`) enforcing `cyclomatic <= 15`, `cognitive <= 25`, `0` unreferenced private functions, `0` call-graph recursion cycles, and max file dependency depth `<= 10`.
+- Added `CodeCoverageThresholdEvaluator` in `SwiftEditCore` and `FullCodebaseCoverageAndConvergenceTests` enforcing `>= 85.0%` line coverage across `SwiftEditCore` (`92.24%`), `SwiftEditUI` (`86.77%`), and aggregate `Sources/` (`89.18%`).
+- Extracted `DocumentSyntaxHighlighter.swift`, `GFMTableEditEngine.swift`, `MarkdownListGrammar.swift`, `DiffPaneCoordinator.swift`, `InspectionSafetyBannerState.swift`, and `SwiftEditWorkbenchModel+{CheatSheetAndHeaderCommands,WordCompletion}.swift` to eliminate cross-extension chaining and isolate leaf components.
+
+### Changed
+- Tightened `CodeModularityBudgets.default.maxNominalMembers` from `45` to `25` and `maxNominalBlockLines` from `600` to `400`, flattening all remaining high-member types (`SwiftEditRootView`, `WorkbenchRenderCaches`, `EmbeddedTerminalRegistry`, `SettingsViewModel`, `JSONPreferencesStore`, `RecentFilesStore`, `EditorPreferences`, `SessionRecoveryStore`, `WorkspaceTabSession`, `DocumentSession`, `LogTailController`) to `<= 24` declared members.
+- Eliminated all 8 remaining call-graph recursion cycles (`tokensave_recursion = 0`) across `AppTypography`, `OpenDyslexicBundle`, `LogTailController`, `WorkspaceTabSession`, `MarkdownAllConstructsLinter`, `SwiftEditNSTextView`, `SwiftEditRootView`, and `EmbeddedTerminalRegistry`, and eliminated all unreferenced private symbols (`tokensave_dead_code = 0`) while capping file dependency depth at `10` hops (`tokensave_circular = 0`).
+- Decomposed 39 high-complexity functions/methods across `SwiftEditCore` and `SwiftEditUI` below `cyclomatic <= 15` / `cognitive <= 25`, converting `SwiftEditShortcutDispatcher` (`dispatchCommandOnly`, `dispatchCommandShift`), `SwiftEditWorkbenchModel.performCheatSheetCommand`, and `SwiftEditRootView.attachKeyDownMonitor` to table-driven command maps.
+
+### Security
+- Added `LogTailDescriptorMetrics` non-recursive descriptor tracking (`CWE-400`, `CWE-674`), enforced strict chord/BiDi scalar validation in `SwiftEditShortcutDispatcher` and `MarkdownLinterInlineSecurityPass` (`CWE-79`, `CWE-22`), and verified zero exposed secrets across uncommitted diffs.
+
+## [Unreleased] - 2026-11-24 UTC
 Branch: main | Spec: 026-god-class-flattening-and-acyclicity
 
 ### Added
