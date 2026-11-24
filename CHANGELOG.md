@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-24 UTC
+Branch: main | Spec: 026-god-class-flattening-and-acyclicity
+
+### Added
+- Added `CodeModularityFitnessScanner.verifyAcyclicFileGraph` in `SwiftEditCore` (`CodeModularityFitnessScanner+Acyclicity.swift`, `CodeModularityFitnessTests`) enforcing zero circular file dependencies via iterative Tarjan SCC detection and zero upward `SwiftEditCore -> SwiftEditUI` references.
+- Extracted `MarkdownLineIndex`, `MarkdownSyntaxKind`, and `MarkdownSyntaxSpan` into the acyclic leaf module `Sources/SwiftEditCore/MarkdownLintAndFormat/MarkdownLineIndex.swift`.
+
+### Changed
+- Tightened `CodeModularityBudgets.default.maxNominalMembers` from `75` to `45` with attribute-aware member detection (`@ObservationIgnored`, `@available`, `private(set)`, `init`, `deinit`) and flattened `SwiftEditWorkbenchModel` (`<= 40` members), `TextKit2EditorView.Coordinator` (`<= 35` members), and `PurpleThemePalette` (`<= 45` members) via cohesive value/state groups (`WorkbenchAppearanceState`, `WorkbenchWorkspaceFolderState`, `WorkbenchChromeOverlayState`, `WorkbenchRuntimeHooks`, `EditorCoordinator*State`, `Purple*Palette`).
+- Eliminated all 4 file-level dependency cycles (`tokensave_circular`: `0` cycles, `acyclicity = 1.0`) by stratifying `SwiftEditWorkbenchModel+*.swift`, moving presentation/catalog/registry models out of leaf views (`WorkbenchPresentationModels.swift`, `KeyboardShortcutsCatalog.swift`, `EmbeddedTerminalRegistry.swift`), relocating `applyWordOccurrences` to `TextKit2ViewportHighlightApplier.swift`, and disambiguating cross-layer method collisions (`clearAllUndoManagers`, `clockNow`, `tableRows`, `enumerateMatches`).
+- Eliminated the `checkForUpdates` ↔ `performUpdateCheck` mutual recursion cycle by renaming `GitHubReleaseUpdateChecker.evaluateReleaseUpdate(currentVersion:)`, and removed wrapper self-loop name collisions in `PreferencesProviding.swift`, `DesktopWorkspaceIntegrating.swift`, `SettingsView.swift`, and `SwiftEditWorkbenchModel+ContextualMenuAndShortcuts.swift`.
+
+### Security
+- Replaced recursive `NSView`/`CALayer` display invalidation (`markSubviewsAndLayersNeedsDisplay`, `markLayerTreeNeedsDisplay`) and `editableEditorTextView` subtree searches with bounded iterative LIFO worklists guarded by `Set<ObjectIdentifier>` and `maxTraversalVisitedNodes = 4_096` (`CWE-674`, `CWE-400`).
+- Unified fail-closed `../` traversal, file/directory symlink confinement (`resolvingSymlinksInPath`), and `4 MiB` byte-cap preflight checks across both `CodeModularityFitnessScanner.scanDirectory` and `verifyAcyclicFileGraph` (`CWE-22`, `CWE-400`).
+
+## [Unreleased] - 2026-11-24 UTC
 Branch: main | Spec: 025-workbench-editor-and-linter-modular-decomposition
 
 ### Added
