@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - 2026-11-24 UTC
+Branch: main | Spec: 025-workbench-editor-and-linter-modular-decomposition
+
+### Added
+- Added `CodeModularityFitnessScanner` in `SwiftEditCore` (`CodeModularityFitnessTests`) enforcing production modularity budgets across `Sources/SwiftEditCore` and `Sources/SwiftEditUI` (`<= 800` lines per `.swift` file, `<= 600` lines per nominal block, `<= 75` declared members per block) with fail-closed canonical symlink confinement (`CWE-22`, `CWE-400`).
+- Added five isolated `@MainActor` workbench sub-controllers (`WorkbenchWordCompletionController`, `WorkbenchFindAndNavigationController`, `WorkbenchTerminalSessionController`, `WorkbenchSidebarFileController`, `WorkbenchUpdateController`) under `Sources/SwiftEditUI/Workbench/` with dedicated unit tests (`WorkbenchSubControllersDecompositionTests`).
+
+### Changed
+- Decomposed `SwiftEditWorkbenchModel` into `Sources/SwiftEditUI/Workbench/SwiftEditWorkbenchModel.swift` and seven domain-scoped extensions (`+AppearanceAndPreferences`, `+ContextualMenuAndShortcuts`, `+DocumentLifecycleAndSave`, `+FindReplaceAndNavigation`, `+MarkdownLintPreviewAndFrontmatter`, `+TerminalLogAndUpdates`, `+WorkspaceAndSidebar`), preserving 100% public API compatibility.
+- Decomposed `SwiftEditRootView` into focused view extensions (`+SidebarAndContextMenus`, `+PanelsCompareAndStatusBar`, `+LifecycleSheetsAlertsAndKeyMonitor`) while preserving `toolbarBar` and `tabBar` static anchors (`SwiftEditRootViewDecompositionTests`).
+- Decomposed `TextKit2EditorView.swift` into six single-responsibility files (`TextKit2EditorView`, `SwiftEditNSTextViewAndUndoRegistry`, `EditorRenderingAttributes`, `TextKit2ViewportHighlightApplier`, `TextKit2EditorCoordinator`, `TextKit2EditorCoordinator+GhostCompletionAndCommands`) with isolated viewport highlight passes (`TextKit2EditorDecompositionTests`).
+- Refactored `MarkdownAllConstructsLinter.diagnostics` into pure rule-family evaluator passes (`MarkdownLinterRuleFamilyPasses`) and inline link/image security passes (`MarkdownLinterInlineSecurityPass`), reducing per-method cyclomatic complexity to `<= 15` (`MarkdownLinterRuleFamilyPassesTests`).
+
 ## [Unreleased] - 2026-11-23 UTC
 Branch: hotfix/missing-docs | Commit: 8bd3d65
 
