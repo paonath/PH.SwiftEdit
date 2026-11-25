@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-25 UTC
+Branch: main | Spec: 030-semantic-syntax-color-schemes-and-html
+
+### Added
+- Added four zero-dependency, WCAG-AA-verified (`>= 4.5:1`) Base16/Tinted-Theming-inspired semantic syntax color schemes (`SwiftEdit Default`, `Catppuccin`, `GitHub`, `Tokyo Night`) across Light (`#FFFFFF`) and Black (`#000000`) modes, persisted in `EditorPreferencesStore` (`swiftedit.appearance.syntaxColorScheme`) and selectable live via **Settings → Fonts (Editor) → Syntax Scheme** (`SyntaxColorSchemePalette`, `EditorRenderingAttributes`, `SettingsView`, `SemanticSyntaxColorSchemesAndHTMLTests`).
+- Added native `.html`/`.htm` language support (`DocumentLanguage.html`, `"HTML"` status label) and a zero-regex viewport-only `HTMLSyntaxHighlighter` emitting semantic spans for doctypes, comments, tags, attributes, quoted strings, and entities across all five highlighted languages (`HTML`, `Markdown`, `YAML`, `JSON`, `Log`).
+
+### Security
+- Enforced fail-closed `SyntaxColorScheme` preference decoding, final-extension-only `.html`/`.htm` classification blocking double-extension smuggling (`page.html.bak` → `.plainText`), binary/degraded `.plainText` lockout (`DATA-003`), and `4096` UTF-16 line caps with zero-regex linear scanning (`SEC-004`, `SEC-012`, `CWE-400`, `CWE-1333`).
+
+## [Unreleased] - 2026-11-25 UTC
 Branch: main | Spec: 029-yaml-outline-empty-line-bounds-fix
 
 ### Fixed
