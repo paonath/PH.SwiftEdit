@@ -5,12 +5,68 @@ public enum LogTailMode: String, Codable, Sendable, CaseIterable {
     case direct, inverse
 }
 
+/// Non-destructive minimum severity filter for `LogTailBuffer` and `LogTailPanelView` (`REQ-011`).
+public enum LogTailMinimumSeverity: String, Codable, Sendable, CaseIterable {
+    case all
+    case infoPlus
+    case warnPlus
+    case errorOnly
+
+    public var label: String {
+        switch self {
+        case .all: return "All"
+        case .infoPlus: return "Info+"
+        case .warnPlus: return "Warn+"
+        case .errorOnly: return "Error"
+        }
+    }
+
+    public func admitsLine(_ line: String) -> Bool {
+        if self == .all { return true }
+        guard let detectedRank = Self.detectSeverityRank(in: line) else { return false }
+        switch self {
+        case .all: return true
+        case .infoPlus: return detectedRank >= 2
+        case .warnPlus: return detectedRank >= 3
+        case .errorOnly: return detectedRank >= 4
+        }
+    }
+
+    private static func detectSeverityRank(in line: String) -> Int? {
+        let lower = line.lowercased()
+        var current = ""
+        for scalar in lower.unicodeScalars {
+            let v = scalar.value
+            if v >= 0x61 && v <= 0x7A {
+                current.unicodeScalars.append(scalar)
+            } else if !current.isEmpty {
+                if let rank = rankForWord(current) { return rank }
+                current.removeAll(keepingCapacity: true)
+            }
+        }
+        return current.isEmpty ? nil : rankForWord(current)
+    }
+
+    private static func rankForWord(_ word: String) -> Int? {
+        switch word {
+        case "fatal", "ftl", "critical", "crit", "emerg", "emergency", "alert", "panic": return 5
+        case "error", "err", "eror": return 4
+        case "warn", "warning", "wrn": return 3
+        case "info", "inf", "information", "notice": return 2
+        case "debug", "dbg": return 1
+        case "trace", "trc", "verbose", "vrb": return 0
+        default: return nil
+        }
+    }
+}
+
 /// Bounded line buffer fed with raw bytes from the end of a log file (`REQ-LOG`, `CWE-400`).
 ///
 /// Keeps at most `maxLines` complete lines (newest last) plus one pending partial line, so memory stays bounded however
 /// large the file or however fast it grows; decoding is lossy UTF-8 and trailing `\r` is stripped (CRLF logs).
 public struct LogTailBuffer: Sendable, Equatable {
     public static let maxLines = 10_000
+    public static let maxFilterCharacters = 256
     public private(set) var lines: [String] = []
     private var partial: [UInt8] = []
 
@@ -48,6 +104,36 @@ public struct LogTailBuffer: Sendable, Equatable {
 
     public func text(count: Int, mode: LogTailMode) -> String {
         textAndCount(count: count, mode: mode).text
+    }
+
+    /// Projects up to `count` complete lines matching `minimumSeverity` and literal case-insensitive `substringFilter` (`<= 256` chars) without mutating the underlying ring buffer (`REQ-011`).
+    public func textAndCount(
+        count: Int,
+        mode: LogTailMode,
+        minimumSeverity: LogTailMinimumSeverity,
+        substringFilter: String
+    ) -> (text: String, lineCount: Int) {
+        let clampedFilter = String(substringFilter.prefix(Self.maxFilterCharacters))
+        let clampedCount = max(0, min(count, Self.maxLines))
+        guard clampedCount > 0 else { return ("", 0) }
+        if minimumSeverity == .all, clampedFilter.isEmpty {
+            let slice = lines.suffix(clampedCount)
+            let joined = mode == .direct ? slice.joined(separator: "\n") : slice.reversed().joined(separator: "\n")
+            return (joined, slice.count)
+        }
+        let loweredFilter = clampedFilter.lowercased()
+        let matching = lines.filter { line in
+            if minimumSeverity != .all, !minimumSeverity.admitsLine(line) {
+                return false
+            }
+            if !loweredFilter.isEmpty, !line.lowercased().contains(loweredFilter) {
+                return false
+            }
+            return true
+        }
+        let slice = matching.suffix(clampedCount)
+        let joined = mode == .direct ? slice.joined(separator: "\n") : slice.reversed().joined(separator: "\n")
+        return (joined, slice.count)
     }
 }
 

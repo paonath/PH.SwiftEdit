@@ -11,6 +11,10 @@ public enum MarkdownSyntaxKind: Equatable, Sendable {
     case yamlKey, yamlValue, yamlPunctuation, yamlComment
     /// Log tokens (`.log` tabs): severity word, timestamp, GUID, quoted string, exception name or stack frame.
     case logLevel(LogLevel), logTimestamp, logGuid, logString, logException
+    /// JSON tokens (`.json`/`.jsonl` tabs): object key, string value, numeric literal, boolean/null literal, structural punctuation (`REQ-010`).
+    case jsonKey, jsonString, jsonNumber, jsonLiteral, jsonPunctuation
+    /// HTML tokens (`.html`/`.htm` tabs): tag name/brackets, attribute name, attribute string, comment, entity, doctype.
+    case htmlTag, htmlAttribute, htmlString, htmlComment, htmlEntity, htmlDoctype
 
     /// `true` for the four YAML kinds emitted by `YAMLSyntaxHighlighter`.
     public var isYAML: Bool {

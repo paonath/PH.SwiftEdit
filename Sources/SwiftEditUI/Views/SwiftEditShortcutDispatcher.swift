@@ -71,14 +71,32 @@ public enum SwiftEditShortcutDispatcher {
         let chars = key.characters.lowercased()
         let charsIgnored = key.charactersIgnoringModifiers.lowercased()
 
+        if key.modifiers.contains(.command) {
+            return dispatchCommandChord(
+                key,
+                chars: chars,
+                charsIgnored: charsIgnored,
+                model: model,
+                isEditingOverlayTextField: isEditingOverlayTextField
+            )
+        }
+        return dispatchNonCommandChord(
+            key,
+            chars: chars,
+            charsIgnored: charsIgnored,
+            model: model,
+            isEditingOverlayTextField: isEditingOverlayTextField
+        )
+    }
+
+    private static func dispatchCommandChord(
+        _ key: ShortcutKeyEvent,
+        chars: String,
+        charsIgnored: String,
+        model: SwiftEditWorkbenchModel,
+        isEditingOverlayTextField: Bool
+    ) -> Bool {
         switch key.modifiers {
-        case [.option]:
-            return dispatchOptionOnly(key, chars: chars, charsIgnored: charsIgnored, model: model)
-        case [.option, .shift]:
-            if chars == "\\" || charsIgnored == "\\" {
-                return toggleNavigatorIfEligible(model: model)
-            }
-            return false
         case [.command]:
             return dispatchCommandOnly(key, chars: chars, charsIgnored: charsIgnored, model: model, isEditingOverlayTextField: isEditingOverlayTextField)
         case [.command, .shift]:
@@ -92,28 +110,6 @@ public enum SwiftEditShortcutDispatcher {
         default:
             return false
         }
-    }
-
-    private static func toggleNavigatorIfEligible(model: SwiftEditWorkbenchModel) -> Bool {
-        guard model.isNavigatorEnabled || model.navigatorState != nil else { return true }
-        model.toggleDocumentNavigator()
-        return true
-    }
-
-    private static func dispatchOptionOnly(
-        _ key: ShortcutKeyEvent,
-        chars: String,
-        charsIgnored: String,
-        model: SwiftEditWorkbenchModel
-    ) -> Bool {
-        if charsIgnored == "\\" || chars == "\\" || key.keyCode == ansiBackslashKeyCode {
-            return toggleNavigatorIfEligible(model: model)
-        }
-        if charsIgnored == "1" || key.keyCode == ansiOneKeyCode {
-            model.toggleDistractionFree()
-            return true
-        }
-        return false
     }
 
     private struct CommandTableEntry {
@@ -136,11 +132,21 @@ public enum SwiftEditShortcutDispatcher {
         "-": CommandTableEntry(blocksOnOverlayField: false) { $0.zoomController.zoomOut(); return true },
         "0": CommandTableEntry(blocksOnOverlayField: false) { $0.zoomController.resetZoom(); return true },
         "p": CommandTableEntry(blocksOnOverlayField: false) { $0.toggleMarkdownPreview(); return true },
+        "t": CommandTableEntry(blocksOnOverlayField: false) { $0.toggleQuickOpen(); return true },
         "/": CommandTableEntry(blocksOnOverlayField: false) { $0.isCheatSheetPresented = true; return true },
         "d": CommandTableEntry(blocksOnOverlayField: true) { if $0.safetyBanner.canSave { $0.performCommandD() }; return true },
         "i": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.italic) }; return true },
         "e": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.inlineCode) }; return true },
         "k": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.link) }; return true },
+        "1": CommandTableEntry(blocksOnOverlayField: false) { $0.selectTabAtShortcutIndex(1); return true },
+        "2": CommandTableEntry(blocksOnOverlayField: false) { $0.selectTabAtShortcutIndex(2); return true },
+        "3": CommandTableEntry(blocksOnOverlayField: false) { $0.selectTabAtShortcutIndex(3); return true },
+        "4": CommandTableEntry(blocksOnOverlayField: false) { $0.selectTabAtShortcutIndex(4); return true },
+        "5": CommandTableEntry(blocksOnOverlayField: false) { $0.selectTabAtShortcutIndex(5); return true },
+        "6": CommandTableEntry(blocksOnOverlayField: false) { $0.selectTabAtShortcutIndex(6); return true },
+        "7": CommandTableEntry(blocksOnOverlayField: false) { $0.selectTabAtShortcutIndex(7); return true },
+        "8": CommandTableEntry(blocksOnOverlayField: false) { $0.selectTabAtShortcutIndex(8); return true },
+        "9": CommandTableEntry(blocksOnOverlayField: false) { $0.selectTabAtShortcutIndex(9); return true },
         "\r": CommandTableEntry(blocksOnOverlayField: true) { $0.presentElementContextualMenu() },
         "\u{3}": CommandTableEntry(blocksOnOverlayField: true) { $0.presentElementContextualMenu() },
     ]
@@ -159,6 +165,11 @@ public enum SwiftEditShortcutDispatcher {
         ".": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.blockquote) }; return true },
         ">": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.blockquote) }; return true },
         "m": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.toggleDiagnosticsPopover() }; return true },
+        "t": CommandTableEntry(blocksOnOverlayField: false) { _ = $0.reopenLastClosedTab(); return true },
+        "]": CommandTableEntry(blocksOnOverlayField: false) { $0.selectNextTab(); return true },
+        "}": CommandTableEntry(blocksOnOverlayField: false) { $0.selectNextTab(); return true },
+        "[": CommandTableEntry(blocksOnOverlayField: false) { $0.selectPreviousTab(); return true },
+        "{": CommandTableEntry(blocksOnOverlayField: false) { $0.selectPreviousTab(); return true },
     ]
 
     private static func dispatchCommandOnly(
@@ -238,6 +249,10 @@ public enum SwiftEditShortcutDispatcher {
         case "f":
             model.presentFindBar(mode: .findAndReplace)
             return true
+        case "e":
+            guard !isEditingOverlayTextField else { return false }
+            model.useSelectionForFind()
+            return true
         case "t":
             guard !isEditingOverlayTextField else { return false }
             if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.insertTable) }
@@ -289,13 +304,104 @@ public enum SwiftEditShortcutDispatcher {
 }
 
 extension SwiftEditShortcutDispatcher {
+    private static let f7KeyCode: UInt16 = 98
+    private static let upArrowKeyCode: UInt16 = 126
+    private static let downArrowKeyCode: UInt16 = 125
+
+    fileprivate static func dispatchNonCommandChord(
+        _ key: ShortcutKeyEvent,
+        chars: String,
+        charsIgnored: String,
+        model: SwiftEditWorkbenchModel,
+        isEditingOverlayTextField: Bool
+    ) -> Bool {
+        switch key.modifiers {
+        case [.option]:
+            return dispatchOptionOnly(key, chars: chars, charsIgnored: charsIgnored, model: model, isEditingOverlayTextField: isEditingOverlayTextField)
+        case [.option, .shift]:
+            return (chars == "\\" || charsIgnored == "\\") ? toggleNavigatorIfEligible(model: model) : false
+        case [.control]:
+            if charsIgnored == "j", !isEditingOverlayTextField {
+                model.joinActiveLines()
+                return true
+            }
+            return dispatchControlTabOrKey(key, charsIgnored: charsIgnored, reverse: false, model: model)
+        case [.control, .shift]:
+            if charsIgnored == "f" {
+                model.toggleFindInFolder()
+                return true
+            }
+            if charsIgnored == "k", !isEditingOverlayTextField {
+                model.deleteActiveLines()
+                return true
+            }
+            return dispatchControlTabOrKey(key, charsIgnored: charsIgnored, reverse: true, model: model)
+        case []:
+            guard isF7FunctionKey(key), model.showDiffPane else { return false }
+            model.selectNextDiffHunk()
+            return true
+        case [.shift]:
+            guard isF7FunctionKey(key), model.showDiffPane else { return false }
+            model.selectPreviousDiffHunk()
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func dispatchControlTabOrKey(
+        _ key: ShortcutKeyEvent,
+        charsIgnored: String,
+        reverse: Bool,
+        model: SwiftEditWorkbenchModel
+    ) -> Bool {
+        guard charsIgnored == "\t" || key.keyCode == 48 else { return false }
+        if reverse { model.selectPreviousTab() } else { model.selectNextTab() }
+        return true
+    }
+
+    private static func isF7FunctionKey(_ key: ShortcutKeyEvent) -> Bool {
+        key.keyCode == f7KeyCode || key.charactersIgnoringModifiers.unicodeScalars.first?.value == UInt32(NSF7FunctionKey)
+    }
+
+    private static func toggleNavigatorIfEligible(model: SwiftEditWorkbenchModel) -> Bool {
+        guard model.isNavigatorEnabled || model.navigatorState != nil else { return true }
+        model.toggleDocumentNavigator()
+        return true
+    }
+
+    private static func dispatchOptionOnly(
+        _ key: ShortcutKeyEvent,
+        chars: String,
+        charsIgnored: String,
+        model: SwiftEditWorkbenchModel,
+        isEditingOverlayTextField: Bool
+    ) -> Bool {
+        if charsIgnored == "\\" || chars == "\\" || key.keyCode == ansiBackslashKeyCode {
+            return toggleNavigatorIfEligible(model: model)
+        }
+        if charsIgnored == "1" || key.keyCode == ansiOneKeyCode {
+            model.toggleDistractionFree()
+            return true
+        }
+        if !isEditingOverlayTextField, key.keyCode == upArrowKeyCode {
+            model.moveActiveLinesUp()
+            return true
+        }
+        if !isEditingOverlayTextField, key.keyCode == downArrowKeyCode {
+            model.moveActiveLinesDown()
+            return true
+        }
+        return false
+    }
+
     /// Rejects oversized, NUL-embedded, or BiDi/control-tainted chord strings (allowing only Return `\r` and Enter `\u{3}` control keys).
     fileprivate static func isWellFormedChordString(_ value: String) -> Bool {
         let scalars = value.unicodeScalars
         guard scalars.count <= 2 else { return false }
         for scalar in scalars {
             let v = scalar.value
-            if v == 0x0D || v == 0x03 { continue }
+            if v == 0x0D || v == 0x03 || v == 0x09 { continue }
             if v < 0x20 || v == 0x7F || (v >= 0x202A && v <= 0x202E) || (v >= 0x2066 && v <= 0x2069) {
                 return false
             }

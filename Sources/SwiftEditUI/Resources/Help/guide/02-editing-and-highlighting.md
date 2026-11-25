@@ -18,7 +18,8 @@ SwiftEdit renders text through a native **TextKit 2** (`NSTextLayoutManager`) vi
 - **Word Wrap (`Cmd+W`)**: toggles soft line wrapping against the viewport width versus horizontal scrolling. The setting is persisted in `~/.SwiftEdit/settings.json`.
 - **Proportional Zoom (`Cmd++`, `Cmd+-`, `Cmd+0`)**: scales the editor font from `50%` to `300%` in `10%` increments and proportionally scales the header, tab strip, Folder Navigator, and line-number gutter while keeping minimum hit targets accessible.
 - **Duplicate Line or Selection (`Cmd+D`)**: with no selection, duplicates the current line onto a new line below; with an active selection, duplicates the selected range immediately after it as a single undoable edit.
-- **Encoding & Line Endings**: preserves `UTF-8` and `UTF-16` encodings and `LF` (Unix/macOS), `CRLF` (Windows), or `CR` (Classic Mac) line endings. Click the line-ending label in the status bar to convert the active document's line endings explicitly.
+- **Encoding, Line Endings, Selection & Git Branch**: preserves `UTF-8` and `UTF-16` encodings and `LF` (Unix/macOS), `CRLF` (Windows), or `CR` (Classic Mac) line endings. Click the encoding or line-ending menus in the status bar to convert or reopen encodings and switch line endings; the status bar also displays selection character/line counts, Markdown word counts, and the current `.git/HEAD` branch name.
+- **Atomic Line Commands**: move lines up or down (`Option+Up` / `Option+Down`), delete lines (`Ctrl+Shift+K`), join lines (`Ctrl+J`), sort lines ascending or descending, or trim trailing whitespace manually or automatically on save (`Settings`).
 
 ---
 
@@ -74,7 +75,7 @@ Press **`Cmd+Return`** anywhere in the editor to open the contextual action pale
 
 ## Functional: Find, Replace & Go to Line
 
-- **Find (`Cmd+F`)**: opens the inline literal search bar with case-sensitivity toggle, match counter, and Previous/Next navigation.
+- **Find (`Cmd+F`)**: opens the inline literal search bar with case-sensitivity (`Aa`), Whole-Word (`Ww`), Search in Selection (`In Sel`), `1 of N` active match counter, Previous/Next navigation, and **`Option+Cmd+E`** (*Use Selection for Find*).
 - **Find & Replace (`Option+Cmd+F`)**: adds replacement input with **Replace** (single match, advances to next) and **Replace All** (single atomic `BufferRevision` / Undo step). `Cmd+H` remains reserved for macOS Hide.
 - **Go to Line (`Cmd+G`)**: jumps directly to any 1-based line number and scrolls the target line into view.
 
@@ -87,7 +88,7 @@ Toggle the side-by-side **File Compare** pane with **`Shift+Cmd+D`** or the diff
 ![Find Bar and File Compare Side-by-Side Diff](images/find-and-compare.png)
 
 - **Saved vs. Current**: by default, compares the active tab's last saved baseline (left) against its current unsaved buffer (right), highlighting removed lines in red and inserted lines in green.
-- **Two-Tab Compare**: use the **Compare with:** picker in the diff header to compare the source tab against any other open text tab. Click the `×` next to the picker to return to comparing saved vs. current without closing either tab.
+- **Two-Tab Compare, Zoom & Hunk Navigation**: use the **Compare with:** picker in the diff header to compare the source tab against any other open text tab. The diff view scales proportionally with global zoom (`50%–300%`), shows left/right line numbers, jumps across hunks with **`F7` / `Shift+F7`**, and folds unchanged context via **Only Diff**.
 
 ---
 

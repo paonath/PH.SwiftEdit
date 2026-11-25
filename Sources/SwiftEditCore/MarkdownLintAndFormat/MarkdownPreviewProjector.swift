@@ -65,13 +65,61 @@ public enum MarkdownPreviewProjector {
     ) -> GFMPreviewDocument? {
         guard showPreview, isMarkdownDocument, !snapshot.isBinaryReadOnly, !snapshot.isDegradedPlainText else { return nil }
         let index = lineIndex ?? MarkdownLineIndex(text: snapshot.text)
-        var state = PreviewProjectionState(index: index)
+        var state = PreviewProjectionState(index: index, includeEnrichment: false)
         var line = 0
         while line < index.lineCount {
             line = advancePreviewProjectionLine(at: line, state: &state)
         }
         flushPreviewParagraph(&state)
         return GFMPreviewDocument(revision: snapshot.revision, blocks: state.blocks)
+    }
+
+    /// Projects an enriched preview document including structured line-1 YAML frontmatter entries, fenced block language tags, and pre-laid-out native diagrams (`REQ-003`, `REQ-004`).
+    public static func projectEnriched(
+        snapshot: DocumentSnapshot,
+        showPreview: Bool,
+        isMarkdownDocument: Bool = true,
+        lineIndex: MarkdownLineIndex? = nil
+    ) -> GFMPreviewEnrichedDocument? {
+        guard showPreview, isMarkdownDocument, !snapshot.isBinaryReadOnly, !snapshot.isDegradedPlainText else { return nil }
+        let index = lineIndex ?? MarkdownLineIndex(text: snapshot.text)
+        let frontmatter = extractFrontmatterEntries(snapshot: snapshot, index: index)
+        var state = PreviewProjectionState(index: index, includeEnrichment: true)
+        var line = frontmatter.hasValidHeader ? index.frontmatterLineCount : 0
+        while line < index.lineCount {
+            line = advancePreviewProjectionLine(at: line, state: &state)
+        }
+        flushPreviewParagraph(&state)
+        return GFMPreviewEnrichedDocument(
+            revision: snapshot.revision,
+            frontmatterEntries: frontmatter.entries,
+            blocks: state.blocks,
+            fenceLanguagesByBlock: state.fenceLanguages,
+            diagramsByBlock: state.diagrams
+        )
+    }
+
+    private static func extractFrontmatterEntries(
+        snapshot: DocumentSnapshot,
+        index: MarkdownLineIndex
+    ) -> (hasValidHeader: Bool, entries: [GFMPreviewFrontmatterEntry]) {
+        guard index.frontmatterLineCount >= 2,
+              let parsed = FrontmatterPropertyParser.parse(snapshot: snapshot) else {
+            return (false, [])
+        }
+        let entries = parsed.properties.map { prop in
+            let display: String
+            switch prop.kind {
+            case .scalar(let val): display = val
+            case .list(let items): display = "[\(items.joined(separator: ", "))]"
+            case .nestedMap: display = "{…}"
+            case .blockScalar: display = "|"
+            case .aliased: display = "*"
+            case .tagged: display = "!"
+            }
+            return GFMPreviewFrontmatterEntry(key: prop.key, displayValue: display)
+        }
+        return (true, entries)
     }
 
     /// Computes 1-based ordinals for all blocks in a single `O(B)` forward stack pass (`BUG-014`).
@@ -238,10 +286,32 @@ public enum MarkdownPreviewProjector {
 extension MarkdownPreviewProjector {
     private struct PreviewProjectionState {
         let index: MarkdownLineIndex
+        let includeEnrichment: Bool
         var blocks: [GFMPreviewBlock] = []
+        var fenceLanguages: [String?] = []
+        var diagrams: [MarkdownDiagramModel?] = []
         var paragraph: [String] = []
         var paragraphStart: Int = 0
         var fenceCursor: Int = 0
+
+        mutating func appendNonCodeBlock(_ block: GFMPreviewBlock) {
+            blocks.append(block)
+            if includeEnrichment {
+                fenceLanguages.append(nil)
+                diagrams.append(nil)
+            }
+        }
+
+        mutating func appendCodeBlock(text: String, language: String?, sourceLine: Int) {
+            blocks.append(.code(text: text, sourceLine: sourceLine))
+            guard includeEnrichment else { return }
+            fenceLanguages.append(language)
+            if case .diagram(let model) = MarkdownDiagramParser.parse(language: language, source: text) {
+                diagrams.append(model)
+            } else {
+                diagrams.append(nil)
+            }
+        }
     }
 
     private static func advancePreviewProjectionLine(at line: Int, state: inout PreviewProjectionState) -> Int {
@@ -255,7 +325,7 @@ extension MarkdownPreviewProjector {
         let slice = state.index.lineSlice(line)
         if let singleBlock = matchPreviewSingleLineBlock(at: line, slice: slice) {
             flushPreviewParagraph(&state)
-            state.blocks.append(singleBlock)
+            state.appendNonCodeBlock(singleBlock)
             return line + 1
         }
         if isPreviewTableStart(state.index, line: line) {
@@ -291,7 +361,7 @@ extension MarkdownPreviewProjector {
 
     private static func flushPreviewParagraph(_ state: inout PreviewProjectionState) {
         guard !state.paragraph.isEmpty else { return }
-        state.blocks.append(.paragraph(text: state.paragraph.joined(separator: "\n"), sourceLine: state.paragraphStart + 1))
+        state.appendNonCodeBlock(.paragraph(text: state.paragraph.joined(separator: "\n"), sourceLine: state.paragraphStart + 1))
         state.paragraph.removeAll(keepingCapacity: true)
     }
 
@@ -304,8 +374,19 @@ extension MarkdownPreviewProjector {
         let closed = span.close > span.open && isClosingFence(state.index, openLine: span.open, closeLine: span.close)
         let bodyEnd = closed ? span.close : span.close + 1
         let body = ((open + 1)..<max(open + 1, bodyEnd)).map { previewLineText(state.index, line: $0) }
-        state.blocks.append(.code(text: body.joined(separator: "\n"), sourceLine: open + 1))
+        let lang = state.includeEnrichment ? extractFenceLanguage(state.index.lineSlice(open)) : nil
+        state.appendCodeBlock(text: body.joined(separator: "\n"), language: lang, sourceLine: open + 1)
         return span.close + 1
+    }
+
+    private static func extractFenceLanguage(_ slice: ArraySlice<UInt16>) -> String? {
+        guard let opener = MarkdownLineIndex.fenceOpening(slice) else { return nil }
+        var idx = slice.startIndex
+        while idx < slice.endIndex, slice[idx] == 0x20 { idx += 1 }
+        while idx < slice.endIndex, slice[idx] == opener.char { idx += 1 }
+        let info = String(decoding: slice[idx...].prefix(256), as: UTF16.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let token = info.split(whereSeparator: \.isWhitespace).first, !token.isEmpty else { return nil }
+        return String(token)
     }
 
     private static func matchPreviewSingleLineBlock(at line: Int, slice: ArraySlice<UInt16>) -> GFMPreviewBlock? {
@@ -377,10 +458,10 @@ extension MarkdownPreviewProjector {
             end += 1
         }
         if header.count <= GFMTableEditEngine.maxColumns, rows.allSatisfy({ $0.count <= GFMTableEditEngine.maxColumns }) {
-            state.blocks.append(.table(header: header, rows: rows, sourceLine: line + 1))
+            state.appendNonCodeBlock(.table(header: header, rows: rows, sourceLine: line + 1))
         } else {
             let fallback = (line..<end).map { previewLineText(state.index, line: $0) }.joined(separator: "\n")
-            state.blocks.append(.paragraph(text: fallback, sourceLine: line + 1))
+            state.appendNonCodeBlock(.paragraph(text: fallback, sourceLine: line + 1))
         }
         return end
     }
@@ -401,7 +482,7 @@ extension MarkdownPreviewProjector {
                 line += 1
             }
         }
-        state.blocks.append(.inertHTML(text: raw.joined(separator: "\n"), sourceLine: start + 1))
+        state.appendNonCodeBlock(.inertHTML(text: raw.joined(separator: "\n"), sourceLine: start + 1))
         return line
     }
 

@@ -44,6 +44,15 @@ public struct DocumentSession: Equatable, Sendable {
         isDirty = true
     }
 
+    /// Updates the document's target `TextEncoding` (`UTF-8`, `UTF-8 BOM`, `UTF-16 LE`, `UTF-16 BE`) and marks `isDirty` when changed (`REQ-012`, `DATA-004`).
+    public mutating func setEncoding(_ newEncoding: TextEncoding) throws {
+        try ensureEditable()
+        guard encoding != newEncoding else { return }
+        encoding = newEncoding
+        revision = revision.next()
+        isDirty = true
+    }
+
     /// Replaces the UTF-16 `range` with `replacement`, normalizing raw `\r\n`/`\r` line breaks to `\n` on LF-normalized buffers, incrementing `revision`, marking `isDirty`, and returning `.textEdited` (`BUG-016`, `BC-003`).
     /// - Throws: `DomainError.binaryFileSaveForbidden` when `isBinaryReadOnly` is `true`, or `DomainError.invalidTextRange` when `range` is out of bounds.
     @discardableResult
@@ -145,6 +154,14 @@ public struct DocumentSession: Equatable, Sendable {
         revision = revision.next()
         isDirty = true
         return .formatBatchApplied(id, revision, editCount: edits.count)
+    }
+}
+
+public extension DocumentSession {
+    /// Reconciles `isDirty` against `baseline` so restoring both `text` and wire `lineEnding` clears dirty status (`REQ-001`, `DATA-004`, `DATA-006`).
+    mutating func reconcileDirtyState(against baseline: DocumentSnapshot?) {
+        guard !isBinaryReadOnly, let baseline else { return }
+        isDirty = (text != baseline.text || lineEnding != baseline.lineEnding)
     }
 }
 

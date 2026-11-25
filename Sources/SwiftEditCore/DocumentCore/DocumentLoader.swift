@@ -65,4 +65,27 @@ public struct DocumentLoader: Sendable {
         try fileSystem.writeAtomic(data: encoded, to: url, withinScope: scopeURL)
         return session.markingClean(savedAt: url)
     }
+
+    /// Re-decodes an existing file at `url` using an explicit `TextEncoding` within `scopeURL` (`Reopen with Encoding`, `REQ-012`, `SEC-003`).
+    public func load(from url: URL, explicitEncoding: TextEncoding, withinScope scopeURL: URL? = nil) throws -> DocumentSession {
+        let attrs = try fileSystem.fileAttributes(at: url, withinScope: scopeURL)
+        if attrs.isSymbolicLink {
+            throw DomainError.securityScopeViolation(path: url.path)
+        }
+        if attrs.byteSize > Self.maxAllowedFileBytes {
+            throw DomainError.fileTooLarge(byteCount: attrs.byteSize)
+        }
+        let isDegraded = attrs.byteSize > Self.degradedModeThresholdBytes
+        let data = try fileSystem.readData(at: url, maxBytes: nil, withinScope: scopeURL)
+        let decoded = try DocumentCodec.decode(data, explicitEncoding: explicitEncoding)
+        return DocumentSession(
+            fileURL: url,
+            text: decoded.text,
+            encoding: decoded.encoding,
+            lineEnding: decoded.lineEnding,
+            isDirty: false,
+            isDegradedPlainText: isDegraded,
+            isBinaryReadOnly: false
+        )
+    }
 }

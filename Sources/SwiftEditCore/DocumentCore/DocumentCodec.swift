@@ -115,6 +115,39 @@ public enum DocumentCodec {
         )
     }
 
+    /// Decodes `data` using an explicit user-chosen `TextEncoding` (`Reopen with Encoding`, `REQ-012`).
+    public static func decode(_ data: Data, explicitEncoding: TextEncoding) throws -> DecodedDocumentPayload {
+        let bom = explicitEncoding.bomBytes
+        let body = (!bom.isEmpty && data.starts(with: bom)) ? Data(data.dropFirst(bom.count)) : data
+        let rawString: String
+        switch explicitEncoding {
+        case .utf8, .utf8WithBOM:
+            if isBinaryPrefix(body) { throw DomainError.unsupportedEncoding }
+            guard let decoded = String(bytes: body, encoding: .utf8) else {
+                throw DomainError.unsupportedEncoding
+            }
+            rawString = decoded
+        case .utf16LEWithBOM:
+            guard body.count % 2 == 0, let decoded = decodeStrictUTF16(body, littleEndian: true) else {
+                throw DomainError.unsupportedEncoding
+            }
+            rawString = decoded
+        case .utf16BEWithBOM:
+            guard body.count % 2 == 0, let decoded = decodeStrictUTF16(body, littleEndian: false) else {
+                throw DomainError.unsupportedEncoding
+            }
+            rawString = decoded
+        }
+        let detectedLineEnding = LineEnding.detect(in: rawString)
+        let normalized = detectedLineEnding == .lf ? rawString : LineEnding.normalizeToLF(rawString)
+        return DecodedDocumentPayload(
+            text: normalized,
+            encoding: explicitEncoding,
+            lineEnding: detectedLineEnding,
+            isBinaryReadOnly: false
+        )
+    }
+
     /// Re-encodes canonical text into `Data` preserving the specified BOM header and `LF` or `CRLF` sequence.
     public static func encode(_ text: String, encoding: TextEncoding, lineEnding: LineEnding) throws -> Data {
         let canonicalLF = LineEnding.normalizeToLF(text)

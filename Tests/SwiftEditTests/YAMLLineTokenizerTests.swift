@@ -57,4 +57,36 @@ struct YAMLLineTokenizerTests {
         #expect(bombTokenCounts == Array(repeating: 4, count: 10))
         #expect(Self.texts("ref: *b", .value).isEmpty)
     }
+
+    @Test("N2b [Security]: empty and out-of-bounds ArraySlice inputs fail closed in keyEnd, quotedEnd, and inspectStructure without trapping")
+    func n2bEmptyAndOutOfBoundsSlicesFailClosed() {
+        // GIVEN an empty slice and a non-empty non-zero-based slice
+        let units = Array("key: \"val\"\n".utf16)
+        let emptySlice = units[5..<5]
+        let subSlice = units[0..<10]
+
+        // WHEN keyEnd, quotedEnd, and inspectStructure are called with empty or out-of-bounds indices
+        let emptyKey = YAMLLineTokenizer.keyEnd(emptySlice, from: 5, end: 5)
+        let oobHighKey = YAMLLineTokenizer.keyEnd(subSlice, from: 10, end: 10)
+        let oobLowKey = YAMLLineTokenizer.keyEnd(subSlice, from: -1, end: 5)
+        let oobEndKey = YAMLLineTokenizer.keyEnd(subSlice, from: 0, end: 99)
+
+        let emptyQuote = YAMLLineTokenizer.quotedEnd(emptySlice, from: 5, end: 5)
+        let oobQuote = YAMLLineTokenizer.quotedEnd(subSlice, from: 12, end: 12)
+
+        let overIndented = YAMLLineTokenizer.inspectStructure(line: subSlice, indent: 50)
+        let negativeIndent = YAMLLineTokenizer.inspectStructure(line: subSlice, indent: -3)
+        let emptyStruct = YAMLLineTokenizer.inspectStructure(line: emptySlice, indent: 0)
+
+        // THEN every call fails closed cleanly without Index out of bounds traps (CWE-125, CWE-129)
+        #expect(emptyKey == nil)
+        #expect(oobHighKey == nil)
+        #expect(oobLowKey == nil)
+        #expect(oobEndKey == nil)
+        #expect(emptyQuote == 5)
+        #expect(oobQuote == 10)
+        #expect(overIndented.isIgnored == true)
+        #expect(negativeIndent.isIgnored == true)
+        #expect(emptyStruct.isIgnored == true)
+    }
 }

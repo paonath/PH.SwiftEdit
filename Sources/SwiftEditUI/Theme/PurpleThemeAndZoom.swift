@@ -298,6 +298,8 @@ public struct PurpleThemePalette: Equatable, Sendable {
     public let syntax: PurpleEditorSyntaxPalette
     /// Grouped log viewer severity and structured highlight tokens.
     public let logs: PurpleLogSyntaxPalette
+    /// Selectable Base16/Tinted-Theming-inspired semantic syntax color palette (`UI-002`, `UI-009`).
+    public let syntaxColors: SyntaxColorSchemePalette
 }
 
 /// Backward-compatible flat accessors for workspace chrome surface tokens (`UI-001..003`).
@@ -385,12 +387,13 @@ public extension PurpleThemePalette {
     private static let blackStandard: PurpleThemePalette = buildPalette(mode: .black, clampOpaque: false)
     private static let blackHighContrast: PurpleThemePalette = buildPalette(mode: .black, clampOpaque: true)
 
-    /// Resolves Concept E2 Purple chrome tokens, pure `#FFFFFF`/`#000000` inverted editor canvas tokens, and accessibility overrides.
+    /// Resolves Concept E2 Purple chrome tokens, pure `#FFFFFF`/`#000000` inverted editor canvas tokens, semantic syntax color scheme, and accessibility overrides.
     static func resolve(
         appearance: AppearanceMode,
         systemPrefersDark: Bool = true,
         reduceTransparency: Bool = false,
-        increasedContrast: Bool = false
+        increasedContrast: Bool = false,
+        syntaxColorScheme: SyntaxColorScheme = .swiftEditDefault
     ) -> PurpleThemePalette {
         let isBlack: Bool
         switch appearance {
@@ -399,12 +402,37 @@ public extension PurpleThemePalette {
         case .auto: isBlack = systemPrefersDark
         }
         let clampOpaque = reduceTransparency || increasedContrast
+        let base: PurpleThemePalette
         switch (isBlack, clampOpaque) {
-        case (false, false): return lightStandard
-        case (false, true): return lightHighContrast
-        case (true, false): return blackStandard
-        case (true, true): return blackHighContrast
+        case (false, false): base = lightStandard
+        case (false, true): base = lightHighContrast
+        case (true, false): base = blackStandard
+        case (true, true): base = blackHighContrast
         }
+        guard syntaxColorScheme != .swiftEditDefault else { return base }
+        return base.withSyntaxColorScheme(syntaxColorScheme)
+    }
+
+    /// Returns a copy of this palette with `scheme` applied to semantic syntax color tokens (`UI-003`).
+    func withSyntaxColorScheme(_ scheme: SyntaxColorScheme) -> PurpleThemePalette {
+        PurpleThemePalette(
+            mode: mode,
+            primaryAccent: primaryAccent,
+            strokeLavender: strokeLavender,
+            featherHighlight: featherHighlight,
+            editorCanvasBackground: editorCanvasBackground,
+            editorCanvasText: editorCanvasText,
+            currentLineHighlight: currentLineHighlight,
+            chromeAccent: chromeAccent,
+            activeControlFill: activeControlFill,
+            activeControlForeground: activeControlForeground,
+            surfaces: surfaces,
+            controls: controls,
+            warnings: warnings,
+            syntax: syntax,
+            logs: logs,
+            syntaxColors: SyntaxColorSchemePalette.resolve(scheme: scheme, mode: mode)
+        )
     }
 
     private static func buildPalette(mode resolvedMode: ResolvedThemeMode, clampOpaque: Bool) -> PurpleThemePalette {
@@ -494,7 +522,8 @@ public extension PurpleThemePalette {
                     logGuidForeground: RGBAColorToken(hex: "#6D28D9"),
                     logStringForeground: RGBAColorToken(hex: "#9D174D"),
                     logExceptionForeground: RGBAColorToken(hex: "#C2410C")
-                )
+                ),
+                syntaxColors: SyntaxColorSchemePalette.resolve(scheme: .swiftEditDefault, mode: .light)
             )
         case .black:
             return PurpleThemePalette(
@@ -577,7 +606,8 @@ public extension PurpleThemePalette {
                     logGuidForeground: RGBAColorToken(hex: "#A78BFA"),
                     logStringForeground: RGBAColorToken(hex: "#F9A8D4"),
                     logExceptionForeground: RGBAColorToken(hex: "#FB923C")
-                )
+                ),
+                syntaxColors: SyntaxColorSchemePalette.resolve(scheme: .swiftEditDefault, mode: .black)
             )
         }
     }

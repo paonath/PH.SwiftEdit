@@ -30,6 +30,7 @@ struct WorkbenchAppearanceState {
     var increasedContrast: Bool = false
     var lastWindowAppearanceTarget: MacOSWindowAppearanceTarget = .darkAqua
     var appearanceMode: AppearanceMode
+    var syntaxColorScheme: SyntaxColorScheme = .swiftEditDefault
     var palette: PurpleThemePalette
     var interfaceFont: FontChoice = .default
     var editorFont: FontChoice = .default
@@ -37,6 +38,7 @@ struct WorkbenchAppearanceState {
     var typographyGeneration: Int = 0
     var isWordWrapEnabled: Bool = true
     var launchInFullScreen: Bool = true
+    var trimTrailingWhitespaceOnSave: Bool = false
     var zoomController: EditorZoomController
 }
 
@@ -119,7 +121,12 @@ struct WorkbenchRenderCaches {
     var asyncOpenGeneration: UInt64 = 0
     var bracketTopologyCache: (id: DocumentID, revision: BufferRevision, topology: BracketTopology)?
     var backtickCache: (id: DocumentID, revision: BufferRevision, result: BacktickHighlightResult?)?
-    var previewCache: (id: DocumentID, revision: BufferRevision, document: GFMPreviewDocument?)?
+    var previewCache: (
+        id: DocumentID,
+        revision: BufferRevision,
+        document: GFMPreviewDocument?,
+        enriched: GFMPreviewEnrichedDocument?
+    )?
     var fullScreenWasActiveBeforeDistractionFree: Bool = false
     var lineIndexCache: (id: DocumentID, revision: BufferRevision, index: MarkdownLineIndex)?
     var propertiesCache: (id: DocumentID, revision: BufferRevision, model: FrontmatterPropertyModel?)?

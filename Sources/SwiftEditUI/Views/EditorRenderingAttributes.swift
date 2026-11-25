@@ -64,6 +64,23 @@ struct EditorViewportHighlightColors {
     let unbalancedBracketBackground: NSColor
 }
 
+/// Pre-built HTML and semantic JSON/scheme attribute entries grouped out of `EditorRenderingAttributeTable` (`UI-002`, `UI-009`).
+struct EditorSemanticSyntaxEntries {
+    typealias Entries = [(key: NSAttributedString.Key, value: Any)]
+    let heading: Entries
+    let htmlTag: Entries
+    let htmlAttribute: Entries
+    let htmlString: Entries
+    let htmlComment: Entries
+    let htmlEntity: Entries
+    let htmlDoctype: Entries
+    let jsonKey: Entries
+    let jsonString: Entries
+    let jsonNumber: Entries
+    let jsonLiteral: Entries
+    let jsonPunctuation: Entries
+}
+
 /// Pre-built per-`(palette, fonts)` attribute cache so `renderingAttributesValidator` allocates zero `NSColor`s or arrays per span.
 @MainActor
 struct EditorRenderingAttributeTable {
@@ -78,34 +95,52 @@ struct EditorRenderingAttributeTable {
     let secondary: Entries
     let yamlKey: Entries
     let logEntries: EditorLogAttributeEntries
+    let semanticEntries: EditorSemanticSyntaxEntries
     let highlights: EditorViewportHighlightColors
 
     init(palette: PurpleThemePalette, fonts: EditorRenderingFonts) {
+        let sc = palette.syntaxColors
+        let useScheme = sc.scheme != .swiftEditDefault
         bold = [(.font, fonts.bold)]
         italic = [(.font, fonts.italic)]
         strikethrough = [(.strikethroughStyle, NSUnderlineStyle.single.rawValue)]
         let inlineBg = palette.backtickInlineBackground.nsColor
-        let backtickFg = palette.backtickForeground.nsColor
+        let backtickFg = useScheme ? sc.string.nsColor : palette.backtickForeground.nsColor
         code = [(.backgroundColor, inlineBg), (.foregroundColor, backtickFg)]
-        link = [(.underlineStyle, NSUnderlineStyle.single.rawValue), (.foregroundColor, palette.linkForeground.nsColor)]
-        inlineHTML = [(.foregroundColor, palette.inertHTMLWarningForeground.nsColor)]
-        secondary = [(.foregroundColor, palette.secondaryForeground.nsColor)]
-        yamlKey = [(.foregroundColor, palette.yamlKeyForeground.nsColor), (.font, fonts.yamlKey)]
+        let linkColor = useScheme ? sc.linkOrEntity.nsColor : palette.linkForeground.nsColor
+        link = [(.underlineStyle, NSUnderlineStyle.single.rawValue), (.foregroundColor, linkColor)]
+        inlineHTML = [(.foregroundColor, useScheme ? sc.keyOrTag.nsColor : palette.inertHTMLWarningForeground.nsColor)]
+        secondary = [(.foregroundColor, useScheme ? sc.commentOrPunctuation.nsColor : palette.secondaryForeground.nsColor)]
+        yamlKey = [(.foregroundColor, useScheme ? sc.keyOrTag.nsColor : palette.yamlKeyForeground.nsColor), (.font, fonts.yamlKey)]
+        semanticEntries = EditorSemanticSyntaxEntries(
+            heading: useScheme ? [(.font, fonts.bold), (.foregroundColor, sc.keyOrTag.nsColor)] : [(.font, fonts.bold)],
+            htmlTag: [(.foregroundColor, sc.keyOrTag.nsColor)],
+            htmlAttribute: [(.foregroundColor, sc.attributeOrKeyword.nsColor)],
+            htmlString: [(.foregroundColor, sc.string.nsColor)],
+            htmlComment: [(.foregroundColor, sc.commentOrPunctuation.nsColor), (.font, fonts.italic)],
+            htmlEntity: [(.foregroundColor, sc.linkOrEntity.nsColor)],
+            htmlDoctype: [(.foregroundColor, sc.attributeOrKeyword.nsColor), (.font, fonts.bold)],
+            jsonKey: [(.foregroundColor, sc.keyOrTag.nsColor), (.font, fonts.yamlKey)],
+            jsonString: [(.foregroundColor, sc.string.nsColor)],
+            jsonNumber: [(.foregroundColor, sc.numberOrTimestamp.nsColor)],
+            jsonLiteral: [(.foregroundColor, sc.attributeOrKeyword.nsColor)],
+            jsonPunctuation: [(.foregroundColor, sc.commentOrPunctuation.nsColor)]
+        )
         logEntries = EditorLogAttributeEntries(
-            trace: [(.foregroundColor, palette.logTraceForeground.nsColor)],
-            debug: [(.foregroundColor, palette.logDebugForeground.nsColor)],
-            info: [(.foregroundColor, palette.logInfoForeground.nsColor)],
-            warn: [(.foregroundColor, palette.logWarnForeground.nsColor), (.font, fonts.bold)],
-            error: [(.foregroundColor, palette.logErrorForeground.nsColor), (.font, fonts.bold)],
+            trace: [(.foregroundColor, useScheme ? sc.commentOrPunctuation.nsColor : palette.logTraceForeground.nsColor)],
+            debug: [(.foregroundColor, useScheme ? sc.linkOrEntity.nsColor : palette.logDebugForeground.nsColor)],
+            info: [(.foregroundColor, useScheme ? sc.string.nsColor : palette.logInfoForeground.nsColor)],
+            warn: [(.foregroundColor, useScheme ? sc.warn.nsColor : palette.logWarnForeground.nsColor), (.font, fonts.bold)],
+            error: [(.foregroundColor, useScheme ? sc.error.nsColor : palette.logErrorForeground.nsColor), (.font, fonts.bold)],
             critical: [
                 (.foregroundColor, palette.logCriticalForeground.nsColor),
                 (.backgroundColor, palette.logCriticalBackground.nsColor),
                 (.font, fonts.bold),
             ],
-            timestamp: [(.foregroundColor, palette.logTimestampForeground.nsColor)],
-            guid: [(.foregroundColor, palette.logGuidForeground.nsColor)],
-            string: [(.foregroundColor, palette.logStringForeground.nsColor)],
-            exception: [(.foregroundColor, palette.logExceptionForeground.nsColor), (.font, fonts.italic)]
+            timestamp: [(.foregroundColor, useScheme ? sc.numberOrTimestamp.nsColor : palette.logTimestampForeground.nsColor)],
+            guid: [(.foregroundColor, useScheme ? sc.linkOrEntity.nsColor : palette.logGuidForeground.nsColor)],
+            string: [(.foregroundColor, useScheme ? sc.string.nsColor : palette.logStringForeground.nsColor)],
+            exception: [(.foregroundColor, useScheme ? sc.error.nsColor : palette.logExceptionForeground.nsColor), (.font, fonts.italic)]
         )
 
         let warnColor = palette.bidiWarningForeground.nsColor
@@ -151,8 +186,9 @@ extension EditorRenderingAttributeTable {
 
     func attributes(for kind: MarkdownSyntaxKind) -> Entries {
         if let logResult = lookupLogEntries(for: kind) { return logResult }
+        if let semanticResult = lookupSemanticEntries(for: kind) { return semanticResult }
         switch kind {
-        case .heading, .bold: return bold
+        case .bold: return bold
         case .italic: return italic
         case .strikethrough: return strikethrough
         case .inlineCode, .codeBlock: return code
@@ -166,6 +202,24 @@ extension EditorRenderingAttributeTable {
 }
 
 extension EditorRenderingAttributeTable {
+    private func lookupSemanticEntries(for kind: MarkdownSyntaxKind) -> Entries? {
+        switch kind {
+        case .heading: return semanticEntries.heading
+        case .htmlTag: return semanticEntries.htmlTag
+        case .htmlAttribute: return semanticEntries.htmlAttribute
+        case .htmlString: return semanticEntries.htmlString
+        case .htmlComment: return semanticEntries.htmlComment
+        case .htmlEntity: return semanticEntries.htmlEntity
+        case .htmlDoctype: return semanticEntries.htmlDoctype
+        case .jsonKey: return semanticEntries.jsonKey
+        case .jsonString: return semanticEntries.jsonString
+        case .jsonNumber: return semanticEntries.jsonNumber
+        case .jsonLiteral: return semanticEntries.jsonLiteral
+        case .jsonPunctuation: return semanticEntries.jsonPunctuation
+        default: return nil
+        }
+    }
+
     private func lookupLogEntries(for kind: MarkdownSyntaxKind) -> Entries? {
         switch kind {
         case .logLevel(let level): return entriesForLogLevel(level)
@@ -193,59 +247,9 @@ extension EditorRenderingAttributeTable {
 ///
 /// Prose and YAML values receive no foreground attribute so they keep the `#FFFFFF`/`#000000` canvas text (`21:1`, `UI-002`).
 enum EditorRenderingAttributes {
+    @MainActor
     static func attributes(for kind: MarkdownSyntaxKind, palette: PurpleThemePalette, fonts: EditorRenderingFonts) -> [(key: NSAttributedString.Key, value: Any)] {
-        if let logAttrs = logSyntaxAttributes(for: kind, palette: palette, fonts: fonts) { return logAttrs }
-        switch kind {
-        case .heading, .bold:
-            return [(.font, fonts.bold)]
-        case .italic:
-            return [(.font, fonts.italic)]
-        case .strikethrough:
-            return [(.strikethroughStyle, NSUnderlineStyle.single.rawValue)]
-        case .inlineCode, .codeBlock:
-            return [(.backgroundColor, palette.backtickInlineBackground.nsColor), (.foregroundColor, palette.backtickForeground.nsColor)]
-        case .link, .image:
-            return [(.underlineStyle, NSUnderlineStyle.single.rawValue), (.foregroundColor, palette.linkForeground.nsColor)]
-        case .inlineHTML:
-            return [(.foregroundColor, palette.inertHTMLWarningForeground.nsColor)]
-        case .task, .blockquote, .tableRow, .thematicBreak, .yamlPunctuation, .yamlComment:
-            return [(.foregroundColor, palette.secondaryForeground.nsColor)]
-        case .yamlKey:
-            return [(.foregroundColor, palette.yamlKeyForeground.nsColor), (.font, fonts.yamlKey)]
-        default:
-            return []
-        }
-    }
-
-    private static func logSyntaxAttributes(
-        for kind: MarkdownSyntaxKind,
-        palette: PurpleThemePalette,
-        fonts: EditorRenderingFonts
-    ) -> [(key: NSAttributedString.Key, value: Any)]? {
-        switch kind {
-        case .logLevel(let level): return logLevelStyleAttributes(level, palette: palette, fonts: fonts)
-        case .logTimestamp: return [(.foregroundColor, palette.logTimestampForeground.nsColor)]
-        case .logGuid: return [(.foregroundColor, palette.logGuidForeground.nsColor)]
-        case .logString: return [(.foregroundColor, palette.logStringForeground.nsColor)]
-        case .logException: return [(.foregroundColor, palette.logExceptionForeground.nsColor), (.font, fonts.italic)]
-        default: return nil
-        }
-    }
-
-    private static func logLevelStyleAttributes(
-        _ level: LogLevel,
-        palette: PurpleThemePalette,
-        fonts: EditorRenderingFonts
-    ) -> [(key: NSAttributedString.Key, value: Any)] {
-        switch level {
-        case .trace: return [(.foregroundColor, palette.logTraceForeground.nsColor)]
-        case .debug: return [(.foregroundColor, palette.logDebugForeground.nsColor)]
-        case .info: return [(.foregroundColor, palette.logInfoForeground.nsColor)]
-        case .warn: return [(.foregroundColor, palette.logWarnForeground.nsColor), (.font, fonts.bold)]
-        case .error: return [(.foregroundColor, palette.logErrorForeground.nsColor), (.font, fonts.bold)]
-        case .critical:
-            return [(.foregroundColor, palette.logCriticalForeground.nsColor), (.backgroundColor, palette.logCriticalBackground.nsColor), (.font, fonts.bold)]
-        }
+        EditorRenderingAttributeTable(palette: palette, fonts: fonts).attributes(for: kind)
     }
 }
 #endif

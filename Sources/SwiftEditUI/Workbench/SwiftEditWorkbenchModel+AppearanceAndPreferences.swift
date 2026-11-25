@@ -35,7 +35,23 @@ extension SwiftEditWorkbenchModel {
                 appearance: newValue,
                 systemPrefersDark: appearanceState.systemPrefersDark,
                 reduceTransparency: appearanceState.reduceTransparency,
-                increasedContrast: appearanceState.increasedContrast
+                increasedContrast: appearanceState.increasedContrast,
+                syntaxColorScheme: appearanceState.syntaxColorScheme
+            )
+            savePreferences()
+        }
+    }
+    public var syntaxColorScheme: SyntaxColorScheme {
+        get { appearanceState.syntaxColorScheme }
+        set {
+            guard appearanceState.syntaxColorScheme != newValue else { return }
+            appearanceState.syntaxColorScheme = newValue
+            appearanceState.palette = PurpleThemePalette.resolve(
+                appearance: appearanceState.appearanceMode,
+                systemPrefersDark: appearanceState.systemPrefersDark,
+                reduceTransparency: appearanceState.reduceTransparency,
+                increasedContrast: appearanceState.increasedContrast,
+                syntaxColorScheme: newValue
             )
             savePreferences()
         }
@@ -67,6 +83,13 @@ extension SwiftEditWorkbenchModel {
     public var launchInFullScreen: Bool {
         get { appearanceState.launchInFullScreen }
         set { appearanceState.launchInFullScreen = newValue }
+    }
+    public var trimTrailingWhitespaceOnSave: Bool {
+        get { appearanceState.trimTrailingWhitespaceOnSave }
+        set {
+            appearanceState.trimTrailingWhitespaceOnSave = newValue
+            savePreferences()
+        }
     }
     public var zoomController: EditorZoomController {
         get { appearanceState.zoomController }
@@ -152,7 +175,8 @@ extension SwiftEditWorkbenchModel {
             appearance: appearanceMode,
             systemPrefersDark: systemPrefersDark,
             reduceTransparency: reduceTransparency,
-            increasedContrast: increasedContrast
+            increasedContrast: increasedContrast,
+            syntaxColorScheme: syntaxColorScheme
         )
     }
 
@@ -164,7 +188,8 @@ extension SwiftEditWorkbenchModel {
                 appearance: appearanceMode,
                 systemPrefersDark: systemPrefersDark,
                 reduceTransparency: reduceTransparency,
-                increasedContrast: increasedContrast
+                increasedContrast: increasedContrast,
+                syntaxColorScheme: syntaxColorScheme
             )
         }
     }
@@ -177,7 +202,8 @@ extension SwiftEditWorkbenchModel {
             appearance: appearanceMode,
             systemPrefersDark: systemPrefersDark,
             reduceTransparency: reduceTransparency,
-            increasedContrast: increasedContrast
+            increasedContrast: increasedContrast,
+            syntaxColorScheme: syntaxColorScheme
         )
     }
 
@@ -299,13 +325,15 @@ extension SwiftEditWorkbenchModel {
     func savePreferences() {
         deps.preferencesStore.save(EditorPreferences(
             appearanceMode: appearanceMode,
+            syntaxColorScheme: syntaxColorScheme,
             zoomPercent: zoomController.zoomPercent,
             interfaceFont: interfaceFont,
             editorFont: editorFont,
             preferredTerminalBundleID: preferredTerminalBundleID,
             isWordWrapEnabled: isWordWrapEnabled,
             launchInFullScreen: launchInFullScreen,
-            terminalPanelHeight: Int(terminalPanelHeight.rounded())
+            terminalPanelHeight: Int(terminalPanelHeight.rounded()),
+            trimTrailingWhitespaceOnSave: trimTrailingWhitespaceOnSave
         ))
     }
 

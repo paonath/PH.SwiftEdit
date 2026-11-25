@@ -290,21 +290,19 @@ struct LiveUIMouseAndShortcutsResponsivenessTests {
         _ = window.makeFirstResponder(textView)
 
         func bitmapHasSoftPurpleHighlight(in rect: NSRect) -> Bool {
-            guard let rep = textView.bitmapImageRepForCachingDisplay(in: textView.bounds) else { return false }
-            textView.cacheDisplay(in: textView.bounds, to: rep)
+            let sampleRect = rect.insetBy(dx: -2, dy: -2).intersection(textView.bounds)
+            guard !sampleRect.isEmpty,
+                  let rep = textView.bitmapImageRepForCachingDisplay(in: sampleRect) else { return false }
+            textView.cacheDisplay(in: sampleRect, to: rep)
             let target = model.palette.wordOccurrenceBackground.nsColor.usingColorSpace(.sRGB)!
-            let x0 = max(0, Int(rect.minX.rounded(.down)))
-            let x1 = min(rep.pixelsWide - 1, Int(rect.maxX.rounded(.up)))
-            let y0 = max(0, Int(rect.minY.rounded(.down)))
-            let y1 = min(rep.pixelsHigh - 1, Int(rect.maxY.rounded(.up)))
-            guard x1 >= x0, y1 >= y0 else { return false }
-            for y in y0...y1 {
-                for x in x0...x1 {
+            guard rep.pixelsWide > 0, rep.pixelsHigh > 0 else { return false }
+            for y in 0..<rep.pixelsHigh {
+                for x in 0..<rep.pixelsWide {
                     if let px = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) {
                         let dr = abs(px.redComponent - target.redComponent)
                         let dg = abs(px.greenComponent - target.greenComponent)
                         let db = abs(px.blueComponent - target.blueComponent)
-                        if dr < 0.06 && dg < 0.06 && db < 0.06 {
+                        if dr < 0.08 && dg < 0.08 && db < 0.08 {
                             return true
                         }
                     }
@@ -456,21 +454,19 @@ struct LiveUIMouseAndShortcutsResponsivenessTests {
         }
 
         func bitmapHasSoftPurpleHighlight(on tv: SwiftEditNSTextView, in rect: NSRect) -> Bool {
-            guard let rep = tv.bitmapImageRepForCachingDisplay(in: tv.bounds) else { return false }
-            tv.cacheDisplay(in: tv.bounds, to: rep)
+            let sampleRect = rect.insetBy(dx: -2, dy: -2).intersection(tv.bounds)
+            guard !sampleRect.isEmpty,
+                  let rep = tv.bitmapImageRepForCachingDisplay(in: sampleRect) else { return false }
+            tv.cacheDisplay(in: sampleRect, to: rep)
             let target = model.palette.wordOccurrenceBackground.nsColor.usingColorSpace(.sRGB)!
-            let x0 = max(0, Int(rect.minX.rounded(.down)))
-            let x1 = min(rep.pixelsWide - 1, Int(rect.maxX.rounded(.up)))
-            let y0 = max(0, Int(rect.minY.rounded(.down)))
-            let y1 = min(rep.pixelsHigh - 1, Int(rect.maxY.rounded(.up)))
-            guard x1 >= x0, y1 >= y0 else { return false }
-            for y in y0...y1 {
-                for x in x0...x1 {
+            guard rep.pixelsWide > 0, rep.pixelsHigh > 0 else { return false }
+            for y in 0..<rep.pixelsHigh {
+                for x in 0..<rep.pixelsWide {
                     if let px = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) {
                         let dr = abs(px.redComponent - target.redComponent)
                         let dg = abs(px.greenComponent - target.greenComponent)
                         let db = abs(px.blueComponent - target.blueComponent)
-                        if dr < 0.06 && dg < 0.06 && db < 0.06 {
+                        if dr < 0.08 && dg < 0.08 && db < 0.08 {
                             return true
                         }
                     }

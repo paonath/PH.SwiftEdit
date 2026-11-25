@@ -82,10 +82,12 @@ extension SwiftEditWorkbenchModel {
     /// Language-dispatched lint shared by the synchronous and background refresh paths (`REQ-003`, `REQ-004`).
     nonisolated static func lintDiagnostics(for snap: DocumentSnapshot, language: DocumentLanguage) -> [MarkdownLintDiagnostic] {
         switch language {
-        case .plainText, .log:
+        case .plainText, .log, .html:
             return []
         case .yaml:
             return YAMLStructureLinter.lint(snapshot: snap)
+        case .json:
+            return JSONStructureLinter.lint(snapshot: snap)
         case .markdown:
             var lint: [MarkdownLintDiagnostic]
             switch MarkdownLintAndFormatEngine.lint(snapshot: snap, profile: .allConstructs) {
@@ -112,8 +114,10 @@ extension SwiftEditWorkbenchModel {
         let cachedIndex = (caches.lineIndexCache?.id == snapshot.id && caches.lineIndexCache?.revision == snapshot.revision) ? caches.lineIndexCache?.index : nil
         caches.previewTaskTarget = (snapshot.id, snapshot.revision)
         caches.previewTask = Task { @MainActor [weak self] in
-            let document = await Task.detached(priority: .userInitiated) {
-                MarkdownPreviewProjector.project(snapshot: snapshot, showPreview: true, lineIndex: cachedIndex)
+            let projected = await Task.detached(priority: .userInitiated) {
+                let doc = MarkdownPreviewProjector.project(snapshot: snapshot, showPreview: true, lineIndex: cachedIndex)
+                let enriched = MarkdownPreviewProjector.projectEnriched(snapshot: snapshot, showPreview: true, lineIndex: cachedIndex)
+                return (doc, enriched)
             }.value
             guard let self else { return }
             if self.caches.previewTaskTarget?.id == snapshot.id && self.caches.previewTaskTarget?.revision == snapshot.revision {
@@ -121,7 +125,7 @@ extension SwiftEditWorkbenchModel {
             }
             guard !Task.isCancelled,
                   let current = self.activeDocumentSession, current.id == snapshot.id, current.revision == snapshot.revision else { return }
-            self.caches.previewCache = (snapshot.id, snapshot.revision, document)
+            self.caches.previewCache = (snapshot.id, snapshot.revision, projected.0, projected.1)
             self.overlayState.previewGeneration &+= 1
         }
     }
@@ -144,6 +148,8 @@ extension SwiftEditWorkbenchModel {
         }
         if let destinationID = overlayState.compareDestinationTabID, let destination = sessionsByID[destinationID] {
             diffCoordinator.compare(lhs: source.snapshot, rhs: destination.snapshot)
+        } else if let diskSnap = externalFileMonitor.diskSnapshotsByTabID[sourceID] {
+            diffCoordinator.compare(lhs: diskSnap, rhs: source.snapshot)
         } else if let baseline = savedBaselineByID[sourceID] {
             diffCoordinator.compare(lhs: baseline, rhs: source.snapshot)
         }
@@ -323,6 +329,11 @@ extension SwiftEditWorkbenchModel {
             tabSession = WorkspaceTabSession(tabs: restoredTabs, activeTabID: manifest.activeTabID)
             sessionsByID = restoredSessions
             savedBaselineByID = restoredBaselines
+            for tab in restoredTabs {
+                if let url = tab.fileURL, let s = restoredSessions[tab.id], !s.isBinaryReadOnly {
+                    externalFileMonitor.registerWatch(tabID: tab.id, url: url, scopeURL: url.deletingLastPathComponent(), knownText: s.text)
+                }
+            }
         }
         _ = try? deps.recoveryStore.purgeOrphanedSnapshots(keeping: Set(restoredTabs.map(\.id)))
     }

@@ -24,6 +24,18 @@ struct LogTailPanelView: View {
             .pickerStyle(.segmented)
             .fixedSize()
             .accessibilityLabel("Tail order")
+            Picker("Severity", selection: Binding(get: { tail.minimumSeverity }, set: { tail.setMinimumSeverity($0) })) {
+                ForEach(LogTailMinimumSeverity.allCases, id: \.self) { level in
+                    Text(level.label).tag(level)
+                }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .accessibilityLabel("Minimum log severity")
+            TextField("Filter…", text: Binding(get: { tail.substringFilter }, set: { tail.setSubstringFilter($0) }))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 120)
+                .accessibilityLabel("Filter log lines")
             HStack(spacing: 4) {
                 Text("Lines").appFont(.caption).foregroundStyle(palette.secondaryForeground.swiftUIColor)
                 TextField("80", text: $lineText)

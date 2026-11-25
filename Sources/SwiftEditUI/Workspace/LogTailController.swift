@@ -146,6 +146,8 @@ public final class LogTailController {
     public let viewID = DocumentID()
     public private(set) var mode: LogTailMode
     public private(set) var lineCount: Int
+    public private(set) var minimumSeverity: LogTailMinimumSeverity = .all
+    public private(set) var substringFilter: String = ""
     public private(set) var isRunning = false
     public private(set) var text = ""
     public private(set) var visibleLineCount = 0
@@ -205,6 +207,19 @@ extension LogTailController {
         reproject()
     }
 
+    public func setMinimumSeverity(_ severity: LogTailMinimumSeverity) {
+        guard minimumSeverity != severity else { return }
+        minimumSeverity = severity
+        reproject()
+    }
+
+    public func setSubstringFilter(_ filter: String) {
+        let clamped = String(filter.prefix(LogTailBuffer.maxFilterCharacters))
+        guard substringFilter != clamped else { return }
+        substringFilter = clamped
+        reproject()
+    }
+
     /// Performs one synchronous poll and applies it immediately (tests and the panel's refresh).
     func pollNow() {
         guard let worker = runtime.worker else { return }
@@ -232,7 +247,12 @@ extension LogTailController {
     }
 
     private func reproject() {
-        let projected = runtime.buffer.textAndCount(count: lineCount, mode: mode)
+        let projected = runtime.buffer.textAndCount(
+            count: lineCount,
+            mode: mode,
+            minimumSeverity: minimumSeverity,
+            substringFilter: substringFilter
+        )
         guard projected.text != text || projected.lineCount != visibleLineCount else { return }
         text = projected.text
         visibleLineCount = projected.lineCount

@@ -53,6 +53,7 @@ extension SwiftEditWorkbenchModel {
         }
         do {
             _ = try session.applyTextEdits([smart.edit], expectedRevision: session.revision)
+            session.reconcileDirtyState(against: savedBaselineByID[activeID])
             sessionsByID[activeID] = session
             currentSelection = SwiftEditCore.TextRange(location: smart.newCaretLocation, length: 0)
             try? tabSession.updateTabState(
@@ -72,10 +73,31 @@ extension SwiftEditWorkbenchModel {
 
 
     public func presentFindBar(mode: FindBarPresentationMode) {
+        if mode != .hidden, findReplaceState.isInSelection {
+            findReplaceState.scopedSelectionRange = currentSelection
+        }
         findReplaceState.mode = mode
         if mode == .hidden {
+            findReplaceState.scopedSelectionRange = nil
             requestEditorFocus()
         }
+    }
+
+    func activeSearchOptions() -> SearchOptions {
+        let rangeScope: SwiftEditCore.TextRange?
+        if findReplaceState.isInSelection {
+            let captured = findReplaceState.scopedSelectionRange ?? currentSelection
+            findReplaceState.scopedSelectionRange = captured
+            rangeScope = captured
+        } else {
+            findReplaceState.scopedSelectionRange = nil
+            rangeScope = nil
+        }
+        return SearchOptions(
+            isCaseSensitive: findReplaceState.isCaseSensitive,
+            isWholeWord: findReplaceState.isWholeWord,
+            searchRange: rangeScope
+        )
     }
 
     func applyProgrammaticSelection(_ range: SwiftEditCore.TextRange, focusEditor: Bool) {
@@ -86,15 +108,15 @@ extension SwiftEditWorkbenchModel {
         }
     }
 
-    /// Evaluates literal search matches for `findReplaceState.query` in the active document and selects the first match (`BC-004`, `BC-011`, `BUG-008`).
+    /// Evaluates literal search matches for `findReplaceState.query` in the active document and selects the first match (`BC-004`, `BC-011`, `BUG-008`, `REQ-008`).
     public func executeFind() {
         guard let session = activeDocumentSession else { return }
-        let options = SearchOptions(isCaseSensitive: findReplaceState.isCaseSensitive)
+        let options = activeSearchOptions()
         switch DocumentSearchEngine.find(query: findReplaceState.query, in: session.snapshot, options: options) {
         case .completed(let ranges):
             findReplaceState.matches = ranges
             findReplaceState.activeMatchIndex = 0
-            if let first = ranges.first {
+            if let first = ranges.first, !findReplaceState.isInSelection {
                 applyProgrammaticSelection(first, focusEditor: false)
             }
             statusBannerMessage = nil
@@ -133,6 +155,7 @@ extension SwiftEditWorkbenchModel {
         do {
             let expectedRev = session.revision
             _ = try session.applyTextEdits([edit], expectedRevision: expectedRev)
+            session.reconcileDirtyState(against: savedBaselineByID[activeID])
             sessionsByID[activeID] = session
             try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
             syncUntitledTabTitleIfNeeded(for: activeID, session: session)
@@ -157,7 +180,7 @@ extension SwiftEditWorkbenchModel {
               !logTailOnlyTabIDs.contains(activeID),
               var session = sessionsByID[activeID] else { return }
         let snap = session.snapshot
-        let options = SearchOptions(isCaseSensitive: findReplaceState.isCaseSensitive)
+        let options = activeSearchOptions()
         guard let edits = DocumentSearchEngine.replaceAll(
             query: findReplaceState.query,
             with: findReplaceState.replacement,
@@ -170,10 +193,12 @@ extension SwiftEditWorkbenchModel {
         guard !edits.isEmpty else { return }
         do {
             _ = try session.applyTextEdits(edits, expectedRevision: snap.revision)
+            session.reconcileDirtyState(against: savedBaselineByID[activeID])
             sessionsByID[activeID] = session
             try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
             syncUntitledTabTitleIfNeeded(for: activeID, session: session)
             findReplaceState.matches = []
+            findReplaceState.scopedSelectionRange = nil
             statusBannerMessage = "Replaced \(edits.count) occurrence(s)."
             persistRecoveryState()
             refreshDiagnosticsForActiveDocument()
@@ -257,7 +282,7 @@ extension SwiftEditWorkbenchModel {
         switch editorSyntaxLanguage {
         case .markdown: navigatorState = DocumentNavigatorState(headings: MarkdownHeadingOutlineEngine.outline(index: activeLineIndex() ?? MarkdownLineIndex(text: session.text)))
         case .yaml: navigatorState = DocumentNavigatorState(headings: YAMLOutlineEngine.outline(index: activeLineIndex() ?? MarkdownLineIndex(text: session.text)))
-        case .plainText, .log: return
+        case .json, .html, .plainText, .log: return
         }
     }
 

@@ -119,6 +119,7 @@ extension SwiftEditWorkbenchModel {
         }
         do {
             _ = try session.applyTextEdits(edit.edits, expectedRevision: session.revision)
+            session.reconcileDirtyState(against: savedBaselineByID[activeID])
             sessionsByID[activeID] = session
             try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
             syncUntitledTabTitleIfNeeded(for: activeID, session: session)

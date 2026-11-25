@@ -109,6 +109,7 @@ struct AllKeyboardShortcutsDispatchTests {
         #expect(cmdWWrapOff && !model.isWordWrapEnabled)
         let cmdWWrapOn = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "w", modifiers: [.command]), model: model)
         #expect(cmdWWrapOn && model.isWordWrapEnabled)
+        model.handleEditorTextChanged("unsaved draft")
         let cmdW = SwiftEditShortcutDispatcher.dispatch(ShortcutKeyEvent(characters: "W", charactersIgnoringModifiers: "w", modifiers: [.command, .shift]), model: model)
         let dirtyPromptTriggered = (model.pendingDirtyCloseTabID != nil)
         model.resolvePendingDirtyClose(.dontSave)

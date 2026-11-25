@@ -18,6 +18,9 @@ struct WorkbenchDomainControllers {
     let diffCoordinator = DiffPaneCoordinator()
     let undoRegistry = PerTabUndoManagerRegistry()
     let propertiesPanel = PropertiesPanelState()
+    let bulkCloseHistory = WorkbenchBulkCloseAndHistoryController()
+    let externalFileMonitor = ExternalFileChangeMonitor()
+    let quickOpen = WorkbenchQuickOpenController()
 }
 
 /// `@MainActor @Observable` application controller wiring `SwiftEditCore` engines and `SessionRecoveryStore` to the Zed-minimal Purple SwiftUI shell (`UI-001..012`, `REQ-002`).
@@ -129,12 +132,18 @@ public final class SwiftEditWorkbenchModel {
             systemPrefersDark: initialSystemDark,
             lastWindowAppearanceTarget: MacOSAppearanceSynchronizer.synchronizeApplicationAppearance(for: prefs.appearanceMode),
             appearanceMode: prefs.appearanceMode,
-            palette: PurpleThemePalette.resolve(appearance: prefs.appearanceMode, systemPrefersDark: initialSystemDark),
+            syntaxColorScheme: prefs.syntaxColorScheme,
+            palette: PurpleThemePalette.resolve(
+                appearance: prefs.appearanceMode,
+                systemPrefersDark: initialSystemDark,
+                syntaxColorScheme: prefs.syntaxColorScheme
+            ),
             interfaceFont: prefs.interfaceFont,
             editorFont: prefs.editorFont,
             preferredTerminalBundleID: prefs.preferredTerminalBundleID,
             isWordWrapEnabled: prefs.isWordWrapEnabled,
             launchInFullScreen: prefs.launchInFullScreen,
+            trimTrailingWhitespaceOnSave: prefs.trimTrailingWhitespaceOnSave,
             zoomController: EditorZoomController(zoomPercent: prefs.zoomPercent)
         )
         self.domainControllers.terminalSession.panelHeight = CGFloat(prefs.terminalPanelHeight)
@@ -156,6 +165,9 @@ public final class SwiftEditWorkbenchModel {
         restoreSessionRecoveryIfPresent()
         workspaceState.recentFiles = builtDeps.recentFilesStore.entries()
         refreshDiagnosticsForActiveDocument()
+        domainControllers.externalFileMonitor.onDiskEvent = { [weak self] tabID in
+            self?.handleExternalDiskChange(for: tabID)
+        }
 
         caches.distributedThemeObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
@@ -174,6 +186,7 @@ public final class SwiftEditWorkbenchModel {
         }
         runtimeHooks.embeddedTerminalRegistry.terminateAll()
         for tail in logTails.values { tail.stop() }
+        domainControllers.externalFileMonitor.unwatchAll()
         caches.diagnosticsTask?.cancel()
         updateController.cancelPendingCheck()
         caches.recoveryDebounceTask?.cancel()
@@ -208,6 +221,8 @@ extension SwiftEditWorkbenchModel {
     public var diffCoordinator: DiffPaneCoordinator { domainControllers.diffCoordinator }
     public var undoRegistry: PerTabUndoManagerRegistry { domainControllers.undoRegistry }
     public var propertiesPanel: PropertiesPanelState { domainControllers.propertiesPanel }
+    public var externalFileMonitor: ExternalFileChangeMonitor { domainControllers.externalFileMonitor }
+    public var quickOpenController: WorkbenchQuickOpenController { domainControllers.quickOpen }
 }
 
 #endif

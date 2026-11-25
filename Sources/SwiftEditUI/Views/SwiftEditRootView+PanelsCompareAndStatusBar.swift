@@ -89,9 +89,12 @@ extension SwiftEditRootView {
             if !model.isDistractionFree, model.showMarkdownPreview, model.isMarkdownMenuEnabled {
                 MarkdownNativePreviewView(
                     document: model.markdownPreviewDocument,
+                    enrichedDocument: model.enrichedMarkdownPreviewDocument,
                     palette: model.palette,
                     gate: model.previewResourceGate,
-                    activeSourceLine: model.previewSourceLine
+                    activeSourceLine: model.previewSourceLine,
+                    zoomPercent: model.zoomController.zoomPercent,
+                    onCopyCode: { model.copyPreviewCodeBlock($0) }
                 )
                 .frame(minWidth: 260, idealWidth: 340)
             }
@@ -163,26 +166,32 @@ extension SwiftEditRootView {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Empty workspace")
     }
+}
 
-    /// Compare header: source tab on the left; on the right a "Compare with" picker (saved version or another open tab)
-    /// and an X that drops the destination only, returning to saved vs current (`REQ-022-01`).
+/// Side-by-side compare header, zoomed diff panel, and neutral status bar for `SwiftEditRootView` (`REQ-005`, `UI-001`).
+extension SwiftEditRootView {
+    /// Compare header: source tab on the left; hunk navigation (`⇧F7`/`F7`) + `Only Diff` filter in the center; "Compare with" picker on the right (`REQ-005`, `REQ-022-01`).
     var compareHeader: some View {
         let palette = model.palette
+        let zoomMetrics = ZoomedChromeMetrics(zoomPercent: model.zoomController.zoomPercent)
         let sourceTitle = model.title(ofTab: model.compareSourceTabID) ?? "—"
         let destinationTitle = model.title(ofTab: model.compareDestinationTabID)
+        let hunkTotal = model.diffCoordinator.hunkRowIndices.count
+        let hunkCurrent = hunkTotal == 0 ? 0 : (model.diffCoordinator.activeHunkIndex + 1)
         return HStack(spacing: 8) {
             HStack(spacing: 6) {
                 Text("SOURCE")
-                    .appFont(.caption2, weight: .semibold)
+                    .appFont(size: zoomMetrics.diffHeaderBadgeFontSize, weight: .semibold)
                     .tracking(0.6)
                     .foregroundStyle(palette.secondaryForeground.swiftUIColor)
                 Text(verbatim: destinationTitle == nil ? "\(sourceTitle) · saved" : sourceTitle)
-                    .appFont(.caption, weight: .medium)
+                    .appFont(size: zoomMetrics.diffHeaderFontSize, weight: .medium)
                     .foregroundStyle(palette.chromeForeground.swiftUIColor)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            diffHeaderHunkControls(zoomMetrics: zoomMetrics, hunkCurrent: hunkCurrent, hunkTotal: hunkTotal)
             HStack(spacing: 6) {
                 Menu {
                     Button { model.setCompareDestination(nil) } label: {
@@ -203,10 +212,11 @@ extension SwiftEditRootView {
                             .foregroundStyle(palette.chromeForeground.swiftUIColor)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        AppIconView(.chevronDown, size: 10)
+                        AppIconView(.chevronDown, size: max(10, 10 * zoomMetrics.factor))
                             .foregroundStyle(palette.secondaryForeground.swiftUIColor)
                     }
-                    .appFont(.caption, weight: .medium)
+                    .appFont(size: zoomMetrics.diffHeaderFontSize, weight: .medium)
+                    .frame(minHeight: zoomMetrics.diffActionTarget)
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
@@ -217,7 +227,8 @@ extension SwiftEditRootView {
                 Spacer(minLength: 0)
                 if model.compareDestinationTabID != nil {
                     Button { model.setCompareDestination(nil) } label: {
-                        AppIconView(.close, size: 11).minimumHitTarget(20)
+                        AppIconView(.close, size: max(11, 11 * zoomMetrics.factor))
+                            .frame(minWidth: zoomMetrics.diffActionTarget, minHeight: zoomMetrics.diffActionTarget)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(palette.secondaryForeground.swiftUIColor)
@@ -233,40 +244,107 @@ extension SwiftEditRootView {
         .overlay(alignment: .bottom) { Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(height: 1) }
     }
 
+    private func diffHeaderHunkControls(zoomMetrics: ZoomedChromeMetrics, hunkCurrent: Int, hunkTotal: Int) -> some View {
+        let palette = model.palette
+        return HStack(spacing: 4) {
+            Button { model.selectPreviousDiffHunk() } label: {
+                AppIconView(.chevronUp, size: max(12, 12 * zoomMetrics.factor))
+                    .frame(minWidth: zoomMetrics.diffActionTarget, minHeight: zoomMetrics.diffActionTarget)
+            }
+            .buttonStyle(.plain)
+            .disabled(hunkTotal == 0)
+            .help("Previous Change (⇧F7)")
+            .accessibilityLabel("Previous difference hunk")
+
+            Text(verbatim: "\(hunkCurrent)/\(hunkTotal)")
+                .appFont(size: zoomMetrics.diffHeaderBadgeFontSize, monospaced: true)
+                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+
+            Button { model.selectNextDiffHunk() } label: {
+                AppIconView(.chevronDown, size: max(12, 12 * zoomMetrics.factor))
+                    .frame(minWidth: zoomMetrics.diffActionTarget, minHeight: zoomMetrics.diffActionTarget)
+            }
+            .buttonStyle(.plain)
+            .disabled(hunkTotal == 0)
+            .help("Next Change (F7)")
+            .accessibilityLabel("Next difference hunk")
+
+            Button { model.toggleDiffOnlyDifferences() } label: {
+                Text("Only Diff")
+                    .appFont(size: zoomMetrics.diffHeaderBadgeFontSize, weight: .medium)
+                    .padding(.horizontal, 6)
+                    .frame(minWidth: zoomMetrics.diffActionTarget, minHeight: zoomMetrics.diffActionTarget)
+                    .background(
+                        (model.diffCoordinator.onlyDifferences ? palette.activeBracketHighlight : palette.badgeSurface).swiftUIColor,
+                        in: RoundedRectangle(cornerRadius: 4)
+                    )
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(palette.chromeForeground.swiftUIColor)
+            .help("Show only modified hunks with ±2 context lines")
+            .accessibilityLabel(model.diffCoordinator.onlyDifferences ? "Show full file comparison" : "Show only differences")
+        }
+    }
+
     var diffPanel: some View {
-        VStack(spacing: 0) {
-        compareHeader
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 4) {
-                let rows = model.diffCoordinator.rows
-                ForEach(rows.indices, id: \.self) { index in
-                    let row = rows[index]
-                    HStack(spacing: 8) {
-                        Text(row.lhsText ?? "")
-                            .appFont(.caption, monospaced: true)
-                            .foregroundStyle((row.lhsKind == .removed ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 4)
-                            .background(row.lhsKind == .removed ? model.palette.diffRemovedBackground.swiftUIColor : Color.clear)
-                        Text(row.rhsText ?? "")
-                            .appFont(.caption, monospaced: true)
-                            .foregroundStyle((row.rhsKind == .inserted ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 4)
-                            .background(row.rhsKind == .inserted ? model.palette.diffInsertedBackground.swiftUIColor : Color.clear)
+        let zoomMetrics = ZoomedChromeMetrics(zoomPercent: model.zoomController.zoomPercent)
+        return VStack(spacing: 0) {
+            compareHeader
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2 * zoomMetrics.factor) {
+                        let rows = model.diffCoordinator.displayedRows
+                        ForEach(rows.indices, id: \.self) { index in
+                            diffSideBySideRowView(row: rows[index], zoomMetrics: zoomMetrics)
+                                .id(index)
+                        }
+                    }
+                    .padding(12)
+                }
+                .onChange(of: model.diffCoordinator.activeHunkIndex) { _, _ in
+                    if let target = model.diffCoordinator.activeScrollRowIndex {
+                        proxy.scrollTo(target, anchor: .center)
                     }
                 }
             }
-            .padding(12)
-        }
         }
         .background(model.palette.chromeSurface.swiftUIColor)
     }
 
-    /// Neutral 24 pt status bar: sidebar toggle, lint icon + count, bracket warning only when unbalanced; right side
-    /// cursor metrics, encoding, line ending, language, zoom menu and theme toggle (R-01, R-02, V-01).
+    private func diffSideBySideRowView(row: SideBySideDiffRow, zoomMetrics: ZoomedChromeMetrics) -> some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Text(verbatim: row.lhsLineNumber.map(String.init) ?? "")
+                    .appFont(size: zoomMetrics.diffFontSize, monospaced: true, role: .editor)
+                    .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+                    .frame(width: zoomMetrics.diffLineNumberWidth, alignment: .trailing)
+                Text(row.lhsText ?? "")
+                    .appFont(size: zoomMetrics.diffFontSize, monospaced: true, role: .editor)
+                    .foregroundStyle((row.lhsKind == .removed ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+                    .background(row.lhsKind == .removed ? model.palette.diffRemovedBackground.swiftUIColor : Color.clear)
+            }
+            HStack(spacing: 4) {
+                Text(verbatim: row.rhsLineNumber.map(String.init) ?? "")
+                    .appFont(size: zoomMetrics.diffFontSize, monospaced: true, role: .editor)
+                    .foregroundStyle(model.palette.secondaryForeground.swiftUIColor)
+                    .frame(width: zoomMetrics.diffLineNumberWidth, alignment: .trailing)
+                Text(row.rhsText ?? "")
+                    .appFont(size: zoomMetrics.diffFontSize, monospaced: true, role: .editor)
+                    .foregroundStyle((row.rhsKind == .inserted ? model.palette.editorCanvasText : model.palette.chromeForeground).swiftUIColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+                    .background(row.rhsKind == .inserted ? model.palette.diffInsertedBackground.swiftUIColor : Color.clear)
+            }
+        }
+    }
+
+    /// Neutral 24 pt status bar: sidebar toggle, Git branch badge, lint icon + count, bracket warning; right side
+    /// cursor/selection/word metrics, interactive encoding menu, line ending menu, language, zoom menu, and theme toggle (`REQ-012`).
     var statusBar: some View {
         let metrics = model.activeStatusBarMetrics
+        let enriched = model.activeEnrichedStatusBarMetrics
         let lintCount = model.lintDiagnostics.count
         let hasErrors = model.lintDiagnostics.contains { $0.severity == .error }
         let unbalanced = model.bracketResult?.unbalancedBrackets.count ?? 0
@@ -280,6 +358,17 @@ extension SwiftEditRootView {
             .buttonStyle(.plain)
             .help("Toggle Folder Navigator (⌘B)")
             .accessibilityLabel(model.isLeftSidebarCollapsed ? "Show folder navigator" : "Hide folder navigator")
+
+            if let branch = model.activeGitBranchName {
+                HStack(spacing: 4) {
+                    AppIconView(.code, size: 12)
+                    Text(verbatim: branch)
+                        .lineLimit(1)
+                        .frame(maxWidth: 140)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Git branch \(branch)")
+            }
 
             Button(action: { model.toggleDiagnosticsPopover() }) {
                 HStack(spacing: 4) {
@@ -311,8 +400,15 @@ extension SwiftEditRootView {
             }
             Spacer()
             Text("Ln \(metrics.line), Col \(metrics.column)")
-            Text("\(metrics.characterCount) chars")
-            Text(metrics.encodingLabel)
+            if enriched.selectedCharacterCount > 0 {
+                Text("Sel \(enriched.selectedCharacterCount) (\(enriched.selectedLineCount) ln)")
+            } else {
+                Text("\(metrics.characterCount) chars")
+            }
+            if let words = enriched.markdownWordCount {
+                Text("\(words) words")
+            }
+            statusBarEncodingMenu(currentLabel: metrics.encodingLabel)
             Menu {
                 Button("LF (Unix / macOS)") { model.setActiveDocumentLineEnding(.lf) }
                 Button("CRLF (Windows)") { model.setActiveDocumentLineEnding(.crlf) }
@@ -371,6 +467,32 @@ extension SwiftEditRootView {
         case .black: return "Dark"
         case .auto: return "Auto"
         }
+    }
+
+    private func statusBarEncodingMenu(currentLabel: String) -> some View {
+        Menu {
+            Section("Save with Encoding") {
+                Button("UTF-8") { model.setActiveDocumentEncoding(.utf8) }
+                Button("UTF-8 with BOM") { model.setActiveDocumentEncoding(.utf8WithBOM) }
+                Button("UTF-16 LE") { model.setActiveDocumentEncoding(.utf16LEWithBOM) }
+                Button("UTF-16 BE") { model.setActiveDocumentEncoding(.utf16BEWithBOM) }
+            }
+            if model.activeDocumentSession?.fileURL != nil {
+                Divider()
+                Section("Reopen with Encoding") {
+                    Button("Reopen as UTF-8") { _ = model.reopenActiveDocumentWithEncoding(.utf8) }
+                    Button("Reopen as UTF-16 LE") { _ = model.reopenActiveDocumentWithEncoding(.utf16LEWithBOM) }
+                    Button("Reopen as UTF-16 BE") { _ = model.reopenActiveDocumentWithEncoding(.utf16BEWithBOM) }
+                }
+            }
+        } label: {
+            Text(currentLabel).appFont(.caption)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Encoding \(currentLabel)")
     }
 
 }

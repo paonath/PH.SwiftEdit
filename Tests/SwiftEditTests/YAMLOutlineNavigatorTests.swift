@@ -51,4 +51,35 @@ struct YAMLOutlineNavigatorTests {
         #expect(model.navigatorState == nil)
         #expect(stale.confirm(documentLength: 5) == 5)
     }
+
+    @Test("P5b: YAML files with leading, middle, consecutive, and trailing blank lines across LF, CRLF, and CR list all top-level keys without crashing")
+    func p5bBlankLinesAcrossLineEndingsDoNotCrash() {
+        // GIVEN YAML documents with blank lines across LF, CRLF, and CR endings (reproducing 0.1.8-beta1 crash)
+        let lfText = "\n\nversion: 2\n\nservices:\n  web:\n    image: x\n\n\nvolumes: {}\n\n"
+        let crlfText = "\r\nversion: 2\r\n\r\nvolumes: {}\r\n"
+        let (model, dir) = YAMLWorkbenchHarness.makeModel(opening: [("blank.yml", lfText)])
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // WHEN outlines are computed and the Document Navigator opens and confirms 'volumes'
+        let lfOutline = YAMLOutlineEngine.outline(index: MarkdownLineIndex(text: lfText))
+        let crlfOutline = YAMLOutlineEngine.outline(index: MarkdownLineIndex(text: crlfText))
+        model.toggleDocumentNavigator()
+        let navTitles = model.navigatorState?.filtered.map(\.title)
+        model.navigatorState?.select(index: 2)
+        model.confirmDocumentNavigator()
+
+        // THEN all top-level keys are extracted with exact UTF-16 offsets and zero traps
+        #expect(lfOutline.map(\.title) == ["version", "services", "volumes"])
+        #expect(crlfOutline.map(\.title) == ["version", "volumes"])
+        #expect(navTitles == ["version", "services", "volumes"])
+        let expectedOffset = ("\n\nversion: 2\n\nservices:\n  web:\n    image: x\n\n\n" as NSString).length
+        #expect(model.currentSelection.location == expectedOffset)
+    }
+
+    @Test("N5c: empty, blank-line-only, and whitespace-only YAML documents return empty outlines safely")
+    func n5cEmptyAndBlankOnlyYAMLReturnEmptyOutline() {
+        #expect(YAMLOutlineEngine.outline(index: MarkdownLineIndex(text: "")).isEmpty)
+        #expect(YAMLOutlineEngine.outline(index: MarkdownLineIndex(text: "\n\n\r\n\r")).isEmpty)
+        #expect(YAMLOutlineEngine.outline(index: MarkdownLineIndex(text: "   \n\t\n  \r\n")).isEmpty)
+    }
 }

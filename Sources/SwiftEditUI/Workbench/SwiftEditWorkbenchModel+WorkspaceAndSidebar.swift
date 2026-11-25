@@ -258,6 +258,8 @@ extension SwiftEditWorkbenchModel {
             fileURL: standardizedURL,
             isDirty: false
         )
+        let watchScope = scope ?? grantedScopeRootURL ?? standardizedURL.deletingLastPathComponent()
+        externalFileMonitor.registerWatch(tabID: loaded.id, url: standardizedURL, scopeURL: watchScope, knownText: loaded.text)
         recordRecentFileIfEligible(url: standardizedURL, withinScope: scope)
         statusBannerMessage = nil
         persistRecoveryState()
@@ -387,11 +389,13 @@ extension SwiftEditWorkbenchModel {
             tabSession.applyTrash(of: itemURL)
             let remainingTabIDs = Set(tabSession.tabs.map(\.id))
             for closedID in beforeTabIDs.subtracting(remainingTabIDs) {
+                externalFileMonitor.unwatch(tabID: closedID)
                 sessionsByID.removeValue(forKey: closedID)
                 savedBaselineByID.removeValue(forKey: closedID)
                 try? deps.recoveryStore.removeRecoverySnapshot(for: closedID)
             }
             for tab in tabSession.tabs where tab.fileURL == nil {
+                externalFileMonitor.unwatch(tabID: tab.id)
                 if let existing = sessionsByID[tab.id] {
                     sessionsByID[tab.id] = DocumentSession(
                         id: existing.id,
@@ -482,9 +486,10 @@ extension SwiftEditWorkbenchModel {
     }
 
     func reconcileSessionURLsAfterRename(from oldURL: URL, to newURL: URL) {
+        let scope = grantedScopeRootURL ?? selectedFolderURL
         for tab in tabSession.tabs {
             if let existing = sessionsByID[tab.id], existing.fileURL != tab.fileURL {
-                sessionsByID[tab.id] = DocumentSession(
+                let updated = DocumentSession(
                     id: existing.id,
                     fileURL: tab.fileURL,
                     revision: existing.revision,
@@ -495,6 +500,12 @@ extension SwiftEditWorkbenchModel {
                     isDegradedPlainText: existing.isDegradedPlainText,
                     isBinaryReadOnly: existing.isBinaryReadOnly
                 )
+                sessionsByID[tab.id] = updated
+                if let targetURL = tab.fileURL {
+                    externalFileMonitor.registerWatch(tabID: tab.id, url: targetURL, scopeURL: scope ?? targetURL.deletingLastPathComponent(), knownText: updated.text)
+                } else {
+                    externalFileMonitor.unwatch(tabID: tab.id)
+                }
             }
         }
         _ = (oldURL, newURL)

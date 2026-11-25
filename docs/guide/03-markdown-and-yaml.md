@@ -49,7 +49,9 @@ Diagnostics appear in three synchronized places:
 
 Press **`Cmd+P`** (or click the eye icon in the header bar) to toggle the side-by-side **Preview** pane:
 
-- Rendered natively in SwiftUI with **zero WebKit and zero network access**.
+- Rendered natively in SwiftUI with **zero WebKit and zero network access**, scaling linearly with global zoom (`50%–300%`).
+- Renders line-1 YAML frontmatter as a structured **Properties** metadata card, and displays a top-right **Copy** button on every fenced code block.
+- Renders **`markmap` / `mindmap`** trees and core **`mermaid`** diagrams (`flowchart`/`graph`, `sequenceDiagram`, `stateDiagram`) natively on SwiftUI `Canvas` with a top-right **`Diagram / Code`** toggle and **Copy** button.
 - Supports headings, paragraphs, emphasis, strikethrough, inline code, fenced code blocks, blockquotes, lists, task lists, tables, thematic breaks, and local images.
 - Local image loading is strictly confined to the granted workspace folder scope (`PreviewResourceAndLinkGate`); external network images are never fetched.
 - Synchronizes with the active source line as you navigate the document and releases preview/thumbnail caches immediately when closed.
@@ -76,6 +78,16 @@ Opening a `.yml` or `.yaml` file enables native YAML tooling:
 - **Structural Linter (`YML001`–`YML005`)**: detects tabs in indentation, inconsistent indentation, duplicate keys within the same mapping (including quoted equivalents), malformed mappings, and unterminated quotes — also runs on Markdown frontmatter blocks.
 - **Document Navigator (`Option+\`)**: lists top-level YAML keys for instant keyboard jump.
 - **Smart Indentation**: `Tab` / `Shift+Tab` and `Return` apply two-space YAML indentation automatically.
+
+---
+
+## Functional: Native JSON & JSON Lines Support
+
+Opening a `.json` or `.jsonl` file enables native JSON tooling:
+
+- **Viewport Syntax Highlighting**: distinguishes object keys, string values, numeric literals, `true`/`false`/`null` keywords, and structural punctuation on lines up to `4,096` UTF-16 units.
+- **Iterative Structural Linter (`JSN001`–`JSN003`)**: validates braces, brackets, strings, trailing commas, and per-line JSON Lines records up to `128` nesting levels with zero recursion.
+- **Pretty-Print & Minify**: press `Shift+Cmd+F` (*Format JSON Document*) for deterministic 2-space sorted-key formatting or choose *Minify JSON Document* from the Edit menu.
 
 ---
 

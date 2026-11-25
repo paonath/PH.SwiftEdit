@@ -99,6 +99,9 @@ public struct SwiftEditRootView: View {
         .overlay(alignment: .top) {
             DocumentNavigatorOverlayView(model: model)
         }
+        .overlay(alignment: .top) {
+            QuickOpenAndFolderSearchView(model: model)
+        }
         .overlay(alignment: .topLeading) {
             ElementContextualMenuView(model: model)
         }
@@ -308,7 +311,9 @@ public struct SwiftEditRootView: View {
             )
             .accessibilityLabel("Resize Sidebar Divider")
     }
+}
 
+extension SwiftEditRootView {
     /// Flat Zed-style tabs: the active tab merges with the canvas under a 2 pt accent line; close shows on the active or
     /// hovered tab, a dot marks unsaved tabs, a small pin marks pinned ones; reorder/pin live in drag and context menu (R-03).
     private var tabBar: some View {
@@ -377,7 +382,19 @@ public struct SwiftEditRootView: View {
                         Button("Move Tab Right") { model.moveTabRight(id: tab.id) }
                         Divider()
                         Button(tab.isPinned ? "Unpin Tab" : "Pin Tab") { model.togglePin(id: tab.id) }
+                        Divider()
                         Button("Close Tab") { model.requestCloseTab(id: tab.id) }
+                            .disabled(tab.isPinned)
+                        Button("Close Tabs to the Right") { model.requestCloseTabsToTheRight(of: tab.id) }
+                            .disabled(model.tabSession.unpinnedTabIDsToTheRight(of: tab.id).isEmpty)
+                        Button("Close Other Tabs") { model.requestCloseOtherTabs(keeping: tab.id) }
+                            .disabled(model.tabSession.unpinnedOtherTabIDs(keeping: tab.id).isEmpty)
+                        Button("Close All Unpinned Tabs") { model.requestCloseAllUnpinnedTabs() }
+                            .disabled(model.tabSession.unpinnedTabIDs().isEmpty)
+                        Button("Close All Tabs") { model.requestCloseAllTabs() }
+                    }
+                    .overlay {
+                        TabMiddleClickCatcher { model.handleMiddleClickTab(id: tab.id) }
                     }
                 }
             }
@@ -391,7 +408,7 @@ public struct SwiftEditRootView: View {
     }
 
     @ViewBuilder
-    private var safetyAndErrorBanners: some View {
+    var safetyAndErrorBanners: some View {
         if model.safetyBanner.isBinaryReadOnlyBannerVisible {
             HStack(spacing: 10) {
                 Text("READ-ONLY BINARY INSPECTION: Save, Format, Pin Tab, and SessionRecovery are disabled.")
@@ -416,6 +433,24 @@ public struct SwiftEditRootView: View {
                     border: model.palette.bidiWarningBorder,
                     verticalPadding: 5
                 )
+        }
+        if let activeID = model.tabSession.activeTabID, model.activeTabHasExternalConflict {
+            HStack(spacing: 10) {
+                Text("File modified externally on disk while this tab has unsaved edits.")
+                Spacer()
+                Button("Reload from Disk") { model.reloadConflictedTabFromDisk(id: activeID) }
+                    .buttonStyle(.bordered)
+                Button("Keep Mine") { model.keepLocalEditsForConflictedTab(id: activeID) }
+                    .buttonStyle(.bordered)
+                Button("Compare") { model.compareConflictedTabWithDisk(id: activeID) }
+                    .buttonStyle(.bordered)
+            }
+            .purpleSecurityWarningBanner(
+                foreground: model.palette.bidiWarningForeground,
+                background: model.palette.bidiWarningBackground,
+                border: model.palette.bidiWarningBorder,
+                verticalPadding: 6
+            )
         }
         if let message = model.statusBannerMessage {
             Text(message)
@@ -455,6 +490,41 @@ private struct HostingWindowFinder: NSViewRepresentable {
         if let win = nsView.window {
             onResolveWindow(win)
         }
+    }
+}
+
+/// Transparent AppKit responder overlay forwarding middle-mouse button clicks (`otherMouseUp`, button `2`) to close tabs without stealing primary clicks, hover, or drag (`REQ-002`).
+private struct TabMiddleClickCatcher: NSViewRepresentable {
+    let onMiddleClick: () -> Void
+
+    final class CatcherNSView: NSView {
+        var onMiddleClick: (() -> Void)?
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let current = NSApp.currentEvent,
+                  current.type == .otherMouseDown || current.type == .otherMouseUp else {
+                return nil
+            }
+            return bounds.contains(point) ? self : nil
+        }
+
+        override func otherMouseUp(with event: NSEvent) {
+            if event.buttonNumber == 2, bounds.contains(convert(event.locationInWindow, from: nil)) {
+                onMiddleClick?()
+                return
+            }
+            super.otherMouseUp(with: event)
+        }
+    }
+
+    func makeNSView(context: Context) -> CatcherNSView {
+        let v = CatcherNSView()
+        v.onMiddleClick = onMiddleClick
+        return v
+    }
+
+    func updateNSView(_ nsView: CatcherNSView, context: Context) {
+        nsView.onMiddleClick = onMiddleClick
     }
 }
 #endif

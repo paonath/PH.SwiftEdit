@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "030-semantic-syntax-color-schemes-and-html"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["semantic-syntax-color-schemes-and-html"]
+    path: "openspec/specs/semantic-syntax-color-schemes-and-html/spec.md"
+    summary: "Selectable WCAG-AA Semantic Syntax Color Schemes (Default, Catppuccin, GitHub, Tokyo Night) and Native HTML Highlighting"
   - id: "029-yaml-outline-empty-line-bounds-fix"
     status: "implemented"
     date: "2026-11-25"

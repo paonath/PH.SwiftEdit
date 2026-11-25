@@ -130,6 +130,9 @@ extension SwiftEditCommands {
         Button("Open All Files in Folder…") { model?.openAllFilesInFolderViaPanel() }
             .keyboardShortcut("o", modifiers: [.command, .shift, .option])
             .disabled(model == nil)
+        Button("Quick Open…") { model?.toggleQuickOpen() }
+            .keyboardShortcut("t", modifiers: .command)
+            .disabled(model?.grantedScopeRootURL == nil && model?.selectedFolderURL == nil)
         Menu("Open Recent") {
             if let entries = model?.recentFiles, entries.isEmpty == false {
                 ForEach(entries, id: \.standardizedPath) { entry in
@@ -155,10 +158,15 @@ extension SwiftEditCommands {
         Button("Save As…") { model?.saveActiveDocumentAsViaPanel() }
             .keyboardShortcut("s", modifiers: [.command, .shift])
             .disabled(model?.safetyBanner.canSave != true)
+        Button("Revert to Saved") { model?.revertActiveDocumentToSaved() }
+            .disabled(model?.activeDocumentSession?.fileURL == nil || model?.activeDocumentSession?.isDirty != true)
         Divider()
         Button("Close Document") { model?.requestCloseActiveTab() }
             .keyboardShortcut("w", modifiers: [.command, .shift])
             .disabled(model == nil)
+        Button("Reopen Closed Tab") { _ = model?.reopenLastClosedTab() }
+            .keyboardShortcut("t", modifiers: [.command, .shift])
+            .disabled(model?.bulkCloseAndHistoryController.closedFileURLs.isEmpty != false)
     }
 
     @ViewBuilder
@@ -167,9 +175,28 @@ extension SwiftEditCommands {
         Button("Duplicate Line or Selection") { model?.performCommandD() }
             .keyboardShortcut("d", modifiers: .command)
             .disabled(model?.safetyBanner.canSave != true)
-        Button("Format Markdown Document") { model?.formatActiveDocument() }
+        Menu("Lines") {
+            Button("Move Line Up") { model?.moveActiveLinesUp() }
+                .keyboardShortcut(.upArrow, modifiers: .option)
+            Button("Move Line Down") { model?.moveActiveLinesDown() }
+                .keyboardShortcut(.downArrow, modifiers: .option)
+            Button("Delete Line") { model?.deleteActiveLines() }
+                .keyboardShortcut("k", modifiers: [.control, .shift])
+            Button("Join Lines") { model?.joinActiveLines() }
+                .keyboardShortcut("j", modifiers: .control)
+            Divider()
+            Button("Sort Lines Ascending") { model?.sortActiveLines(ascending: true) }
+            Button("Sort Lines Descending") { model?.sortActiveLines(ascending: false) }
+            Button("Trim Trailing Whitespace") { model?.trimActiveDocumentTrailingWhitespace() }
+        }
+        .disabled(model?.safetyBanner.canSave != true)
+        Button(model?.activeDocumentLanguage == .json ? "Format JSON Document" : "Format Markdown Document") { model?.formatActiveDocument() }
             .keyboardShortcut("f", modifiers: [.command, .shift])
             .disabled(model?.safetyBanner.canFormat != true)
+        if model?.activeDocumentLanguage == .json {
+            Button("Minify JSON Document") { model?.minifyActiveJSONDocument() }
+                .disabled(model?.safetyBanner.canFormat != true)
+        }
         Button("Format Markdown Section") { model?.formatActiveSection() }
             .keyboardShortcut("f", modifiers: [.command, .shift, .option])
             .disabled(model?.safetyBanner.canFormat != true)
@@ -180,6 +207,12 @@ extension SwiftEditCommands {
         Button("Find and Replace…") { model?.presentFindBar(mode: .findAndReplace) }
             .keyboardShortcut("f", modifiers: [.command, .option])
             .disabled(model == nil)
+        Button("Use Selection for Find") { model?.useSelectionForFind() }
+            .keyboardShortcut("e", modifiers: [.command, .option])
+            .disabled(model?.currentSelection.length == 0)
+        Button("Find in Folder…") { model?.toggleFindInFolder() }
+            .keyboardShortcut("f", modifiers: [.control, .shift])
+            .disabled(model?.grantedScopeRootURL == nil && model?.selectedFolderURL == nil)
         Button("Go to Line…") { model?.presentFindBar(mode: .goToLine) }
             .keyboardShortcut("g", modifiers: .command)
             .disabled(model == nil)
@@ -245,6 +278,20 @@ extension SwiftEditCommands {
         Button(model?.isDistractionFree == true ? "Exit Distraction-Free" : "Distraction-Free") { model?.toggleDistractionFree() }
             .keyboardShortcut("1", modifiers: .option)
             .disabled(model == nil)
+        Divider()
+        Button("Next Tab") { model?.selectNextTab() }
+            .keyboardShortcut("]", modifiers: [.command, .shift])
+            .disabled(model?.tabSession.tabs.isEmpty != false)
+        Button("Previous Tab") { model?.selectPreviousTab() }
+            .keyboardShortcut("[", modifiers: [.command, .shift])
+            .disabled(model?.tabSession.tabs.isEmpty != false)
+        Divider()
+        Button("Next Difference") { model?.selectNextDiffHunk() }
+            .keyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF7FunctionKey)!)), modifiers: [])
+            .disabled(model?.showDiffPane != true || model?.diffCoordinator.hunkRowIndices.isEmpty != false)
+        Button("Previous Difference") { model?.selectPreviousDiffHunk() }
+            .keyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF7FunctionKey)!)), modifiers: [.shift])
+            .disabled(model?.showDiffPane != true || model?.diffCoordinator.hunkRowIndices.isEmpty != false)
     }
 
     @ViewBuilder

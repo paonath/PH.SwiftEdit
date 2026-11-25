@@ -331,3 +331,51 @@ public struct WorkspaceTabSession: Equatable, Sendable {
         return pinned + unpinned
     }
 }
+
+public extension WorkspaceTabSession {
+    /// Returns unpinned `DocumentID`s positioned strictly to the right of `id` in tab-bar order (`REQ-002`, `BC-006`, `BC-008`).
+    func unpinnedTabIDsToTheRight(of id: DocumentID) -> [DocumentID] {
+        guard let anchorIndex = tabs.firstIndex(where: { $0.id == id }),
+              anchorIndex + 1 < tabs.count else {
+            return []
+        }
+        return tabs[(anchorIndex + 1)...].filter { !$0.isPinned }.map(\.id)
+    }
+
+    /// Returns all unpinned `DocumentID`s except `id` when `id` is present in `tabs` (`REQ-002`, `BC-006`, `BC-008`).
+    func unpinnedOtherTabIDs(keeping id: DocumentID) -> [DocumentID] {
+        guard tabs.contains(where: { $0.id == id }) else { return [] }
+        return tabs.filter { $0.id != id && !$0.isPinned }.map(\.id)
+    }
+
+    /// Returns all currently open unpinned `DocumentID`s in tab-bar order (`REQ-002`).
+    func unpinnedTabIDs() -> [DocumentID] {
+        tabs.filter { !$0.isPinned }.map(\.id)
+    }
+
+    /// Returns all currently open `DocumentID`s (pinned and unpinned) in tab-bar order (`REQ-002`).
+    func allTabIDs() -> [DocumentID] {
+        tabs.map(\.id)
+    }
+
+    /// Cycles `activeTabID` forward (`+1`) or backward (`-1`) modulo `tabs.count` (`REQ-002`).
+    mutating func activateAdjacentTab(offset: Int) {
+        guard !tabs.isEmpty else { return }
+        let currentIndex = activeTabID.flatMap { active in tabs.firstIndex(where: { $0.id == active }) } ?? 0
+        let count = tabs.count
+        let nextIndex = ((currentIndex + offset) % count + count) % count
+        activeTabID = tabs[nextIndex].id
+    }
+
+    /// Selects the 1-based tab index (`1..8` selects position `1..8` when in bounds; `9` selects the last tab, matching macOS tab bar conventions) (`REQ-002`).
+    mutating func activateTabAtShortcutIndex(_ oneBasedIndex: Int) {
+        guard (1...9).contains(oneBasedIndex), !tabs.isEmpty else { return }
+        if oneBasedIndex == 9 {
+            activeTabID = tabs.last?.id
+            return
+        }
+        let targetIndex = oneBasedIndex - 1
+        guard targetIndex < tabs.count else { return }
+        activeTabID = tabs[targetIndex].id
+    }
+}

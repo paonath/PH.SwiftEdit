@@ -54,6 +54,9 @@ public enum YAMLLineTokenizer {
         if yamlTokenizerHasDocMarkerPrefix(line, end: end) {
             return StructuralLine(isIgnored: true, hasDash: false, keyRange: nil, endsWithBlockScalar: false)
         }
+        guard indent >= 0, base + indent < end else {
+            return StructuralLine(isIgnored: true, hasDash: false, keyRange: nil, endsWithBlockScalar: false)
+        }
         var i = base + indent
         yamlTokenizerSkipBlanks(line, cursor: &i, end: end)
         let hasDash = yamlTokenizerConsumeSequenceDashes(line, cursor: &i, end: end)
@@ -106,7 +109,9 @@ public enum YAMLLineTokenizer {
     }
 
     /// Returns the key's exclusive upper bound (trailing blanks trimmed) and the colon offset when a mapping key starts at `i`.
+    /// Fails closed (`nil`) on empty or out-of-bounds slice ranges (`CWE-125`, `CWE-129`, `SEC-012`).
     static func keyEnd(_ line: ArraySlice<UInt16>, from i: Int, end: Int) -> (keyUpper: Int, colon: Int)? {
+        guard i >= line.startIndex, i < end, end <= line.endIndex else { return nil }
         let first = line[i]
         if first == dquote || first == squote {
             let close = quotedEnd(line, from: i, end: end)
@@ -119,7 +124,11 @@ public enum YAMLLineTokenizer {
     }
 
     /// Exclusive end of a quoted scalar starting at `i`; an unterminated quote ends at `end`.
+    /// Fails closed by clamping out-of-bounds or empty ranges into `line.startIndex...line.endIndex` (`CWE-125`, `CWE-129`, `SEC-012`).
     static func quotedEnd(_ line: ArraySlice<UInt16>, from i: Int, end: Int) -> Int {
+        guard i >= line.startIndex, i < end, end <= line.endIndex else {
+            return min(max(i, line.startIndex), line.endIndex)
+        }
         let q = line[i]
         var k = i + 1
         while k < end {

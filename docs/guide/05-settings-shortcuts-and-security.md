@@ -23,7 +23,7 @@ Open **SwiftEdit → Settings…** (`Cmd+,`) to configure appearance, fonts, edi
   - Independently select **Interface Font** and **Editor Font** from installed system fonts, default monospaced, or the bundled **OpenDyslexic** font family.
   - Font changes apply live across the entire interface without mutating any document buffer.
 - **Editor Behavior**:
-  - **Word Wrap** (`Cmd+W`), **Editor Zoom** (`50%–300%`), **Launch in Full Screen** (enabled by default), and **Embedded Terminal Height**.
+  - **Word Wrap** (`Cmd+W`), **Trim Trailing Whitespace on Save**, **Editor Zoom** (`50%–300%`), **Launch in Full Screen** (enabled by default), and **Embedded Terminal Height**.
 - **Terminal**:
   - Choose **Auto** or a specific installed external terminal for Folder Navigator **Open Terminal** handoff.
 
@@ -45,6 +45,8 @@ SwiftEdit provides two interactive ways to browse and execute shortcuts:
 | Open File | `Cmd+O` | Open an existing file into a tab |
 | Open Folder | `Shift+Cmd+O` | Mount a workspace folder and expand the Folder Navigator |
 | Open All Files in Folder | `Option+Shift+Cmd+O` | Open shallow non-binary text files in a folder (confirms `> 50` files) |
+| Quick Open | `Cmd+T` | Search and open workspace files by name or relative path |
+| Reopen Closed Tab | `Shift+Cmd+T` | Reopen the most recently closed file-backed tab (`<= 20`) |
 | Save | `Cmd+S` | Atomically save preserving encoding and `LF`/`CRLF`/`CR` |
 | Save As | `Shift+Cmd+S` | Save the active document to a new path |
 | Close Document | `Shift+Cmd+W` | Close the active tab (prompts if unsaved; blocked on pinned tabs) |
@@ -57,6 +59,11 @@ SwiftEdit provides two interactive ways to browse and execute shortcuts:
 | Undo / Redo | `Cmd+Z` / `Shift+Cmd+Z` | Per-tab isolated undo and redo |
 | Cut / Copy / Paste / Select All | `Cmd+X` / `Cmd+C` / `Cmd+V` / `Cmd+A` | Standard clipboard and selection operations |
 | Duplicate Line or Selection | `Cmd+D` | Duplicate current line or selected range |
+| Move Line Up / Down | `Option+Up` / `Option+Down` | Swap active or selected lines upward or downward |
+| Delete Line / Join Lines | `Ctrl+Shift+K` / `Ctrl+J` | Delete active line(s) or join adjacent lines |
+| Use Selection for Find / Find in Folder | `Option+Cmd+E` / `Ctrl+Shift+F` | Populate Find from selection or search across workspace files |
+| Next / Previous Tab | `Shift+Cmd+]` / `Shift+Cmd+[` | Cycle through open workspace tabs (`Cmd+1..9` jumps directly) |
+| Next / Previous Difference | `F7` / `Shift+F7` | Jump across hunks in the File Compare diff pane |
 | Accept Word Completion | `Tab` | Accept inline ghost-text suggestion (`Esc` dismisses) |
 | Contextual Actions | `Cmd+Return` | Open Surround With (selection), Send to Terminal (selection), and Duplicate Document palette |
 | Format Markdown Document | `Shift+Cmd+F` | Format full Markdown document via AST |

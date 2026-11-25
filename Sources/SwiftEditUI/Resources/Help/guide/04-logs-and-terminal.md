@@ -33,6 +33,8 @@ When Live Log Tail is active, a compact control bar appears above the viewer:
 | :--- | :--- |
 | **Status Indicator** | Shows `Log · live` while tailing or `Log · stopped` when paused |
 | **Order (`Direct` / `Inverse`)** | Switches line order immediately without restarting the background tail |
+| **Severity (`All` / `Info+` / `Warn+` / `Error`)** | Non-destructively filters visible tail lines by minimum log level |
+| **Substring Filter (`Filter…`)** | Case-insensitive literal filter (`<= 256` chars) preserving the underlying `10,000`-line ring buffer |
 | **Lines (`80` default)** | Sets how many trailing lines are displayed (configurable from `1` to `10,000` via text field or stepper) |
 | **Stop / Resume** | Pauses or resumes live polling while keeping the last snapshot visible |
 | **Close (`×`)** | Closes the live tail panel and returns to normal editing (unavailable on >64 MiB tail-only tabs) |

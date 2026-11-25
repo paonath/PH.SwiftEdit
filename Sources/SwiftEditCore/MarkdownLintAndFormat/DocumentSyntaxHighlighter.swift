@@ -14,6 +14,8 @@ public enum DocumentSyntaxHighlighter {
         switch language {
         case .markdown: return MarkdownSyntaxHighlighter.spans(index: index, visibleRange: visibleRange)
         case .yaml: return YAMLSyntaxHighlighter.spans(index: index, visibleRange: visibleRange)
+        case .json: return JSONSyntaxHighlighter.spans(index: index, visibleRange: visibleRange)
+        case .html: return HTMLSyntaxHighlighter.spans(index: index, visibleRange: visibleRange)
         case .log: return LogSyntaxHighlighter.spans(index: index, visibleRange: visibleRange)
         case .plainText: return []
         }

@@ -5,10 +5,12 @@ import Foundation
 /// A closed `enum` (not a language-plugin protocol) with a handful of variants; dispatch stays an explicit,
 /// allocation-free `switch` at each engine entry point.
 public enum DocumentLanguage: String, Codable, Sendable, CaseIterable {
-    case markdown, yaml, log, plainText
+    case markdown, yaml, json, html, log, plainText
 
     private static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd"]
     private static let yamlExtensions: Set<String> = ["yml", "yaml"]
+    private static let jsonExtensions: Set<String> = ["json", "jsonl"]
+    private static let htmlExtensions: Set<String> = ["html", "htm"]
     private static let logExtensions: Set<String> = ["log"]
 
     /// Status-bar label (`UI-001`).
@@ -16,6 +18,8 @@ public enum DocumentLanguage: String, Codable, Sendable, CaseIterable {
         switch self {
         case .markdown: return "Markdown"
         case .yaml: return "YAML"
+        case .json: return "JSON"
+        case .html: return "HTML"
         case .log: return "Log"
         case .plainText: return "Plain Text"
         }
@@ -34,6 +38,8 @@ public enum DocumentLanguage: String, Codable, Sendable, CaseIterable {
         if ext.isEmpty { return filename.hasPrefix("Untitled") ? .markdown : .plainText }
         if markdownExtensions.contains(ext) { return .markdown }
         if yamlExtensions.contains(ext) { return .yaml }
+        if jsonExtensions.contains(ext) { return .json }
+        if htmlExtensions.contains(ext) { return .html }
         if logExtensions.contains(ext) { return .log }
         return .plainText
     }

@@ -65,6 +65,13 @@ public struct FindReplaceGoToLineBar: View {
                             .onSubmit { onFind() }
                         Toggle("Aa", isOn: $state.isCaseSensitive)
                             .toggleStyle(.button)
+                            .help("Match Case")
+                        Toggle("Ww", isOn: $state.isWholeWord)
+                            .toggleStyle(.button)
+                            .help("Match Whole Word")
+                        Toggle("In Sel", isOn: $state.isInSelection)
+                            .toggleStyle(.button)
+                            .help("Search in Selection")
                         Button("Find") { onFind() }
                         Button { onFindPrevious() } label: { AppIconView(.chevronUp, size: 13).minimumHitTarget() }
                             .buttonStyle(.plain)
@@ -76,8 +83,9 @@ public struct FindReplaceGoToLineBar: View {
                             .disabled(state.matches.isEmpty)
                             .help("Next match")
                             .accessibilityLabel("Next match")
-                        Text("\(state.matches.count) match(es)")
+                        Text(state.counterLabel)
                             .appFont(.caption, monospaced: true)
+                            .accessibilityLabel("Match \(state.counterLabel)")
                         if state.mode == .findAndReplace {
                             TextField("Replace…", text: $state.replacement)
                                 .textFieldStyle(.roundedBorder)

@@ -43,29 +43,51 @@ public final class PreviewThumbnailCache {
 @MainActor
 struct MarkdownNativePreviewView: View {
     let document: GFMPreviewDocument?
+    var enrichedDocument: GFMPreviewEnrichedDocument? = nil
     let palette: PurpleThemePalette
     let gate: PreviewResourceAndLinkGate?
     let activeSourceLine: Int
+    var zoomPercent: Int = 100
+    var onCopyCode: (String) -> Void = { _ in }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pendingLinkURI: String?
 
+    private var metrics: ZoomedChromeMetrics {
+        ZoomedChromeMetrics(zoomPercent: zoomPercent)
+    }
+
+    private var activeBlocks: [GFMPreviewBlock] {
+        enrichedDocument?.blocks ?? document?.blocks ?? []
+    }
+
     var body: some View {
+        let currentMetrics = metrics
+        let blocks = activeBlocks
+        let ordinals = enrichedDocument?.orderedOrdinals ?? document?.orderedOrdinals ?? []
+        let imageSlots = enrichedDocument?.imageEntriesByBlock ?? document?.imageEntriesByBlock ?? []
+        let fenceLanguages = enrichedDocument?.fenceLanguagesByBlock ?? []
+        let diagrams = enrichedDocument?.diagramsByBlock ?? []
+        let frontmatter = enrichedDocument?.frontmatterEntries ?? []
+
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: currentMetrics.previewBlockSpacing) {
                     Text("PREVIEW")
-                        .appFont(.caption2, weight: .semibold)
+                        .appFont(size: currentMetrics.previewHeaderLabelFontSize, weight: .semibold)
                         .tracking(0.8)
                         .foregroundStyle(palette.secondaryForeground.swiftUIColor)
                         .accessibilityLabel("Preview")
-                    let allBlocks = document?.blocks ?? []
-                    let ordinals = document?.orderedOrdinals ?? []
-                    let imageSlots = document?.imageEntriesByBlock ?? []
-                    ForEach(allBlocks.indices, id: \.self) { offset in
+                    if !frontmatter.isEmpty {
+                        frontmatterMetadataCard(entries: frontmatter, metrics: currentMetrics)
+                    }
+                    ForEach(blocks.indices, id: \.self) { offset in
                         blockView(
-                            allBlocks[offset],
+                            blocks[offset],
                             ordinal: offset < ordinals.count ? ordinals[offset] : 1,
-                            imageEntries: offset < imageSlots.count ? imageSlots[offset] : []
+                            imageEntries: offset < imageSlots.count ? imageSlots[offset] : [],
+                            fenceLanguage: offset < fenceLanguages.count ? fenceLanguages[offset] : nil,
+                            diagram: offset < diagrams.count ? diagrams[offset] : nil,
+                            metrics: currentMetrics
                         )
                         .id(offset)
                     }
@@ -74,13 +96,14 @@ struct MarkdownNativePreviewView: View {
                 .padding(.vertical, 14)
             }
             .onChange(of: activeSourceLine) { _, line in
-                guard let blocks = document?.blocks, !blocks.isEmpty else { return }
+                let targetBlocks = activeBlocks
+                guard !targetBlocks.isEmpty else { return }
                 // Binary search monotonically ordered `sourceLine` values in O(log B).
                 var lo = 0
-                var hi = blocks.count
+                var hi = targetBlocks.count
                 while lo < hi {
                     let mid = lo + (hi - lo) / 2
-                    if blocks[mid].sourceLine <= line { lo = mid + 1 } else { hi = mid }
+                    if targetBlocks[mid].sourceLine <= line { lo = mid + 1 } else { hi = mid }
                 }
                 guard lo > 0 else { return }
                 let target = lo - 1
@@ -108,56 +131,123 @@ struct MarkdownNativePreviewView: View {
         .accessibilityLabel("Markdown Preview")
     }
 
+    private func frontmatterMetadataCard(entries: [GFMPreviewFrontmatterEntry], metrics: ZoomedChromeMetrics) -> some View {
+        VStack(alignment: .leading, spacing: 4 * metrics.factor) {
+            Text("PROPERTIES")
+                .appFont(size: metrics.previewCaptionFontSize, weight: .semibold)
+                .tracking(0.6)
+                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+            Grid(alignment: .leading, horizontalSpacing: 12 * metrics.factor, verticalSpacing: 4 * metrics.factor) {
+                ForEach(entries.indices, id: \.self) { idx in
+                    GridRow {
+                        Text(verbatim: entries[idx].key)
+                            .appFont(size: metrics.previewCaptionFontSize, weight: .semibold, monospaced: true)
+                            .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                        Text(verbatim: entries[idx].displayValue)
+                            .appFont(size: metrics.previewBodyFontSize)
+                            .foregroundStyle(palette.chromeForeground.swiftUIColor)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.badgeSurface.swiftUIColor, in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(palette.hairlineBorder.swiftUIColor, lineWidth: 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Frontmatter properties")
+    }
+
     @ViewBuilder
     private func blockView(
         _ block: GFMPreviewBlock,
         ordinal: Int,
-        imageEntries: [GFMPreviewImageEntry]
+        imageEntries: [GFMPreviewImageEntry],
+        fenceLanguage: String?,
+        diagram: MarkdownDiagramModel?,
+        metrics: ZoomedChromeMetrics
     ) -> some View {
         switch block {
         case .heading(let level, let text, _):
+            let headingSize = level <= 1 ? metrics.previewH1FontSize
+                : (level == 2 ? metrics.previewH2FontSize : (level == 3 ? metrics.previewH3FontSize : metrics.previewBodyFontSize))
             Text(inline(text))
-                .appFont(level <= 1 ? .title : (level == 2 ? .title2 : .title3), weight: level <= 2 ? .semibold : .medium)
+                .appFont(size: headingSize, weight: level <= 2 ? .semibold : .medium)
                 .foregroundStyle(palette.chromeForeground.swiftUIColor)
-                .padding(.top, level <= 2 ? 6 : 2)
+                .padding(.top, (level <= 2 ? 6 : 2) * metrics.factor)
         case .paragraph(let text, _):
-            VStack(alignment: .leading, spacing: 6) {
-                Text(inline(text)).foregroundStyle(palette.chromeForeground.swiftUIColor)
-                imageViews(entries: imageEntries)
+            VStack(alignment: .leading, spacing: 6 * metrics.factor) {
+                Text(inline(text))
+                    .appFont(size: metrics.previewBodyFontSize)
+                    .foregroundStyle(palette.chromeForeground.swiftUIColor)
+                imageViews(entries: imageEntries, metrics: metrics)
             }
         case .listItem(let text, let ordered, let indent, let task, _):
-            HStack(alignment: .top, spacing: 6) {
+            HStack(alignment: .top, spacing: 6 * metrics.factor) {
                 Text(MarkdownPreviewProjector.listMarkerText(ordered: ordered, taskChecked: task, ordinal: ordinal))
-                VStack(alignment: .leading, spacing: 4) {
+                    .appFont(size: metrics.previewBodyFontSize)
+                VStack(alignment: .leading, spacing: 4 * metrics.factor) {
                     Text(inline(text))
-                    imageViews(entries: imageEntries)
+                        .appFont(size: metrics.previewBodyFontSize)
+                    imageViews(entries: imageEntries, metrics: metrics)
                 }
             }
-            .padding(.leading, CGFloat(indent) * 4)
+            .padding(.leading, CGFloat(indent) * metrics.previewIndentStep)
             .foregroundStyle(palette.chromeForeground.swiftUIColor)
         case .quote(let text, _):
-            Text(inline(text)).foregroundStyle(palette.secondaryForeground.swiftUIColor)
-                .padding(.leading, 10)
-                .overlay(alignment: .leading) { Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(width: 3) }
+            Text(inline(text))
+                .appFont(size: metrics.previewBodyFontSize)
+                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                .padding(.leading, 10 * metrics.factor)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(width: metrics.previewQuoteBarWidth)
+                }
         case .table(let header, let rows, _):
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
-                GridRow { ForEach(header.indices, id: \.self) { idx in Text(inline(header[idx])).bold() } }
+            Grid(alignment: .leading, horizontalSpacing: 12 * metrics.factor, verticalSpacing: 4 * metrics.factor) {
+                GridRow {
+                    ForEach(header.indices, id: \.self) { idx in
+                        Text(inline(header[idx])).appFont(size: metrics.previewBodyFontSize, weight: .semibold)
+                    }
+                }
                 Divider()
                 ForEach(rows.indices, id: \.self) { rowIdx in
                     let row = rows[rowIdx]
-                    GridRow { ForEach(row.indices, id: \.self) { colIdx in Text(inline(row[colIdx])) } }
+                    GridRow {
+                        ForEach(row.indices, id: \.self) { colIdx in
+                            Text(inline(row[colIdx])).appFont(size: metrics.previewBodyFontSize)
+                        }
+                    }
                 }
             }
             .foregroundStyle(palette.chromeForeground.swiftUIColor)
         case .code(let text, _):
-            Text(text).appFont(.body, monospaced: true).padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(palette.backtickMultilineBackground.swiftUIColor)
-                .foregroundStyle(palette.backtickForeground.swiftUIColor)
+            if let diagram {
+                MarkdownDiagramPreviewView(
+                    diagram: diagram,
+                    rawCode: text,
+                    languageLabel: fenceLanguage,
+                    palette: palette,
+                    metrics: metrics,
+                    onCopyCode: onCopyCode
+                )
+            } else {
+                PreviewCodeFenceBlockView(
+                    text: text,
+                    languageLabel: fenceLanguage,
+                    palette: palette,
+                    metrics: metrics,
+                    onCopyCode: onCopyCode
+                )
+            }
         case .thematicBreak:
             Divider()
         case .inertHTML(let text, _):
-            Text(text).appFont(.body, monospaced: true).padding(6)
+            Text(text)
+                .appFont(size: metrics.previewCodeFontSize, monospaced: true, role: .editor)
+                .padding(6 * metrics.factor)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .foregroundStyle(palette.inertHTMLWarningForeground.swiftUIColor)
                 .background(palette.inertHTMLWarningBackground.swiftUIColor)
@@ -167,14 +257,22 @@ struct MarkdownNativePreviewView: View {
     }
 
     @ViewBuilder
-    private func imageViews(entries: [GFMPreviewImageEntry]) -> some View {
+    private func imageViews(entries: [GFMPreviewImageEntry], metrics: ZoomedChromeMetrics) -> some View {
         ForEach(entries.indices, id: \.self) { idx in
             let entry = entries[idx]
             if let gate {
-                PreviewThumbnailTileView(gate: gate, reference: entry.reference, documentIndex: entry.documentIndex, palette: palette)
+                PreviewThumbnailTileView(
+                    gate: gate,
+                    reference: entry.reference,
+                    documentIndex: entry.documentIndex,
+                    palette: palette,
+                    maxWidth: metrics.previewThumbnailMaxWidth,
+                    captionFontSize: metrics.previewCaptionFontSize
+                )
             } else {
-                Label { Text("Image blocked or offline") } icon: { AppIconView(.imageOff, size: 13) }
-                    .appFont(.caption).foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                Label { Text("Image blocked or offline") } icon: { AppIconView(.imageOff, size: max(12, 13 * metrics.factor)) }
+                    .appFont(size: metrics.previewCaptionFontSize)
+                    .foregroundStyle(palette.secondaryForeground.swiftUIColor)
             }
         }
     }
@@ -182,6 +280,41 @@ struct MarkdownNativePreviewView: View {
     /// Inline Markdown only (bold, italic, code, links); plain text bypasses the Foundation Markdown parser and parsed runs are cached (`PERF-005`).
     private func inline(_ text: String) -> AttributedString {
         InlineMarkdownRenderCache.shared.attributedString(for: text)
+    }
+}
+
+/// Fenced code block card with zoom-scaled `.editor` typography and mandatory top-right Copy to Clipboard button (`REQ-003`).
+@MainActor
+private struct PreviewCodeFenceBlockView: View {
+    let text: String
+    let languageLabel: String?
+    let palette: PurpleThemePalette
+    let metrics: ZoomedChromeMetrics
+    let onCopyCode: (String) -> Void
+    @State private var unusedToggle = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            PreviewFenceHeaderToolbarView(
+                languageBadge: languageLabel,
+                hasDiagramToggle: false,
+                showRawCode: $unusedToggle,
+                rawCode: text,
+                palette: palette,
+                metrics: metrics,
+                onCopyCode: onCopyCode
+            )
+            Text(text)
+                .appFont(size: metrics.previewCodeFontSize, monospaced: true, role: .editor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .foregroundStyle(palette.backtickForeground.swiftUIColor)
+        }
+        .padding(8)
+        .background(palette.backtickMultilineBackground.swiftUIColor, in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(palette.hairlineBorder.swiftUIColor, lineWidth: 1)
+        }
     }
 }
 
@@ -242,6 +375,8 @@ private struct PreviewThumbnailTileView: View {
     let reference: String
     let documentIndex: Int
     let palette: PurpleThemePalette
+    var maxWidth: CGFloat = 480
+    var captionFontSize: CGFloat = 10
     @State private var loadedImage: NSImage?
     @State private var isBlocked = false
 
@@ -251,11 +386,11 @@ private struct PreviewThumbnailTileView: View {
         Group {
             if let loadedImage {
                 Image(nsImage: loadedImage)
-                    .resizable().scaledToFit().frame(maxWidth: 480)
+                    .resizable().scaledToFit().frame(maxWidth: maxWidth)
                     .accessibilityLabel("Image \(reference)")
             } else if isBlocked {
                 Label { Text("Image blocked or offline") } icon: { AppIconView(.imageOff, size: 13) }
-                    .appFont(.caption).foregroundStyle(palette.secondaryForeground.swiftUIColor)
+                    .appFont(size: captionFontSize).foregroundStyle(palette.secondaryForeground.swiftUIColor)
             } else {
                 ProgressView().controlSize(.small)
             }

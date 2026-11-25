@@ -289,6 +289,28 @@ private struct FontPickerColumn: View {
             .onKeyPress(.upArrow) { settings.moveHighlight(by: -1, for: role); return .handled }
             .onKeyPress(.return) { settings.confirmHighlight(for: role); return .handled }
             if role == .editor {
+                HStack(spacing: 8) {
+                    Text("Syntax Scheme")
+                        .appFont(.callout, weight: .medium)
+                    Picker("Syntax Scheme", selection: Binding(
+                        get: { settings.model.syntaxColorScheme },
+                        set: { settings.model.syntaxColorScheme = $0 }
+                    )) {
+                        ForEach(SyntaxColorScheme.allCases) { scheme in
+                            Text(scheme.displayName).tag(scheme)
+                        }
+                    }
+                    .labelsHidden()
+                    .accessibilityLabel("Syntax Color Scheme")
+                }
+                Toggle(
+                    "Trim trailing whitespace on save",
+                    isOn: Binding(
+                        get: { settings.model.trimTrailingWhitespaceOnSave },
+                        set: { settings.model.trimTrailingWhitespaceOnSave = $0 }
+                    )
+                )
+                .appFont(.callout)
                 Text("Proportional fonts do not align table or code columns.")
                     .appFont(.caption)
                     .foregroundStyle(.secondary)

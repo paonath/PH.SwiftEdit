@@ -155,11 +155,21 @@ public struct FindReplaceBarState: Equatable, Sendable {
     public var query: String = ""
     public var replacement: String = ""
     public var isCaseSensitive: Bool = false
+    public var isWholeWord: Bool = false
+    public var isInSelection: Bool = false
+    public var scopedSelectionRange: SwiftEditCore.TextRange? = nil
     public var goToLineText: String = ""
     public var matches: [SwiftEditCore.TextRange] = []
     public var activeMatchIndex: Int = 0
 
     public init() {}
+
+    /// 1-based `"k of N"` active match indicator (`"0 of 0"` when `matches` is empty) (`REQ-008`).
+    public var counterLabel: String {
+        guard !matches.isEmpty else { return "0 of 0" }
+        let oneBased = min(matches.count, max(1, activeMatchIndex + 1))
+        return "\(oneBased) of \(matches.count)"
+    }
 
     /// Advances `activeMatchIndex` forward modulo `matches.count` and returns the selected `TextRange` (`nil` when `matches` is empty).
     public mutating func selectNextMatch() -> SwiftEditCore.TextRange? {

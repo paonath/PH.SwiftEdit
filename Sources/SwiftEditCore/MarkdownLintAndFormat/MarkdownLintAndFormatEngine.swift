@@ -17,6 +17,8 @@ public enum MarkdownLintRuleID: String, Codable, Sendable, CaseIterable {
     case trailingSpaces, hardTabs, multipleBlankLines
     // YAML structural rules (`YML001`..`YML005`) for `.yaml` tabs and Markdown frontmatter (`REQ-004`).
     case yamlTabIndentation, yamlDuplicateKey, yamlInconsistentIndent, yamlUnterminatedFrontmatter, yamlNestingTooDeep
+    // JSON structural rules (`JSN001`..`JSN003`) for `.json` and `.jsonl` tabs (`REQ-010`).
+    case jsonSyntaxError, jsonNestingTooDeep, jsonTrailingComma
 
     /// One-sentence English explanation shown when hovering a gutter lint badge.
     public var explanation: String {
@@ -52,10 +54,13 @@ public enum MarkdownLintRuleID: String, Codable, Sendable, CaseIterable {
         case .yamlInconsistentIndent: return "Indentation steps should be consistent so nesting is unambiguous."
         case .yamlUnterminatedFrontmatter: return "The frontmatter block opened with --- must be closed with --- before the body."
         case .yamlNestingTooDeep: return "Nesting deeper than 32 levels is not inspected."
+        case .jsonSyntaxError: return "JSON syntax is invalid; check braces, brackets, colons, commas, and string quotes."
+        case .jsonNestingTooDeep: return "JSON nesting deeper than 128 levels exceeds the safe structural inspection limit."
+        case .jsonTrailingComma: return "Standard JSON forbids trailing commas before closing '}' or ']' delimiters."
         }
     }
 
-    /// Stable short code for YAML rules (`YML00x`); Markdown rules keep their case name.
+    /// Stable short code for YAML (`YML00x`) and JSON (`JSN00x`) rules; Markdown rules keep their case name.
     public var code: String {
         switch self {
         case .yamlTabIndentation: return "YML001"
@@ -63,6 +68,9 @@ public enum MarkdownLintRuleID: String, Codable, Sendable, CaseIterable {
         case .yamlInconsistentIndent: return "YML003"
         case .yamlUnterminatedFrontmatter: return "YML004"
         case .yamlNestingTooDeep: return "YML005"
+        case .jsonSyntaxError: return "JSN001"
+        case .jsonTrailingComma: return "JSN002"
+        case .jsonNestingTooDeep: return "JSN003"
         default: return rawValue
         }
     }
@@ -75,7 +83,7 @@ public enum MarkdownLintRuleID: String, Codable, Sendable, CaseIterable {
     /// Severity classification: structural and security findings are errors, style findings are warnings.
     public var severity: MarkdownLintSeverity {
         switch self {
-        case .unsafeLinkScheme, .unsafeImagePath, .unbalancedFencedCodeBlock, .emptyLinkTarget: return .error
+        case .unsafeLinkScheme, .unsafeImagePath, .unbalancedFencedCodeBlock, .emptyLinkTarget, .jsonSyntaxError, .jsonTrailingComma: return .error
         default: return .warning
         }
     }

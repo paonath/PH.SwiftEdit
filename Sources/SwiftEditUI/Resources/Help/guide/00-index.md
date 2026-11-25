@@ -11,7 +11,7 @@ review_date: "2026-12-23"
 
 Welcome to the official documentation for **SwiftEdit**, a lightweight, fast, and private native text editor for macOS written in Swift 6.
 
-SwiftEdit is built directly on Apple frameworks (**SwiftUI**, **AppKit**, and **TextKit 2**) for editing **Markdown**, **YAML**, **log files**, and **plain text** with a high-contrast black-and-white editor canvas (`21:1` contrast ratio), neutral chrome with purple accents, an integrated live log viewer, and an embedded GPU-accelerated terminal.
+SwiftEdit is built directly on Apple frameworks (**SwiftUI**, **AppKit**, and **TextKit 2**) for editing **Markdown**, **YAML**, **JSON / JSON Lines**, **log files**, and **plain text** with a high-contrast black-and-white editor canvas (`21:1` contrast ratio), neutral chrome with purple accents, native offline Markmap and Mermaid diagram rendering, an integrated live log viewer, and an embedded GPU-accelerated terminal.
 
 ![SwiftEdit Workspace in Light Mode](images/workbench-light.png)
 

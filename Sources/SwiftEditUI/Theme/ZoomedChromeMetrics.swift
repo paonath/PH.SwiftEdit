@@ -62,3 +62,26 @@ extension ZoomedChromeMetrics {
          navigatorFontSize, navigatorHeaderFontSize, navigatorIconSize, navigatorRowHeight, navigatorIndent]
     }
 }
+
+extension ZoomedChromeMetrics {
+    // Markdown preview typography and spacing scaled linearly by `factor` (`50%..300%`, `REQ-003`, `UI-004`, `UI-009`).
+    public var previewHeaderLabelFontSize: CGFloat { 10 * factor }
+    public var previewH1FontSize: CGFloat { 22 * factor }
+    public var previewH2FontSize: CGFloat { 17 * factor }
+    public var previewH3FontSize: CGFloat { 15 * factor }
+    public var previewBodyFontSize: CGFloat { 13 * factor }
+    public var previewCodeFontSize: CGFloat { 13 * factor }
+    public var previewCaptionFontSize: CGFloat { 10 * factor }
+    public var previewBlockSpacing: CGFloat { 10 * factor }
+    public var previewIndentStep: CGFloat { 4 * factor }
+    public var previewQuoteBarWidth: CGFloat { max(2, 3 * factor) }
+    public var previewThumbnailMaxWidth: CGFloat { 480 * factor }
+    public var previewActionTarget: CGFloat { floored(24) }
+
+    // Diff view & compare header scaled linearly by `factor` (`50%..300%`, `REQ-005`, `UI-004`, `UI-009`).
+    public var diffFontSize: CGFloat { 13 * factor }
+    public var diffHeaderFontSize: CGFloat { 12 * factor }
+    public var diffHeaderBadgeFontSize: CGFloat { 10 * factor }
+    public var diffLineNumberWidth: CGFloat { max(32, 40 * factor) }
+    public var diffActionTarget: CGFloat { floored(24) }
+}

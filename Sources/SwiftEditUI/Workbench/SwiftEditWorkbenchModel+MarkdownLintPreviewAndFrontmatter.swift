@@ -71,6 +71,7 @@ extension SwiftEditWorkbenchModel {
         } catch {
             return .staleRevision
         }
+        session.reconcileDirtyState(against: savedBaselineByID[activeID])
         sessionsByID[activeID] = session
         try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
         syncUntitledTabTitleIfNeeded(for: activeID, session: session)
@@ -88,17 +89,40 @@ extension SwiftEditWorkbenchModel {
     public var markdownPreviewDocument: GFMPreviewDocument? {
         _ = previewGeneration
         guard showMarkdownPreview, isMarkdownMenuEnabled, let session = activeDocumentSession else { return nil }
-        if let cache = caches.previewCache, cache.id == session.id, cache.revision == session.revision { return cache.document }
+        if let cache = caches.previewCache, cache.id == session.id, cache.revision == session.revision, let doc = cache.document {
+            return doc
+        }
         guard session.text.utf8.count <= Self.syncPreviewThresholdUTF8 else {
             return caches.previewCache?.id == session.id ? caches.previewCache?.document : nil
         }
-        let document = MarkdownPreviewProjector.project(
-            snapshot: session.snapshot,
-            showPreview: true,
-            lineIndex: activeLineIndex()
-        )
-        caches.previewCache = (session.id, session.revision, document)
+        let idx = activeLineIndex()
+        let document = MarkdownPreviewProjector.project(snapshot: session.snapshot, showPreview: true, lineIndex: idx)
+        let enriched = caches.previewCache?.id == session.id && caches.previewCache?.revision == session.revision ? caches.previewCache?.enriched : nil
+        caches.previewCache = (session.id, session.revision, document, enriched)
         return document
+    }
+
+    /// Enriched preview projection carrying structured YAML frontmatter metadata, fence languages, and pre-laid-out native diagrams (`REQ-003`, `REQ-004`).
+    public var enrichedMarkdownPreviewDocument: GFMPreviewEnrichedDocument? {
+        _ = previewGeneration
+        guard showMarkdownPreview, isMarkdownMenuEnabled, let session = activeDocumentSession else { return nil }
+        if let cache = caches.previewCache, cache.id == session.id, cache.revision == session.revision, let enriched = cache.enriched {
+            return enriched
+        }
+        guard session.text.utf8.count <= Self.syncPreviewThresholdUTF8 else {
+            return caches.previewCache?.id == session.id ? caches.previewCache?.enriched : nil
+        }
+        let idx = activeLineIndex()
+        let existingDoc = caches.previewCache?.id == session.id && caches.previewCache?.revision == session.revision ? caches.previewCache?.document : nil
+        let document = existingDoc ?? MarkdownPreviewProjector.project(snapshot: session.snapshot, showPreview: true, lineIndex: idx)
+        let enriched = MarkdownPreviewProjector.projectEnriched(snapshot: session.snapshot, showPreview: true, lineIndex: idx)
+        caches.previewCache = (session.id, session.revision, document, enriched)
+        return enriched
+    }
+
+    /// Copies the exact raw fenced code block text (excluding opening/closing backtick fences) to the system clipboard (`REQ-003`).
+    public func copyPreviewCodeBlock(_ code: String) {
+        deps.clipboardWriter(code)
     }
 
     /// 1-based source line of the caret counting `\r\n`, `\n`, and `\r`, cached per `(DocumentID, BufferRevision, caretLocation)` (`BUG-016`, `UI-007`).
@@ -339,6 +363,21 @@ extension SwiftEditWorkbenchModel {
         compareDestinationTabID = id
         diffCoordinator.clear()
         refreshCompare()
+    }
+
+    /// Advances to the next contiguous difference hunk in the Side-by-Side Diff pane (`F7`, `REQ-005`).
+    public func selectNextDiffHunk() {
+        diffCoordinator.selectNextHunk()
+    }
+
+    /// Moves to the previous contiguous difference hunk in the Side-by-Side Diff pane (`Shift+F7`, `REQ-005`).
+    public func selectPreviousDiffHunk() {
+        diffCoordinator.selectPreviousHunk()
+    }
+
+    /// Toggles context-folded `Only Differences` display in the Side-by-Side Diff pane (`REQ-005`).
+    public func toggleDiffOnlyDifferences() {
+        diffCoordinator.setOnlyDifferences(!diffCoordinator.onlyDifferences)
     }
 }
 

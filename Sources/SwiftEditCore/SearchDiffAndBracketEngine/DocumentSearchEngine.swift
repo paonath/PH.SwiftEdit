@@ -1,11 +1,19 @@
 import Foundation
 
-/// Case-sensitivity configuration for literal document search and replace (`BC-004`, `BC-011`).
+/// Case-sensitivity, whole-word, and selection-scope configuration for literal document search and replace (`BC-004`, `BC-011`, `REQ-008`).
 public struct SearchOptions: Equatable, Sendable {
     public let isCaseSensitive: Bool
+    public let isWholeWord: Bool
+    public let searchRange: TextRange?
 
-    public init(isCaseSensitive: Bool = false) {
+    public init(
+        isCaseSensitive: Bool = false,
+        isWholeWord: Bool = false,
+        searchRange: TextRange? = nil
+    ) {
         self.isCaseSensitive = isCaseSensitive
+        self.isWholeWord = isWholeWord
+        self.searchRange = searchRange
     }
 }
 
@@ -32,8 +40,8 @@ public enum DocumentSearchEngine {
             return .completed([])
         }
 
-        // Zero-bridging raw UTF-8 fast path for ASCII queries.
-        if query.utf8.allSatisfy({ $0 < 0x80 }) {
+        // Zero-bridging raw UTF-8 fast path for unconstrained non-whole-word ASCII queries.
+        if !options.isWholeWord, options.searchRange == nil, query.utf8.allSatisfy({ $0 < 0x80 }) {
             if let fastResult = findASCIIUTF8(
                 query: query,
                 in: snapshot.text,
@@ -46,8 +54,12 @@ public enum DocumentSearchEngine {
 
         let nsText = snapshot.text as NSString
         let totalLength = nsText.length
+        guard let initialBounds = docSearchResolveSearchBounds(options.searchRange, totalLength: totalLength) else {
+            return .completed([])
+        }
         let compareOptions: NSString.CompareOptions = options.isCaseSensitive ? [.literal] : [.caseInsensitive, .literal]
-        var searchRange = NSRange(location: 0, length: totalLength)
+        let boundsEnd = initialBounds.location + initialBounds.length
+        var searchRange = initialBounds
         var matches: [TextRange] = []
 
         while searchRange.length > 0 {
@@ -55,15 +67,21 @@ public enum DocumentSearchEngine {
             guard found.location != NSNotFound && found.length > 0 else {
                 break
             }
+            if options.isWholeWord, !docSearchHasWordBoundaries(in: nsText, location: found.location, length: found.length, totalLength: totalLength) {
+                let stepStart = found.location + 1
+                guard stepStart < boundsEnd else { break }
+                searchRange = NSRange(location: stepStart, length: boundsEnd - stepStart)
+                continue
+            }
             if matches.count >= maxMatches {
                 return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
             }
             matches.append(TextRange(location: found.location, length: found.length))
             let nextStart = found.location + found.length
-            guard nextStart <= totalLength else {
+            guard nextStart <= boundsEnd else {
                 break
             }
-            searchRange = NSRange(location: nextStart, length: totalLength - nextStart)
+            searchRange = NSRange(location: nextStart, length: boundsEnd - nextStart)
         }
 
         return .completed(matches)
@@ -107,6 +125,42 @@ private extension DocumentSearchEngine {
             return .inputTooLarge(byteCount: queryUTF16Count)
         }
         return nil
+    }
+
+    static func docSearchResolveSearchBounds(_ customRange: TextRange?, totalLength: Int) -> NSRange? {
+        guard let customRange else {
+            return NSRange(location: 0, length: totalLength)
+        }
+        guard customRange.length > 0, customRange.location >= 0, customRange.location < totalLength else {
+            return nil
+        }
+        let clampedLength = min(customRange.length, totalLength - customRange.location)
+        return clampedLength > 0 ? NSRange(location: customRange.location, length: clampedLength) : nil
+    }
+
+    static func docSearchHasWordBoundaries(
+        in nsText: NSString,
+        location: Int,
+        length: Int,
+        totalLength: Int
+    ) -> Bool {
+        if location > 0, docSearchIsWordUnit(nsText.character(at: location - 1)) {
+            return false
+        }
+        let end = location + length
+        if end < totalLength, docSearchIsWordUnit(nsText.character(at: end)) {
+            return false
+        }
+        return true
+    }
+
+    static func docSearchIsWordUnit(_ unit: unichar) -> Bool {
+        if unit == 0x5F || (unit >= 0x30 && unit <= 0x39)
+            || (unit >= 0x41 && unit <= 0x5A) || (unit >= 0x61 && unit <= 0x7A) {
+            return true
+        }
+        guard unit >= 0x80, let scalar = UnicodeScalar(unit) else { return false }
+        return CharacterSet.alphanumerics.contains(scalar)
     }
 
     /// Scans contiguous UTF-8 bytes directly for an ASCII query without `NSString` bridging.
