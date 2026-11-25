@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-25 UTC
+Branch: main | Spec: 031-contextual-reveal-dictation-and-empty-session-filter
+
+### Added
+- Added conditional `Reveal in Folder Navigator` contextual action (`ElementContextualActionKind.revealInFolderNavigator`) to both the `Cmd+Return` contextual palette and `SwiftEditNSTextView` right-click `NSMenu`, expanding the left sidebar, navigating `selectedFolderURL` to the active disk-backed document's canonical containing directory (preserving an ancestor `grantedScopeRootURL`), refreshing entries, and highlighting `selectedSidebarEntryURL`.
+- Added writable-document `Start Dictation Here` contextual action (`ElementContextualActionKind.startDictationHere`) with an in-code 24×24 `AppIcon.microphone` vector glyph in `Cmd+Return` and right-click `NSMenu`, focusing the active `SwiftEditNSTextView` and dispatching native macOS `startDictation:` via `MacOSDictationDispatcher` and an injectable `dictationTrigger` seam (`ContextualRevealDictationAndSessionFilterTests`).
+
+### Changed
+- Added `SessionRecoveryEligibility` (`SwiftEditCore`) and dual-side recovery filtering in `persistRecoveryState()` and `restoreSessionRecoveryIfPresent()` so empty or whitespace-only untitled tabs (`fileURL == nil`) are excluded from persistence and startup restoration while preserving non-empty untitled and disk-backed/pinned tabs.
+
+### Security
+- Enforced canonical symlink resolution (`resolvingSymlinksInPath().standardizedFileURL`) and fail-closed missing/unreadable parent directory guards on `Reveal in Folder Navigator` (`SEC-002`, `SEC-003`), strict writable/non-binary/non-log-tail gating with zero new entitlements on `Start Dictation Here` (`SEC-001`, `SEC-004`, `SEC-012`), and immediate `.recovery` snapshot unlinking plus startup orphan purging for cleared or legacy empty untitled tabs (`DATA-006`, `SEC-011`).
+
+## [Unreleased] - 2026-11-25 UTC
 Branch: main | Spec: 030-semantic-syntax-color-schemes-and-html
 
 ### Added

@@ -5,11 +5,11 @@ always_read:
   - "openspec/Constitution.md"
 specs:
   - id: "031-contextual-reveal-dictation-and-empty-session-filter"
-    status: "draft"
+    status: "implemented"
     date: "2026-11-25"
-    capabilities: ["contextual-reveal-dictation-and-empty-session-filter", "notepadpp-tabs-session-recovery-and-dotfiles"]
-    path: "openspec/changes/031-contextual-reveal-dictation-and-empty-session-filter"
-    summary: "Contextual Reveal in Folder Navigator, Start Dictation Here, and Empty Untitled Session Recovery Filter"
+    capabilities: ["notepadpp-tabs-session-recovery-and-dotfiles", "contextual-reveal-dictation-and-empty-session-filter"]
+    path: "openspec/changes/archive/2026-11-25-031-contextual-reveal-dictation-and-empty-session-filter"
+    summary: "Contextual Reveal in Folder Navigator, Start Dictation Here & Empty Untitled Session Filter"
   - id: "030-semantic-syntax-color-schemes-and-html"
     status: "implemented"
     date: "2026-11-25"
