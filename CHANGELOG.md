@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-25 UTC
+Branch: main | Commit: beb2963
+
+### Added
+- Rewrote `README.md`, the six-chapter `docs/guide/` User Guide, and the byte-identical offline `Sources/SwiftEditUI/Resources/Help/` documentation with 11 refreshed application screenshots covering semantic syntax color schemes, HTML & JSON/JSONL support, Quick Open, Find in Folder, Markmap/Mermaid diagrams, contextual Reveal/Dictation, atomic line commands, and log severity filters (`beb2963`).
+
+### Changed
+- Decomposed 37 complexity hotspots across 10 `/myspec-quick` passes (`032`–`041` in `openspec/specs/workbench-editor-and-linter-modular-decomposition/spec.md`, `b6ee821`, `beb2963`), lowering `Sources/` symbol complexity Gini from `0.3851` to `0.3613` and max symbol complexity from `28` to `17` while keeping `0` file dependency cycles (`acyclicity = 1.0`).
+
+### Security
+- Added fail-closed malformed UTF-16 surrogate and odd-byte-length test coverage (`DocumentCodecAndLoaderTests.n2MalformedUTF16SurrogatesAndOddLengthsFailClosed`, `b6ee821`) and preserved all BiDi, confinement, symlink, bounds, and HTTPS validation controls across all refactored modules.
+
+## [Unreleased] - 2026-11-25 UTC
 Branch: main | Spec: 031-contextual-reveal-dictation-and-empty-session-filter
 
 ### Added
