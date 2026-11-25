@@ -199,14 +199,29 @@ struct DesignAssetsVerifier: Sendable {
         "<!entity",
     ]
 
+    private static let forbiddenHostPathSubstrings = ["file://", "/Users/", "\\Users\\"]
+
     /// Verifies promoted Markdown/logo/preview files, non-destructive `reasoning/` preservation, brand tokens, SVG hygiene, and relative link confinement (`P1`, `N1`, `N2`).
     func verifyDocumentationAndAssets() -> [VerificationIssue] {
-        var issues: [VerificationIssue] = []
         let fm = FileManager.default
         let canonicalRoot = rootURL.resolvingSymlinksInPath().standardizedFileURL.path
         let canonicalDocsDesign = rootURL.appendingPathComponent("docs/design")
             .resolvingSymlinksInPath().standardizedFileURL.path
 
+        var issues: [VerificationIssue] = []
+        issues.append(contentsOf: verifyRequiredPromotedFiles(using: fm))
+        issues.append(contentsOf: verifyReasoningSourcePreservation(using: fm))
+        issues.append(contentsOf: verifySvgSecurity())
+        issues.append(contentsOf: verifyMasterLogoPng())
+        issues.append(contentsOf: verifyBrandTokens())
+        issues.append(contentsOf: Self.markdownFilesToCheck.flatMap {
+            verifyMarkdownFile($0, fileManager: fm, canonicalRoot: canonicalRoot, canonicalDocsDesign: canonicalDocsDesign)
+        })
+        return issues
+    }
+
+    private func verifyRequiredPromotedFiles(using fm: FileManager) -> [VerificationIssue] {
+        var issues: [VerificationIssue] = []
         for relPath in Self.requiredPromotedPaths {
             let fileURL = rootURL.appendingPathComponent(relPath)
             guard fm.fileExists(atPath: fileURL.path) else {
@@ -221,73 +236,105 @@ struct DesignAssetsVerifier: Sendable {
                 issues.append(sizeIssue)
             }
         }
-
-        let reasoningDeliverables = rootURL.appendingPathComponent("reasoning/001_project-constitution/deliverables")
-        if fm.fileExists(atPath: reasoningDeliverables.path) {
-            let sourceChecks = [
-                "reasoning/001_project-constitution/deliverables/color-schemes-and-zed-layout.md",
-                "reasoning/001_project-constitution/deliverables/assets/app-icons-riepilogo.md",
-                "reasoning/001_project-constitution/deliverables/assets/logo-e2-refined.svg",
-            ]
-            for srcRel in sourceChecks where !fm.fileExists(atPath: rootURL.appendingPathComponent(srcRel).path) {
-                issues.append(VerificationIssue(
-                    severity: .integrity,
-                    path: srcRel,
-                    message: "Source deliverable in reasoning/ was removed instead of preserved via copy"
-                ))
-            }
-        }
-
-        issues.append(contentsOf: verifySvgSecurity())
-        issues.append(contentsOf: verifyMasterLogoPng())
-        issues.append(contentsOf: verifyBrandTokens())
-
-        for mdRel in Self.markdownFilesToCheck {
-            let mdURL = rootURL.appendingPathComponent(mdRel)
-            guard fm.fileExists(atPath: mdURL.path),
-                  let text = try? String(contentsOf: mdURL, encoding: .utf8) else {
-                continue
-            }
-
-            if text.contains("file://") || text.contains("/Users/") || text.contains("\\Users\\") {
-                issues.append(VerificationIssue(
-                    severity: .security,
-                    path: mdRel,
-                    message: "Residual workstation file:// or /Users/ path detected (CWE-200)"
-                ))
-            }
-
-            let baseDir = mdURL.deletingLastPathComponent()
-            let confinementPrefix = mdRel.hasPrefix("docs/design/") ? canonicalDocsDesign : canonicalRoot
-            for target in MarkdownLinkScanner.extractRelativeTargets(from: text) {
-                if target.hasPrefix("/") || target.hasPrefix("file:") || target.split(separator: "/").contains("..") {
-                    issues.append(VerificationIssue(
-                        severity: .security,
-                        path: mdRel,
-                        message: "Path traversal or non-relative URI '\(target)' rejected (CWE-22)"
-                    ))
-                    continue
-                }
-                let candidateURL = baseDir.appendingPathComponent(target)
-                guard fm.fileExists(atPath: candidateURL.path) else {
-                    issues.append(VerificationIssue(
-                        severity: .integrity,
-                        path: mdRel,
-                        message: "Broken relative Markdown link target '\(target)'"
-                    ))
-                    continue
-                }
-                if !PathConfinementGuard.isConfined(candidateURL: candidateURL, withinCanonicalDirectory: confinementPrefix) {
-                    issues.append(VerificationIssue(
-                        severity: .security,
-                        path: mdRel,
-                        message: "Link '\(target)' resolves outside confined boundary via symlink (CWE-22)"
-                    ))
-                }
-            }
-        }
-
         return issues
+    }
+
+    private func verifyReasoningSourcePreservation(using fm: FileManager) -> [VerificationIssue] {
+        let reasoningDeliverables = rootURL.appendingPathComponent("reasoning/001_project-constitution/deliverables")
+        guard fm.fileExists(atPath: reasoningDeliverables.path) else { return [] }
+        let sourceChecks = [
+            "reasoning/001_project-constitution/deliverables/color-schemes-and-zed-layout.md",
+            "reasoning/001_project-constitution/deliverables/assets/app-icons-riepilogo.md",
+            "reasoning/001_project-constitution/deliverables/assets/logo-e2-refined.svg",
+        ]
+        return sourceChecks
+            .filter { !fm.fileExists(atPath: rootURL.appendingPathComponent($0).path) }
+            .map {
+                VerificationIssue(
+                    severity: .integrity,
+                    path: $0,
+                    message: "Source deliverable in reasoning/ was removed instead of preserved via copy"
+                )
+            }
+    }
+
+    private func verifyMarkdownFile(
+        _ mdRel: String,
+        fileManager fm: FileManager,
+        canonicalRoot: String,
+        canonicalDocsDesign: String
+    ) -> [VerificationIssue] {
+        let mdURL = rootURL.appendingPathComponent(mdRel)
+        guard fm.fileExists(atPath: mdURL.path),
+              let text = try? String(contentsOf: mdURL, encoding: .utf8) else {
+            return []
+        }
+
+        var issues: [VerificationIssue] = []
+        if let hostLeak = verifyHostPathLeak(in: text, reportedPath: mdRel) {
+            issues.append(hostLeak)
+        }
+
+        let baseDir = mdURL.deletingLastPathComponent()
+        let confinementPrefix = mdRel.hasPrefix("docs/design/") ? canonicalDocsDesign : canonicalRoot
+        let linkIssues = MarkdownLinkScanner.extractRelativeTargets(from: text).compactMap {
+            validateRelativeMarkdownTarget(
+                $0,
+                mdRel: mdRel,
+                baseDir: baseDir,
+                confinementPrefix: confinementPrefix,
+                fileManager: fm
+            )
+        }
+        issues.append(contentsOf: linkIssues)
+        return issues
+    }
+
+    private func verifyHostPathLeak(in text: String, reportedPath: String) -> VerificationIssue? {
+        guard Self.forbiddenHostPathSubstrings.contains(where: { text.contains($0) }) else {
+            return nil
+        }
+        return VerificationIssue(
+            severity: .security,
+            path: reportedPath,
+            message: "Residual workstation file:// or /Users/ path detected (CWE-200)"
+        )
+    }
+
+    private func validateRelativeMarkdownTarget(
+        _ target: String,
+        mdRel: String,
+        baseDir: URL,
+        confinementPrefix: String,
+        fileManager fm: FileManager
+    ) -> VerificationIssue? {
+        if isTraversalOrAbsoluteTarget(target) {
+            return VerificationIssue(
+                severity: .security,
+                path: mdRel,
+                message: "Path traversal or non-relative URI '\(target)' rejected (CWE-22)"
+            )
+        }
+        let candidateURL = baseDir.appendingPathComponent(target)
+        guard fm.fileExists(atPath: candidateURL.path) else {
+            return VerificationIssue(
+                severity: .integrity,
+                path: mdRel,
+                message: "Broken relative Markdown link target '\(target)'"
+            )
+        }
+        guard PathConfinementGuard.isConfined(candidateURL: candidateURL, withinCanonicalDirectory: confinementPrefix) else {
+            return VerificationIssue(
+                severity: .security,
+                path: mdRel,
+                message: "Link '\(target)' resolves outside confined boundary via symlink (CWE-22)"
+            )
+        }
+        return nil
+    }
+
+    private func isTraversalOrAbsoluteTarget(_ target: String) -> Bool {
+        target.hasPrefix("/") || target.hasPrefix("file:") || target.split(separator: "/").contains("..")
     }
 
     /// Scans `logo-e2-refined.svg` to reject embedded `<script>`, `<foreignObject>`, `javascript:` URIs, event handlers, and XML `<!ENTITY` declarations (`CWE-79`/`CWE-611`).

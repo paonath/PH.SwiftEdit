@@ -1,10 +1,10 @@
 ---
 title: "Log Viewer, Live Log Tail & Embedded Terminal"
-summary: "Guide to .log syntax highlighting, lock-free Live Log Tail in Direct and Inverse modes, secondary occurrence highlighting in logs, >64 MiB tail-only handling, and the embedded GPU-accelerated terminal."
-commit: "ea62d54"
-date: "2026-11-23"
-branch: "feature/contaxtual_actions"
-review_date: "2026-12-23"
+summary: "Guide to .log syntax highlighting, lock-free Live Log Tail in Direct and Inverse modes, severity and substring filtering, secondary occurrence highlighting in logs, >64 MiB tail-only handling, and the embedded GPU-accelerated terminal."
+commit: "b6ee821"
+date: "2026-11-25"
+branch: "main"
+review_date: "2026-12-25"
 ---
 
 # Chapter 4: Log Viewer & Embedded Terminal
@@ -54,6 +54,7 @@ Secondary occurrence highlighting works seamlessly across **all** log viewer mod
 - Select any log level (`INFO`, `WARN`, `ERROR`), timestamp, GUID, logger name, or token via mouse double-click, drag, or `Shift + Arrow` keys.
 - All other occurrences in the log view are highlighted immediately with soft purple pills and bottom underlines.
 - **Selection Preservation**: incoming live log lines and `Direct ↔ Inverse` order switches preserve your active token selection instead of resetting the caret, automatically highlighting matching tokens in newly appended lines as they arrive.
+- **Contextual Actions**: right-clicking a disk-backed log tab also offers **Send to Terminal** (when text is selected) and **Reveal in Folder Navigator**.
 
 ![Integrated Log Viewer in Live Inverse Mode with Secondary Occurrence Highlighting](images/log-viewer-live-inverse.png)
 
@@ -86,4 +87,4 @@ Right-clicking any item in the Folder Navigator and choosing **Open Terminal** o
 | `LogTailBuffer` & `LogTailSession` | `Sources/SwiftEditCore/LogSupport/LogTail.swift` | Bounded `10_000`-line ring buffer, `8 MiB` max incremental read window, `memchr` newline scanning, `O_RDONLY \| O_NONBLOCK \| O_CLOEXEC` + `pread` |
 | `LogTailWorker` & `LogTailController` | `Sources/SwiftEditUI/Workspace/LogTailController.swift` | Serial `.utility` background queue, `O_EVTONLY` kqueue `DispatchSourceFileSystemObject` + 1 s rotation fallback timer, monotonic sequence delivery to `@MainActor` |
 | `LogSyntaxHighlighter` | `Sources/SwiftEditCore/LogSupport/LogSyntaxHighlighter.swift` | Linear single-pass line tokenizer for NLog, Serilog, log4net, syslog, and JSON |
-| `EmbeddedTerminalRegistry` | `Sources/SwiftEditUI/Views/EmbeddedTerminalEmulatorView.swift` | Manages `SwiftTerm` PTY sessions, OSC 7 working-directory tracking, and `SIGHUP`/`SIGKILL` teardown |
+| `EmbeddedTerminalRegistry` | `Sources/SwiftEditUI/Workspace/EmbeddedTerminalRegistry.swift` | Manages `SwiftTerm` PTY sessions, OSC 7 working-directory tracking, and `SIGHUP`/`SIGKILL` teardown |

@@ -333,46 +333,13 @@ public struct LocalFileSystemAdapter: FileSystemProviding, Sendable {
     /// Moves (`cut`) or copies (`copy` with collision suffixing) `sourceURL` into `destinationDirectoryURL` while enforcing symlink-free tree pre-scans, item/byte ceilings (`CWE-400`), and workspace confinement (`CWE-22`/`CWE-59`, `SEC-003`, `SEC-012`).
     @discardableResult
     public func pasteItem(from sourceURL: URL, toDirectory destinationDirectoryURL: URL, mode: PasteMode, withinScope scopeURL: URL?) throws -> URL {
-        switch mode {
-        case .cut:
-            try verifyNotScopeRootAndConfined(itemURL: sourceURL, withinScope: scopeURL)
-        case .copy:
-            try verifyScopeConfinement(for: sourceURL, withinScope: scopeURL, mustExist: true)
-        }
-        try verifyScopeConfinement(for: destinationDirectoryURL, withinScope: scopeURL, mustExist: true)
-
-        let canonicalSource = sourceURL.resolvingSymlinksInPath().standardizedFileURL.path
-        let canonicalDestDir = destinationDirectoryURL.resolvingSymlinksInPath().standardizedFileURL.path
-        if canonicalDestDir == canonicalSource || canonicalDestDir.hasPrefix(canonicalSource + "/") {
-            throw DomainError.invalidPasteTarget(path: destinationDirectoryURL.path)
-        }
-
+        try verifyPasteEndpoints(from: sourceURL, toDirectory: destinationDirectoryURL, mode: mode, withinScope: scopeURL)
         let originalName = try SidebarItemNameValidator.validate(sourceURL.lastPathComponent)
         switch mode {
         case .cut:
-            let candidateURL = destinationDirectoryURL.appendingPathComponent(originalName).standardizedFileURL
-            if Self.itemExistsIncludingDanglingSymlink(atPath: candidateURL.path) {
-                throw DomainError.destinationAlreadyExists(path: candidateURL.path)
-            }
-            do {
-                try FileManager.default.moveItem(at: sourceURL, to: candidateURL)
-                return candidateURL
-            } catch {
-                throw DomainError.ioFailure(error.localizedDescription)
-            }
+            return try movePasteItem(from: sourceURL, toDirectory: destinationDirectoryURL, named: originalName)
         case .copy:
-            try preScanCopySourceTree(at: sourceURL)
-            let chosenName = try SidebarCollisionSuffixAllocator.firstAvailableName(for: originalName) { candidate in
-                let candidatePath = destinationDirectoryURL.appendingPathComponent(candidate).standardizedFileURL.path
-                return Self.itemExistsIncludingDanglingSymlink(atPath: candidatePath)
-            }
-            let destinationURL = destinationDirectoryURL.appendingPathComponent(chosenName).standardizedFileURL
-            do {
-                try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
-                return destinationURL
-            } catch {
-                throw DomainError.ioFailure(error.localizedDescription)
-            }
+            return try copyPasteItem(from: sourceURL, toDirectory: destinationDirectoryURL, named: originalName)
         }
     }
 
@@ -487,5 +454,52 @@ private extension LocalFileSystemAdapter {
             throw DomainError.batchLimitExceeded(maxBytes: maxCopyBytes)
         }
         totalBytes = nextTotal
+    }
+
+    func verifyPasteEndpoints(
+        from sourceURL: URL,
+        toDirectory destinationDirectoryURL: URL,
+        mode: PasteMode,
+        withinScope scopeURL: URL?
+    ) throws {
+        if mode == .cut {
+            try verifyNotScopeRootAndConfined(itemURL: sourceURL, withinScope: scopeURL)
+        } else {
+            try verifyScopeConfinement(for: sourceURL, withinScope: scopeURL, mustExist: true)
+        }
+        try verifyScopeConfinement(for: destinationDirectoryURL, withinScope: scopeURL, mustExist: true)
+        let canonicalSource = sourceURL.resolvingSymlinksInPath().standardizedFileURL.path
+        let canonicalDestDir = destinationDirectoryURL.resolvingSymlinksInPath().standardizedFileURL.path
+        if canonicalDestDir == canonicalSource || canonicalDestDir.hasPrefix(canonicalSource + "/") {
+            throw DomainError.invalidPasteTarget(path: destinationDirectoryURL.path)
+        }
+    }
+
+    func movePasteItem(from sourceURL: URL, toDirectory destinationDirectoryURL: URL, named originalName: String) throws -> URL {
+        let candidateURL = destinationDirectoryURL.appendingPathComponent(originalName).standardizedFileURL
+        if Self.itemExistsIncludingDanglingSymlink(atPath: candidateURL.path) {
+            throw DomainError.destinationAlreadyExists(path: candidateURL.path)
+        }
+        do {
+            try FileManager.default.moveItem(at: sourceURL, to: candidateURL)
+            return candidateURL
+        } catch {
+            throw DomainError.ioFailure(error.localizedDescription)
+        }
+    }
+
+    func copyPasteItem(from sourceURL: URL, toDirectory destinationDirectoryURL: URL, named originalName: String) throws -> URL {
+        try preScanCopySourceTree(at: sourceURL)
+        let chosenName = try SidebarCollisionSuffixAllocator.firstAvailableName(for: originalName) { candidate in
+            let candidatePath = destinationDirectoryURL.appendingPathComponent(candidate).standardizedFileURL.path
+            return Self.itemExistsIncludingDanglingSymlink(atPath: candidatePath)
+        }
+        let destinationURL = destinationDirectoryURL.appendingPathComponent(chosenName).standardizedFileURL
+        do {
+            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            return destinationURL
+        } catch {
+            throw DomainError.ioFailure(error.localizedDescription)
+        }
     }
 }

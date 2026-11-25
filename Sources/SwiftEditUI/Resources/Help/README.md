@@ -6,7 +6,7 @@
 
 <p align="center">
   A minimal, fast, and private text editor for macOS, written in Swift 6.<br />
-  Markdown, YAML, and log files with a native TextKit&nbsp;2 editor and an embedded GPU-accelerated terminal.
+  Markdown, YAML, JSON/JSONL, HTML, and log files with a native TextKit&nbsp;2 editor and an embedded GPU-accelerated terminal.
 </p>
 
 <p align="center">
@@ -27,14 +27,16 @@ Read the complete, chapter-by-chapter **[SwiftEdit User Guide](docs/guide/00-ind
 
 ### Editing
 
-- **TextKit 2 engine** with line-number gutter, current-line highlight, nested bracket matching, `Cmd+W` Word Wrap toggle, and `50%`–`300%` zoom that scales tabs, the folder navigator, and the gutter together.
-- **Multi-level highlighting** with WCAG-verified contrast in Light and Black modes:
+- **TextKit 2 engine** with line-number gutter, current-line highlight, nested bracket matching, `Cmd+W` Word Wrap toggle, and `50%`–`300%` zoom that scales tabs, the folder navigator, the preview, the diff pane, and the gutter together.
+- **Multi-level highlighting & selectable semantic syntax schemes**:
+  - Four zero-dependency, WCAG-AA-verified (`>= 4.5:1`) syntax color schemes (**SwiftEdit Default**, **Catppuccin**, **GitHub**, **Tokyo Night**) across Light (`#FFFFFF`) and Black (`#000000`) modes, selectable live in **Settings → Fonts (Editor) → Syntax Scheme**.
   - Antique parchment-yellow highlighting for inline and fenced backtick code spans.
   - High-contrast purple selection with synchronous soft secondary highlighting and non-color-only underlines for all other occurrences of the selected word or token (in both the editor and the integrated log viewer).
-- **Inline ghost-text completion & contextual actions**: in-memory per-document word completion (`Tab` accepts, `Esc` dismisses), repeated double-click cycle (`word → token → caret`), `Cmd+Return` contextual palette (Surround With, **Send to Terminal** without auto-Return and with multiline confirmation warning, and Duplicate Document), plus right-click **Send to Terminal** on any selection in the editor or log viewer.
-- **Clean startup, tabs & sessions**: opens onto a clean empty workspace on first launch, automatically reopens pinned documents on restart, supports tab pinning/reordering, dynamic untitled tab names, unsaved-change prompts, and automatic crash recovery.
-- **Explicit save** preserving text encoding (`UTF-8`, `UTF-16`) and line endings (`LF`, `CRLF`, `CR`).
-- **Literal Find & Replace**, Go to Line (`Cmd+G`), and duplicate line or selection (`Cmd+D`).
+- **Inline ghost-text completion & contextual actions**: in-memory per-document word completion (`Tab` accepts, `Esc` dismisses), repeated double-click cycle (`word → token → caret`), `Cmd+Return` contextual palette and right-click `NSMenu` offering **Surround With**, **Send to Terminal** (without auto-Return and with multiline confirmation warning), **Reveal in Folder Navigator** (for disk-backed tabs), **Start Dictation Here** (writable tabs), and **Duplicate Document**.
+- **Atomic line commands**: Move Line Up/Down (`Option+Up` / `Option+Down`), Delete Line (`Ctrl+Shift+K`), Join Lines (`Ctrl+J`), Sort Lines Ascending/Descending, and Trim Trailing Whitespace (manual or automatic on save in Settings).
+- **Clean startup, tabs & sessions**: opens onto a clean empty workspace on first launch, excludes empty/whitespace-only untitled tabs from session persistence and startup restoration, automatically reopens pinned documents on restart, supports tab pinning/reordering, middle-click close, bulk tab context actions (*Close Tabs to the Right*, *Close Other Tabs*, *Close All Unpinned Tabs*, *Close All Tabs*), `Shift+Cmd+T` *Reopen Closed Tab* (`<= 20`), tab cycling (`Shift+Cmd+]`/`[`, `Ctrl+Tab`, `Cmd+1..9`), dynamic untitled tab names, unsaved-change prompts (untouched or baseline-reverted tabs close immediately), and automatic crash recovery.
+- **Explicit save & status bar**: preserves text encoding (`UTF-8`, `UTF-16`) and line endings (`LF`, `CRLF`, `CR`) with interactive status-bar Encoding and Line-Ending menus, selection character/line counters, Markdown word counters, and a confined `.git/HEAD` branch badge.
+- **Literal Find & Replace, Quick Open & Find in Folder**: `Cmd+F` / `Option+Cmd+F` with case-sensitivity (`Aa`), Whole-Word (`Ww`), Search in Selection (`In Sel`), `1 of N` active match counter, `Option+Cmd+E` (*Use Selection for Find*), Go to Line (`Cmd+G`), Quick Open (`Cmd+T`, `<= 10,000` files), Find in Folder (`Ctrl+Shift+F`, `<= 5,000` matches), and duplicate line or selection (`Cmd+D`).
 - **Typography and themes**: choose interface and editor fonts in Settings (`Cmd+,`) from system fonts, bundled OpenDyslexic, or default monospaced; Light, Black, and Auto appearance modes with WCAG 2.2 AA contrast.
 - **JSON preferences**: settings are stored in `~/.SwiftEdit/settings.json`.
 
@@ -43,26 +45,28 @@ Read the complete, chapter-by-chapter **[SwiftEdit User Guide](docs/guide/00-ind
 - Live GitHub Flavored Markdown highlighting and authoring commands (bold, italic, strikethrough, inline code, code fences, links, images, blockquotes, tables, task lists, headings `H1`–`H6`).
 - Adaptive list indentation (`Tab` / `Shift+Tab`) and smart `Enter` continuation.
 - 26-rule linter with quick fixes, Fix All, diagnostics popover (`Shift+Cmd+M`), and gutter hover explanations.
-- Native offline preview (`Cmd+P`) rendered with SwiftUI (no web view).
+- Native offline preview (`Cmd+P`) rendered with SwiftUI (zero WebKit), featuring top-right **Copy** buttons on all fenced code blocks and line-1 frontmatter **Properties** cards, plus native SwiftUI `Canvas` rendering for `markmap`/`mindmap` and `mermaid` (`flowchart`, `sequenceDiagram`, `stateDiagram`) diagrams with a `Diagram / Code` toggle.
 - Document Navigator (`Option+\`) for headings and YAML keys — press `Enter` or click any row to jump directly to the target line — plus Distraction-Free mode (`Option+1`).
 - YAML frontmatter highlighting and an inline **Properties** panel for editing top-level keys and lists.
 
-### YAML
+### YAML, JSON / JSONL, and HTML
 
-- Native `.yml` / `.yaml` highlighting, structural lint (`YML001`–`YML005`), top-level key outline in the Document Navigator, and two-space smart indentation.
+- **YAML (`.yml` / `.yaml`)**: native highlighting, structural lint (`YML001`–`YML005`), top-level key outline in the Document Navigator (`Option+\`), and two-space smart indentation.
+- **JSON & JSON Lines (`.json` / `.jsonl`)**: native viewport highlighting, iterative structural lint (`JSN001`–`JSN003`, up to `128` nesting levels), `Shift+Cmd+F` Pretty-Print, and Minify.
+- **HTML (`.html` / `.htm`)**: native zero-regex viewport highlighting for doctypes, comments, tags, attributes, quoted strings, and entities.
 
 ### Logs
 
 - Level-aware highlighting for `.log` files (trace, debug, info, warning, error, critical), timestamps, GUIDs, strings, exceptions, and stack frames across NLog, Serilog, log4net, syslog, and JSON layouts.
-- Live log tail (`Cmd+L` direct, newest at the bottom; `Shift+Cmd+L` inverse, newest first) with an in-editor panel for Stop/Resume, ordering, and line limit (80 by default).
+- Live log tail (`Cmd+L` direct, newest at the bottom; `Shift+Cmd+L` inverse, newest first) with an in-editor panel for Stop/Resume, ordering, non-destructive severity pills (`All`, `Info+`, `Warn+`, `Error`), substring filter (`<= 256` chars), and line limit (80 by default, `1`–`10,000`).
 - Background tailing never locks the file, survives truncation and rotation, and opens logs above 64 MiB as read-only tail-only tabs.
 
 ### Workspace, Embedded Terminal, and Updates
 
 - **Drag & Drop**: drop files onto SwiftEdit to open them in tabs; drop folders to open them in the left Folder Navigator.
-- **Folder Navigator** (`Cmd+B`) with file operations, Finder reveal, path copy, and external terminal handoff configured in **Settings → Terminal**.
+- **Folder Navigator** (`Cmd+B`) with file operations, Finder reveal, path copy, external disk change monitoring (auto-reload clean tabs, *Reload from Disk / Keep Mine / Compare* conflict banner on dirty tabs, `File → Revert to Saved`), and external terminal handoff configured in **Settings → Terminal**.
 - **Embedded Terminal (`Cmd+J`)**: resizable VT100/xterm-256color terminal emulator built directly inside SwiftEdit (`SwiftTerm`) with GPU Metal rendering, multi-session tabs, and automatic clean process teardown on close.
-- **Side-by-side File Compare (`Shift+Cmd+D`)** against the last saved version or any other open tab.
+- **Side-by-side File Compare (`Shift+Cmd+D`)**: compare saved vs. current or any two open tabs with left/right diff line numbers, `F7` / `Shift+F7` hunk navigation, and *Only Differences* filtering.
 - **In-app Updates (`Check for Updates…`)**: checks GitHub Releases (`paonath/PH.SwiftEdit`), verifies SHA-256 checksums, quits the running instance, swaps `SwiftEdit.app` atomically, preserves quarantine-free status if previously unquarantined, and relaunches automatically.
 
 ## Requirements
@@ -79,7 +83,7 @@ Releases are published on [GitHub Releases](https://github.com/paonath/PH.SwiftE
 ```bash
 ./Scripts/install-from-github.sh --remove-quarantine
 # Pin a specific release:
-./Scripts/install-from-github.sh --version v0.1.3 --remove-quarantine
+./Scripts/install-from-github.sh --version v0.1.8-beta4 --remove-quarantine
 # Preview resolved URLs and actions without downloading:
 ./Scripts/install-from-github.sh --dry-run
 ```
@@ -108,14 +112,20 @@ The installer verifies the SHA-256 checksum before replacing `/Applications/Swif
 | :--- | :--- |
 | New / Open / Save / Save As | `Cmd+N` / `Cmd+O` / `Cmd+S` / `Shift+Cmd+S` |
 | Open Folder / Open All Files in Folder | `Shift+Cmd+O` / `Option+Shift+Cmd+O` |
+| Quick Open / Reopen Closed Tab | `Cmd+T` / `Shift+Cmd+T` |
+| Next / Previous Tab | `Shift+Cmd+]` / `Shift+Cmd+[` (`Ctrl+Tab`, `Cmd+1..9`) |
 | Close Document | `Shift+Cmd+W` |
 | Toggle Word Wrap | `Cmd+W` |
 | Toggle Folder Navigator | `Cmd+B` |
-| Find / Find and Replace / Go to Line | `Cmd+F` / `Option+Cmd+F` / `Cmd+G` |
+| Find / Find & Replace / Use Selection / Go to Line | `Cmd+F` / `Option+Cmd+F` / `Option+Cmd+E` / `Cmd+G` |
+| Find in Folder | `Ctrl+Shift+F` |
 | Duplicate Line or Selection | `Cmd+D` |
-| Format Markdown Document / Section | `Shift+Cmd+F` / `Option+Shift+Cmd+F` |
-| Markdown Preview | `Cmd+P` |
-| Markdown Diagnostics | `Shift+Cmd+M` |
+| Move Line Up / Down | `Option+Up` / `Option+Down` |
+| Delete Line / Join Lines | `Ctrl+Shift+K` / `Ctrl+J` |
+| Contextual Actions (Surround, Send to Terminal, Reveal, Dictation, Duplicate) | `Cmd+Return` |
+| Format Markdown or JSON / Format Markdown Section | `Shift+Cmd+F` / `Option+Shift+Cmd+F` |
+| Markdown Preview / Diagnostics | `Cmd+P` / `Shift+Cmd+M` |
+| File Compare / Next & Previous Diff Hunk | `Shift+Cmd+D` / `F7` & `Shift+F7` |
 | Document Navigator (Headings & YAML Keys) | `Option+\` |
 | Distraction-Free Mode | `Option+1` |
 | Log Tail (Direct / Inverse) | `Cmd+L` / `Shift+Cmd+L` |
@@ -123,11 +133,11 @@ The installer verifies the SHA-256 checksum before replacing `/Applications/Swif
 | Embedded Terminal Panel | `Cmd+J` |
 | Zoom In / Out / Actual Size (100%) | `Cmd++` / `Cmd+-` / `Cmd+0` |
 | Settings | `Cmd+,` |
-| SwiftEdit Help / Keyboard Shortcuts CheatSheet | `Shift+Cmd+?` / `Cmd+/` |
+| SwiftEdit Help / CheatSheet / Shortcuts Side Panel | `Shift+Cmd+?` / `Cmd+/` / `Option+Cmd+/` |
 
 ## Privacy and Security
 
-- Built with macOS **Hardened Runtime**; editing, Markdown preview, linting, and diffing work strictly offline with zero telemetry.
+- Built with macOS **Hardened Runtime**; editing, Markdown preview, diagram rendering, linting, and diffing work strictly offline with zero telemetry.
 - The only network requests are user-initiated update checks and downloads from allowlisted GitHub HTTPS URLs (`api.github.com` / `github.com`), verified with SHA-256 before installation.
 - The embedded terminal (`Cmd+J`) runs your local login shell inside an in-app PTY and terminates its process group cleanly when closed.
 - Bundled OpenDyslexic fonts are SHA-256 verified before process-scoped registration.
@@ -151,6 +161,7 @@ Release builds apply `-Osize`, whole-module compilation, ThinLTO, dead-code stri
 | **[SwiftEdit User Guide](docs/guide/00-index.md)** | Complete chapter-by-chapter documentation (also bundled offline in **Help → SwiftEdit Help**) |
 | [Color schemes and layout](docs/design/color-schemes-and-zed-layout.md) | Color tokens, editor canvas, and layout |
 | [App icons](docs/design/assets/app-icons-riepilogo.md) | Logo master and icon sets for macOS and iOS |
+| [App Gap Analysis](docs/analysis/app-gap-analysis.md) | Feature matrix and engineering audit |
 | [Constitution](openspec/Constitution.md) | Architecture, security, and testing rules of the project |
 
 ## License

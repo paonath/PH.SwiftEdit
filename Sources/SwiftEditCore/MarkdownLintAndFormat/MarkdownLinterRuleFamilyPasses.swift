@@ -239,12 +239,28 @@ enum MarkdownLinterRuleFamilyPasses {
     ) -> Bool {
         guard first == 0x23, indent < 4 else { return false }
         var level = 0
-        var j = idx
-        while j < slice.endIndex, slice[j] == 0x23 { level += 1; j += 1 }
+        var afterHashes = idx
+        while afterHashes < slice.endIndex, slice[afterHashes] == 0x23 { level += 1; afterHashes += 1 }
         guard level <= 6 else { return false }
 
-        let hashEnd = range.location + (j - slice.startIndex)
-        if j < slice.endIndex, slice[j] != 0x20, slice[j] != 0x09 {
+        evaluateHeadingSpacing(at: line, range: range, slice: slice, afterHashes: afterHashes, context: &context)
+        evaluateHeadingSurroundingRules(at: line, range: range, level: level, context: &context)
+        context.resetListState()
+        MarkdownAllConstructsLinter.scanInline(slice, base: range.location, line: line, scratch: &context.scratch, into: &context.out)
+        return true
+    }
+
+    private static func evaluateHeadingSpacing(
+        at line: Int,
+        range: TextRange,
+        slice: ArraySlice<UInt16>,
+        afterHashes: ArraySlice<UInt16>.Index,
+        context: inout MarkdownLinterPassContext
+    ) {
+        guard afterHashes < slice.endIndex else { return }
+        let hashEnd = range.location + (afterHashes - slice.startIndex)
+        let firstAfter = slice[afterHashes]
+        if firstAfter != 0x20, firstAfter != 0x09 {
             context.add(
                 .missingHeadingSpace,
                 line,
@@ -252,20 +268,28 @@ enum MarkdownLinterRuleFamilyPasses {
                 range,
                 fix: TextEdit(range: TextRange(location: hashEnd, length: 0), replacement: " ")
             )
-        } else {
-            var spaces = 0
-            var k = j
-            while k < slice.endIndex, slice[k] == 0x20 { spaces += 1; k += 1 }
-            if spaces > 1, k < slice.endIndex {
-                context.add(
-                    .multipleSpacesAfterHash,
-                    line,
-                    "Multiple spaces after heading '#'",
-                    range,
-                    fix: TextEdit(range: TextRange(location: hashEnd, length: spaces), replacement: " ")
-                )
-            }
+            return
         }
+        var spaces = 0
+        var k = afterHashes
+        while k < slice.endIndex, slice[k] == 0x20 { spaces += 1; k += 1 }
+        if spaces > 1, k < slice.endIndex {
+            context.add(
+                .multipleSpacesAfterHash,
+                line,
+                "Multiple spaces after heading '#'",
+                range,
+                fix: TextEdit(range: TextRange(location: hashEnd, length: spaces), replacement: " ")
+            )
+        }
+    }
+
+    private static func evaluateHeadingSurroundingRules(
+        at line: Int,
+        range: TextRange,
+        level: Int,
+        context: inout MarkdownLinterPassContext
+    ) {
         if context.prevHeading > 0, level > context.prevHeading + 1 {
             context.add(.headingIncrement, line, "Heading level should increase by one", range)
         }
@@ -276,9 +300,6 @@ enum MarkdownLinterRuleFamilyPasses {
         if line + 1 < context.index.lineCount, !context.isBlank(line + 1) {
             context.add(.blanksAroundHeadings, line, "Headings should be surrounded by blank lines", range, fix: context.insertBlank(at: line + 1))
         }
-        context.resetListState()
-        MarkdownAllConstructsLinter.scanInline(slice, base: range.location, line: line, scratch: &context.scratch, into: &context.out)
-        return true
     }
 }
 

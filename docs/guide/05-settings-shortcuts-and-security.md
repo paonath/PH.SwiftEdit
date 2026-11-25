@@ -1,22 +1,23 @@
 ---
 title: "Settings, Themes, Keyboard Shortcuts & Security"
-summary: "Reference for SwiftEdit preferences (~/.SwiftEdit/settings.json), Light/Dark/Auto appearance and accessibility, typography and OpenDyslexic, complete keyboard shortcuts, and privacy/security guarantees."
-commit: "ea62d54"
-date: "2026-11-23"
-branch: "feature/contaxtual_actions"
-review_date: "2026-12-23"
+summary: "Reference for SwiftEdit preferences (~/.SwiftEdit/settings.json), Light/Dark/Auto appearance, semantic syntax color schemes, typography and OpenDyslexic, complete keyboard shortcuts, and privacy/security guarantees."
+commit: "b6ee821"
+date: "2026-11-25"
+branch: "main"
+review_date: "2026-12-25"
 ---
 
 # Chapter 5: Settings, Shortcuts & Security
 
 ## Functional: Settings (`Cmd+,`) & JSON Persistence
 
-Open **SwiftEdit → Settings…** (`Cmd+,`) to configure appearance, fonts, editor defaults, and external terminal handoff. All preferences are stored as human-readable JSON in **`~/.SwiftEdit/settings.json`** using atomic writes:
+Open **SwiftEdit → Settings…** (`Cmd+,`) to configure appearance, syntax color schemes, fonts, editor defaults, and external terminal handoff. All preferences are stored as human-readable JSON in **`~/.SwiftEdit/settings.json`** using atomic writes:
 
-- **Appearance**:
+- **Appearance & Syntax Color Schemes**:
   - **Light**: neutral light chrome with purple accents and a pure white `#FFFFFF` / black `#000000` (`21:1`) editor canvas.
   - **Dark (Black)**: neutral dark chrome with purple accents and a pure black `#000000` / white `#FFFFFF` (`21:1`) editor canvas.
   - **Auto**: tracks macOS system appearance live without reloading open buffers.
+  - **Syntax Scheme**: choose from four WCAG-AA-verified (`>= 4.5:1`) schemes (**SwiftEdit Default**, **Catppuccin**, **GitHub**, **Tokyo Night**) under **Settings → Fonts (Editor) → Syntax Scheme** — updates apply live across Markdown, YAML, JSON, HTML, and Log files.
   - You can also switch appearance from the **SwiftEdit** header menu or by clicking the theme icon in the status bar.
   - Automatically adapts to macOS **Reduce Transparency** and **Increased Contrast** accessibility settings (stepping hairline borders to `>= 3.0:1` and clamping translucent surfaces opaque).
 - **Typography**:
@@ -52,7 +53,7 @@ SwiftEdit provides two interactive ways to browse and execute shortcuts:
 | Close Document | `Shift+Cmd+W` | Close the active tab (prompts if unsaved; blocked on pinned tabs) |
 | Quit SwiftEdit | `Cmd+Q` | Quit application (prompts if any tab has unsaved edits) |
 
-### Edit & Markdown
+### Edit, Contextual Actions & Markdown
 
 | Action | Shortcut | Description |
 | :--- | :--- | :--- |
@@ -62,11 +63,11 @@ SwiftEdit provides two interactive ways to browse and execute shortcuts:
 | Move Line Up / Down | `Option+Up` / `Option+Down` | Swap active or selected lines upward or downward |
 | Delete Line / Join Lines | `Ctrl+Shift+K` / `Ctrl+J` | Delete active line(s) or join adjacent lines |
 | Use Selection for Find / Find in Folder | `Option+Cmd+E` / `Ctrl+Shift+F` | Populate Find from selection or search across workspace files |
-| Next / Previous Tab | `Shift+Cmd+]` / `Shift+Cmd+[` | Cycle through open workspace tabs (`Cmd+1..9` jumps directly) |
+| Next / Previous Tab | `Shift+Cmd+]` / `Shift+Cmd+[` | Cycle through open workspace tabs (`Ctrl+Tab`, `Cmd+1..9`) |
 | Next / Previous Difference | `F7` / `Shift+F7` | Jump across hunks in the File Compare diff pane |
 | Accept Word Completion | `Tab` | Accept inline ghost-text suggestion (`Esc` dismisses) |
-| Contextual Actions | `Cmd+Return` | Open Surround With (selection), Send to Terminal (selection), and Duplicate Document palette |
-| Format Markdown Document | `Shift+Cmd+F` | Format full Markdown document via AST |
+| Contextual Actions | `Cmd+Return` | Open Surround With, Send to Terminal, Reveal in Folder Navigator, Start Dictation Here, and Duplicate Document palette |
+| Format Markdown or JSON Document | `Shift+Cmd+F` | Format full Markdown (AST) or JSON (2-space sorted keys) document |
 | Format Markdown Section | `Option+Shift+Cmd+F` | Format only selected Markdown lines |
 | Bold / Italic / Inline Code | `Shift+Cmd+B` / `Cmd+I` / `Cmd+E` | Toggle Markdown emphasis or inline code |
 | Insert Link | `Cmd+K` | Wrap selection as a Markdown link |
@@ -97,11 +98,12 @@ SwiftEdit provides two interactive ways to browse and execute shortcuts:
 
 ## Functional: Privacy & Security Guarantees
 
-- **Offline by Design**: editing, syntax highlighting, linting, formatting, native Markdown preview, File Compare, and in-app Help operate **100% offline** with zero telemetry and no accounts.
+- **Offline by Design**: editing, syntax highlighting, linting, formatting, native Markdown preview, diagram rendering, File Compare, and in-app Help operate **100% offline** with zero telemetry and no accounts.
 - **Explicit Network Boundary**: the only network access occurs when you explicitly invoke **Check for Updates…**, which connects only to allowlisted GitHub HTTPS endpoints (`api.github.com` / `github.com`) and verifies SHA-256 checksums before staging any update.
 - **BiDi (Trojan Source) Detection**: files containing Unicode bidirectional control characters display an immediate warning banner.
-- **Binary Quarantine**: files with NUL bytes open in transient read-only mode with Save, Format, Duplicate, Pin, and Session Recovery disabled.
-- **Path & Symlink Confinement**: Folder Navigator operations, preview local images, and session recovery manifests reject escaping symlinks and path traversal.
+- **Binary Quarantine & Empty Session Filtering**: files with NUL bytes open in transient read-only mode with Save, Format, Duplicate, Pin, and Session Recovery disabled; empty or whitespace-only untitled tabs are excluded from recovery persistence and purged on startup.
+- **Path, Extension & Symlink Confinement**: Folder Navigator operations, **Reveal in Folder Navigator**, preview local images, `.git/HEAD` inspection, and session recovery manifests reject escaping symlinks and path traversal; language classification inspects only the final extension to block double-extension smuggling.
+- **Dictation Isolation**: **Start Dictation Here** operates strictly on writable non-binary, non-tail-only editor buffers using standard macOS `startDictation:` dispatch with zero additional entitlements.
 - **Verified Bundled Fonts**: bundled OpenDyslexic font files are SHA-256 verified before process-scoped registration (`OpenDyslexicBundle`).
 
 ---
@@ -111,7 +113,7 @@ SwiftEdit provides two interactive ways to browse and execute shortcuts:
 | Component | Source File | Responsibility |
 | :--- | :--- | :--- |
 | `JSONPreferencesStore` & `EditorPreferencesStore` | `Sources/SwiftEditCore/WorkspaceAndTabSession/` | Serialized atomic JSON persistence in `~/.SwiftEdit/settings.json` |
-| `PurpleThemePalette` & `ZoomedChromeMetrics` | `Sources/SwiftEditUI/Theme/` | WCAG 2.2 AA verified semantic tokens and proportional `50%..300%` chrome scaling |
+| `PurpleThemePalette`, `SyntaxColorSchemePalette` & `ZoomedChromeMetrics` | `Sources/SwiftEditUI/Theme/` | WCAG 2.2 AA verified semantic tokens, 4 syntax schemes, and proportional `50%..300%` chrome scaling |
 | `OpenDyslexicBundle` | `Sources/SwiftEditUI/Fonts/OpenDyslexicBundle.swift` | SHA-256 verification and CoreText process-scoped font registration |
 | `SwiftEditShortcutDispatcher` & `KeyboardShortcutsCheatSheetCatalog` | `Sources/SwiftEditUI/Views/` | Single-source shortcut routing and searchable/clickable command catalog |
 | `GitHubReleaseUpdateChecker` & `AppUpdateInstaller` | `Sources/SwiftEditUI/Updates/` | Allowlisted GitHub HTTPS checks, SHA-256 verification, and atomic app replacement |

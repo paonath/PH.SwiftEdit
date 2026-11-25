@@ -266,3 +266,88 @@ WHEN executing GitHub release installation (`Scripts/install-from-github.sh` `ma
 - **GIVEN** a release tag containing `..` or whitespace, an unknown or invalid `-c` build configuration, or an `AppIcon.appiconset` containing a path-traversal filename, symlink, out-of-root path, `> 16 MiB` PNG payload, or platform alpha mismatch (`ITMS-90717`)
 - **WHEN** `Scripts/install-from-github.sh`, `Scripts/build-app.sh`, or `DesignAssetsVerifier.verifySingleAppIconSet` evaluates the input
 - **THEN** invalid CLI tags or build configurations fail closed with exit code `1` without downloading or building, and `AppIcon.appiconset` traversal, symlink, `> 16 MiB`, and alpha violations fail closed with `VerificationReport.exitCode == 2`
+
+### Requirement: REQ-016 Safety Banner TextView Log Reader and Language Resolution Complexity Decomposition
+WHEN evaluating BiDi Trojan Source warnings (`InspectionSafetyBannerState.bidiDescriptor` and `scanBiDiControlScalars`), painting TextKit 2 word occurrences and current-line highlights (`SwiftEditNSTextView.drawWordOccurrencesBackground` and `currentLineFullWidthRect`), reading growing log files (`LocalLogFileReader.read`), and resolving tab languages (`DocumentLanguage.resolve`), each entrypoint SHALL delegate to cohesive helpers or lookup tables satisfying `cognitive <= 8, cyclomatic <= 7, max_nesting <= 3` while preserving `<= 25` nominal members per type and all BiDi, viewport, positional `pread`, and extension-spoofing security controls [AR-006][AR-007][BC-001][UI-002][UI-008][DATA-003][SEC-012][TEST-006].
+
+#### Scenario: P16 Decomposed Safety Banner TextView Log Reader and Language Resolver Meet Complexity Targets With Passing Tests
+- **Path**: P16
+- **Trait**: positive
+- **GIVEN** the refactored `InspectionSafetyBannerState`, `SwiftEditNSTextView`, `LocalLogFileReader`, and `DocumentLanguage` implementations and their extracted helpers (`bidiDescriptorsByScalar`, `textMayContainBiDiBytes`, `lineIncrement`, `firstOccurrenceIndex`, `drawWordOccurrence`, `paintOccurrenceSegment`, `isLocationOutsideViewport`, `fullWidthLineRect`, `readContiguousBytes`, `readPreadChunk`, and `languageByExtension`)
+- **WHEN** `swift test` and `tokensave_complexity` evaluate all four source files after `tokensave sync`
+- **THEN** all `473` tests across `130` suites pass (`exit 0`), `tokensave_circular(path="Sources")` reports `0` cycles, and every target symbol and extracted helper satisfies `cyclomatic <= 7`, `cognitive <= 8`, and `max_nesting <= 3`
+
+#### Scenario: N17 Trojan Source BiDi Scalars Double Extension Spoofing Binary Lockout and Truncated Log Reads Fail Closed
+- **Path**: N17
+- **Trait**: security
+- **GIVEN** a text snapshot containing BiDi override/isolate scalars (`U+202E`, `U+2066`, `U+061C`), a binary or double-extension filename (`config.yml.bak`, `data.yml` with `isBinary: true`), or a missing/truncated log file read
+- **WHEN** the decomposed `InspectionSafetyBannerState.evaluate`, `DocumentLanguage.resolve`, or `LocalLogFileReader.read` evaluates the input
+- **THEN** `InspectionSafetyBannerState` emits exact line and UTF-16 offset `BiDiControlCharacterWarning` entries, `DocumentLanguage.resolve` forces `.plainText`, and `LocalLogFileReader.read` closes its file descriptor and throws `DomainError.ioFailure` or returns exact read bytes without overread
+
+### Requirement: REQ-017 YAML Outline Terminal Payload Word Prefix and Numeric Outline Complexity Decomposition
+WHEN building top-level YAML outlines (`YAMLOutlineEngine.outline`), sanitizing terminal selection payloads (`TerminalSelectionPayload.prepare`), scanning caret word prefixes (`WordCompletionIndex.wordPrefix`), and parsing numeric outline continuations (`MarkdownListGrammar.parseNumericOutlineContinuation`), each entrypoint SHALL delegate to cohesive helpers satisfying `cognitive <= 8, cyclomatic <= 7, max_nesting <= 3` while preserving `<= 25` nominal members per type and all empty-line bounds, PTY control-character stripping, UTF-16 composed-character, and integer-overflow security controls [AR-006][BC-004][BC-011][UI-012][SEC-012][TEST-006].
+
+#### Scenario: P17 Decomposed YAML Outline Terminal Payload Word Prefix and Numeric Outline Meet Complexity Targets With Passing Tests
+- **Path**: P17
+- **Trait**: positive
+- **GIVEN** the refactored `YAMLOutlineEngine`, `TerminalSelectionPayload`, `WordCompletionIndex`, and `MarkdownListGrammar` implementations and their extracted helpers (`outlineHeading`, `contentLineRange`, `isIgnoredTopLevelLine`, `isDocumentBoundaryMarker`, `scalarSelectionRange`, `sanitizeTerminalText`, `appendSanitizedScalar`, `previousWordCharacterStart`, and `scanBoundedDecimal`)
+- **WHEN** `swift test` and `tokensave_complexity` evaluate all four source files after `tokensave sync`
+- **THEN** all `473` tests across `130` suites pass (`exit 0`), `tokensave_circular(path="Sources")` reports `0` cycles, and every target symbol and extracted helper satisfies `cyclomatic <= 7`, `cognitive <= 8`, and `max_nesting <= 3`
+
+#### Scenario: N18 Empty YAML Lines Binary or Control-Tainted PTY Payloads Oversized Prefixes and Overflowing Numeric Outlines Fail Closed
+- **Path**: N18
+- **Trait**: security
+- **GIVEN** an empty/CR-only YAML line or line exceeding `maxLineUTF16`, a binary-tab or ESC/C0/trailing-newline selection in `TerminalSelectionPayload.prepare`, a word prefix exceeding `maxIndexedWordUTF16Length` (`64`), or a `1.999999999 ` or 10-digit numeric outline continuation
+- **WHEN** the decomposed `YAMLOutlineEngine.outline`, `TerminalSelectionPayload.prepare`, `WordCompletionIndex.wordPrefix`, or `MarkdownListGrammar.parseNumericOutlineContinuation` evaluates the input
+- **THEN** blank YAML lines are skipped without out-of-bounds slicing, `TerminalSelectionPayload.prepare` strips C0/ESC/trailing newlines or returns `nil` when binary/empty, `wordPrefix` returns `nil` above `64` UTF-16 units, and `parseNumericOutlineContinuation` returns `nil` without arithmetic overflow
+
+### Requirement: REQ-018 Markdown Linters Frontmatter Properties and Syntax Palette Complexity Decomposition
+WHEN dispatching all-construct Markdown lint lines (`MarkdownAllConstructsLinter.evaluateFullRuleLine`), evaluating ATX headings (`MarkdownLinterRuleFamilyPasses.evaluateHeadingLine`), unquoting and classifying YAML frontmatter values (`FrontmatterPropertyParser.unquote`, `classifyInlineValueTokens`, `classifySingleChildSequenceLine`), and resolving syntax color scheme palettes (`SyntaxColorSchemePalette.resolve`), each entrypoint SHALL delegate to cohesive helpers or lookup tables satisfying `cognitive <= 8, cyclomatic <= 7` (`cognitive <= 7, cyclomatic <= 6` for `evaluateHeadingLine`, and `cognitive <= 6, cyclomatic <= 6` for `resolve`) while preserving `<= 25` nominal members per type and all lint rules, `4096` UTF-16 bounds, YAML read-only alias/tag guards, and WCAG-AA contrast anchors [AR-006][BC-004][UI-002][UI-009][SEC-012][TEST-006].
+
+#### Scenario: P18 Decomposed Markdown Linters Frontmatter Parser and Syntax Palette Meet Complexity Targets With Passing Tests
+- **Path**: P18
+- **Trait**: positive
+- **GIVEN** the refactored `MarkdownAllConstructsLinter`, `MarkdownLinterRuleFamilyPasses`, `FrontmatterPropertyParser`, and `SyntaxColorSchemePalette` implementations and their extracted helpers and lookup tables (`leadingIndentAndUnit`, `evaluateSingleLineConstruct`, `evaluateHeadingSpacing`, `evaluateHeadingSurroundingRules`, `decodeDoubleQuotedScalar`, `appendEscapedCharacter`, `consumeHexEscape`, `nonEditableInlineKind`, `classifyInlineScalarOrFlow`, `classifySequenceItemToken`, `PaletteKey`, `PaletteHexSpec`, and `specsByKey`)
+- **WHEN** `swift test` and `tokensave_complexity` evaluate all four source files after `tokensave sync`
+- **THEN** all `473` tests across `130` suites pass (`exit 0`), `tokensave_circular(path="Sources")` reports `0` cycles, and every target symbol meets its complexity budget (`evaluateFullRuleLine`: `cyc <= 7, cog <= 8`; `evaluateHeadingLine`: `cyc <= 6, cog <= 7`; `unquote`/`classifyInlineValueTokens`/`classifySingleChildSequenceLine`: `cyc <= 7, cog <= 8`; `resolve`: `cyc <= 6, cog <= 6`)
+
+#### Scenario: N19 Overlong Markdown Lines Unclosed Escapes Read-Only YAML Anchors or Light and Black Contrast Anchors Never Regress
+- **Path**: N19
+- **Trait**: security
+- **GIVEN** a Markdown line exceeding `4096` UTF-16 units or an ATX heading missing `#` spacing, a frontmatter entry with YAML anchors/aliases/tags or malformed `\x` escapes, or any `SyntaxColorScheme` resolved in `.light` (`#FFFFFF`) or `.black` (`#000000`) mode
+- **WHEN** the decomposed `evaluateFullRuleLine`, `evaluateHeadingLine`, `FrontmatterPropertyParser`, or `SyntaxColorSchemePalette.resolve` evaluates the input
+- **THEN** overlong lines skip rule evaluation fail-closed while valid headings emit identical lint fixes, YAML anchors/aliases/tags remain read-only (`isEditable == false`) with exact escape decoding, and all `8` foreground tokens per palette preserve `>= 4.5:1` WCAG-AA contrast
+
+### Requirement: REQ-019 Filesystem Paste Mermaid Flowchart Workbench Commands and Document Format Complexity Decomposition
+WHEN pasting confined filesystem items (`LocalFileSystemAdapter.pasteItem`), parsing Mermaid flowchart diagrams (`MarkdownDiagramParser.parseFlowchartDiagram`), dispatching contextual or header workbench commands (`SwiftEditWorkbenchModel.performElementContextualAction`, `performHeaderCommand`), and formatting active documents (`SwiftEditWorkbenchModel.formatActiveDocument`), each entrypoint SHALL delegate to cohesive helpers or lookup tables satisfying `cognitive <= 7, cyclomatic <= 6` for `pasteItem`, `cognitive <= 8, cyclomatic <= 7` for `parseFlowchartDiagram`, `performElementContextualAction`, and `performHeaderCommand`, and `cognitive <= 6, cyclomatic <= 6` for `formatActiveDocument` while preserving `<= 25` nominal members per type and all confinement, symlink, collision, diagram bound, and quarantine controls [AR-006][BC-004][DATA-004][SEC-003][SEC-010][SEC-012][TEST-006].
+
+#### Scenario: P19 Decomposed Filesystem Paste Mermaid Flowchart Workbench Commands and Document Format Meet Complexity Targets With Passing Tests
+- **Path**: P19
+- **Trait**: positive
+- **GIVEN** the refactored `LocalFileSystemAdapter`, `MarkdownDiagramParser`, and `SwiftEditWorkbenchModel` implementations and their extracted helpers and lookup tables (`verifyPasteEndpoints`, `movePasteItem`, `copyPasteItem`, `consumeFlowchartLine`, `pushFlowchartSubgraph`, `performWorkbenchContextualAction`, `applyContextualEdit`, `headerCommandActions`, `resolveFormattableSession`, `formatJSONDocument`, `formatMarkdownDocument`, and `commitFormattedEdits`)
+- **WHEN** `swift test` and `tokensave_complexity` evaluate all four source files after `tokensave sync`
+- **THEN** all `473` tests across `130` suites pass (`exit 0`), `tokensave_circular(path="Sources")` reports `0` cycles, and every target symbol meets its complexity budget (`pasteItem`: `cyc <= 6, cog <= 7`; `parseFlowchartDiagram`, `performElementContextualAction`, `performHeaderCommand`: `cyc <= 7, cog <= 8`; `formatActiveDocument`: `cyc <= 6, cog <= 6`)
+
+#### Scenario: N20 Symlink Paste Escapes Subgraph Depth Overflows Quarantined Commands and Invalid Format Targets Fail Closed
+- **Path**: N20
+- **Trait**: security
+- **GIVEN** a paste targeting the scope root, a descendant directory, or a symlinked source/destination, a Mermaid flowchart exceeding `12` nested `subgraph` blocks or `256` nodes / `512` edges, or a contextual/format action invoked on a live-tail or binary read-only tab
+- **WHEN** the decomposed `LocalFileSystemAdapter.pasteItem`, `MarkdownDiagramParser.parseFlowchartDiagram`, `performElementContextualAction`, or `formatActiveDocument` evaluates the input
+- **THEN** `pasteItem` rejects scope escapes, symlinks, and collisions fail-closed with `DomainError`, `parseFlowchartDiagram` returns `.unsupportedOrOversized`, and `performElementContextualAction` and `formatActiveDocument` refuse buffer mutations without bypassing quarantine guards
+
+### Requirement: REQ-020 Document Codec Fenced UTF-8 Scanner Plist Stamping and Design Asset Verification Complexity Decomposition
+WHEN decoding documents (`DocumentCodec.decode`), scanning UTF-8 fenced code blocks (`MarkdownSmartNewlineEngine.isInsideFencedCodeBlockUTF8`, `openingFenceUTF8`), stamping Xcode Info.plist versions (`Scripts/stamp-info-plist.sh` `main`), and verifying design deliverables and links (`DesignAssetsVerifier.verifyDocumentationAndAssets`), each entrypoint SHALL delegate to cohesive helpers satisfying `cognitive <= 8, cyclomatic <= 7` for core Swift codec/fence scanners, `cognitive <= 7, cyclomatic <= 6` for Bash plist helpers, and `cognitive <= 6, cyclomatic <= 6, max_nesting <= 3` for Swift asset verification helpers while preserving `<= 25` nominal members per type and all binary quarantine, strict UTF-8/UTF-16 decoding, `set -euo pipefail`, `"$var"` quoting (`CWE-78`), and `CWE-22`/`CWE-79`/`CWE-200`/`CWE-400`/`CWE-611` controls [AR-001][AR-006][BC-004][BC-007][DATA-003][DATA-004][SEC-003][SEC-011][SEC-012][TEST-006][TEST-007].
+
+#### Scenario: P20 Decomposed Codec Fence Scanner Plist Stamper and Asset Verifier Meet Complexity Targets With Passing Checks
+- **Path**: P20
+- **Trait**: positive
+- **GIVEN** the refactored `DocumentCodec`, `MarkdownSmartNewlineEngine`, `Scripts/stamp-info-plist.sh`, and `Scripts/verify-design-assets.swift` implementations and their extracted helpers (`detectBOMEncoding`, `stripOptionalBOM`, `isUTF8Encoding`, `decodePayloadText`, `requireStrictUTF16`, `makeTextPayload`, `updateFenceState`, `MarkdownUTF8FenceCursor`, `require_arg_value`, `apply_cli_option`, `parse_args`, `resolve_versions_from_json`, `stamp_built_plist_if_present`, `verifyRequiredPromotedFiles`, `verifyReasoningSourcePreservation`, `verifyMarkdownFile`, `verifyHostPathLeak`, `validateRelativeMarkdownTarget`, and `isTraversalOrAbsoluteTarget`)
+- **WHEN** `swift test`, `bash -n Scripts/stamp-info-plist.sh Scripts/install-from-github.sh Scripts/build-app.sh`, `swift Scripts/verify-design-assets.swift --self-test`, `swift Scripts/verify-design-assets.swift --root .`, and `tokensave_complexity` evaluate all four files after `tokensave sync`
+- **THEN** all `473` tests across `130` suites, `14/14` asset verifier self-tests, live workspace checks, and script syntax checks pass (`exit 0`), `tokensave_circular(path="Sources")` reports `0` cycles, `DocumentCodec.decode` and `MarkdownSmartNewlineEngine` fence methods satisfy `cyc <= 7, cog <= 8`, `Scripts/stamp-info-plist.sh` satisfies `cyc <= 6, cog <= 7`, and `verifyDocumentationAndAssets` satisfies `cyc <= 6, cog <= 6, nest <= 3`
+
+#### Scenario: N21 Binary Payloads Malformed UTF-16 Fenced Code Continuations Unquoted Args and Asset Traversals Fail Closed
+- **Path**: N21
+- **Trait**: security
+- **GIVEN** a binary NUL-prefixed payload or unpaired UTF-16 surrogate stream in `DocumentCodec.decode`, a caret inside an active UTF-8 fenced code block or `> 4096` UTF-16 line in `MarkdownSmartNewlineEngine`, a missing CLI option argument in `Scripts/stamp-info-plist.sh`, or a `../` traversal, symlink escape, host path leak, or SVG `<script>` in `DesignAssetsVerifier.verifyDocumentationAndAssets`
+- **WHEN** the decomposed codec, newline engine, plist stamper, or design asset verifier evaluates the input
+- **THEN** `DocumentCodec.decode` quarantines binary payloads as read-only or throws `DomainError.unsupportedEncoding`, `MarkdownSmartNewlineEngine` returns `nil`, `Scripts/stamp-info-plist.sh` exits `1` without stamping, and `DesignAssetsVerifier` emits security `VerificationIssue` diagnostics (`exitCode == 2`)

@@ -1,17 +1,17 @@
 ---
 title: "SwiftEdit User Guide — Overview & Table of Contents"
 summary: "Entry point for the official SwiftEdit documentation covering installation, updates, core principles, and links to all user and technical chapters."
-commit: "ea62d54"
-date: "2026-11-23"
-branch: "feature/contaxtual_actions"
-review_date: "2026-12-23"
+commit: "b6ee821"
+date: "2026-11-25"
+branch: "main"
+review_date: "2026-12-25"
 ---
 
 # SwiftEdit User Guide
 
 Welcome to the official documentation for **SwiftEdit**, a lightweight, fast, and private native text editor for macOS written in Swift 6.
 
-SwiftEdit is built directly on Apple frameworks (**SwiftUI**, **AppKit**, and **TextKit 2**) for editing **Markdown**, **YAML**, **JSON / JSON Lines**, **log files**, and **plain text** with a high-contrast black-and-white editor canvas (`21:1` contrast ratio), neutral chrome with purple accents, native offline Markmap and Mermaid diagram rendering, an integrated live log viewer, and an embedded GPU-accelerated terminal.
+SwiftEdit is built directly on Apple frameworks (**SwiftUI**, **AppKit**, and **TextKit 2**) for editing **Markdown**, **YAML**, **JSON / JSON Lines**, **HTML**, **log files**, and **plain text** with a high-contrast black-and-white editor canvas (`21:1` contrast ratio), neutral chrome with purple accents, four selectable WCAG-AA semantic syntax color schemes, native offline Markmap and Mermaid diagram rendering, an integrated live log viewer, and an embedded GPU-accelerated terminal.
 
 ![SwiftEdit Workspace in Light Mode](images/workbench-light.png)
 
@@ -24,11 +24,11 @@ SwiftEdit is built directly on Apple frameworks (**SwiftUI**, **AppKit**, and **
 | Chapter | Document | Topics Covered |
 | :--- | :--- | :--- |
 | **0. Overview** | [00-index.md](00-index.md) | Introduction, requirements, installation, updates, and architecture overview |
-| **1. Workspace & Navigation** | [01-workspace-and-navigation.md](01-workspace-and-navigation.md) | Window anatomy, tabs, Folder Navigator, Drag & Drop, Recent Files, Duplicate Document, Session Recovery, Document Navigator, Distraction-Free mode |
-| **2. Editing & Highlighting** | [02-editing-and-highlighting.md](02-editing-and-highlighting.md) | TextKit 2 editor, zoom, word wrap, double-click cycle, secondary occurrence highlights, brackets, ghost-text completion, `Cmd+Return` palette, Find & Replace, File Compare |
-| **3. Markdown & YAML** | [03-markdown-and-yaml.md](03-markdown-and-yaml.md) | GFM authoring, adaptive lists, table navigation, AST formatter, 26-rule linter & quick fixes, native offline preview, YAML frontmatter Properties panel, native YAML support |
-| **4. Logs & Terminal** | [04-logs-and-terminal.md](04-logs-and-terminal.md) | `.log` syntax highlighting, lock-free Live Log Tail (`Direct` & `Inverse`), secondary occurrence highlights in logs, >64 MiB tail-only mode, embedded terminal (`Cmd+J`) |
-| **5. Settings, Shortcuts & Security** | [05-settings-shortcuts-and-security.md](05-settings-shortcuts-and-security.md) | Preferences (`~/.SwiftEdit/settings.json`), Light/Dark/Auto themes, typography & OpenDyslexic, complete keyboard shortcuts catalog, offline privacy & security model |
+| **1. Workspace & Navigation** | [01-workspace-and-navigation.md](01-workspace-and-navigation.md) | Window anatomy, bulk tabs & history, Folder Navigator, Quick Open (`Cmd+T`), Find in Folder (`Ctrl+Shift+F`), External Disk Monitor, Session Recovery, Document Navigator, Distraction-Free mode |
+| **2. Editing & Highlighting** | [02-editing-and-highlighting.md](02-editing-and-highlighting.md) | TextKit 2 editor, zoom, word wrap, atomic line commands, double-click cycle, secondary occurrences, brackets, ghost-text completion, `Cmd+Return` & right-click contextual actions (Surround, Send to Terminal, Reveal, Dictation, Duplicate), HTML highlighting, Find & Replace, File Compare |
+| **3. Markdown, YAML & JSON** | [03-markdown-and-yaml.md](03-markdown-and-yaml.md) | GFM authoring, adaptive lists, table navigation, AST formatter, 26-rule linter & quick fixes, native offline preview with `markmap`/`mermaid` diagrams & Copy buttons, YAML frontmatter Properties panel, native YAML & JSON/JSONL support |
+| **4. Logs & Terminal** | [04-logs-and-terminal.md](04-logs-and-terminal.md) | `.log` syntax highlighting, lock-free Live Log Tail (`Direct` & `Inverse`), severity pills & substring filter, secondary occurrence highlights in logs, >64 MiB tail-only mode, embedded terminal (`Cmd+J`) |
+| **5. Settings, Shortcuts & Security** | [05-settings-shortcuts-and-security.md](05-settings-shortcuts-and-security.md) | Preferences (`~/.SwiftEdit/settings.json`), Light/Dark/Auto themes, selectable syntax color schemes, typography & OpenDyslexic, complete keyboard shortcuts catalog, offline privacy & security model |
 
 ---
 
@@ -49,7 +49,7 @@ Releases are published on GitHub Releases as `PH.SwiftEdit-<version>-macOS-arm64
 ```bash
 ./Scripts/install-from-github.sh --remove-quarantine
 # Pin a specific release:
-./Scripts/install-from-github.sh --version v0.1.5 --remove-quarantine
+./Scripts/install-from-github.sh --version v0.1.8-beta4 --remove-quarantine
 # Preview resolved URLs and actions without downloading:
 ./Scripts/install-from-github.sh --dry-run
 ```
@@ -90,10 +90,12 @@ flowchart LR
 
 | Module | Path | Responsibilities |
 | :--- | :--- | :--- |
-| `SwiftEditCore` | `Sources/SwiftEditCore/` | Document codec (`UTF-8`/`UTF-16`, `LF`/`CRLF`/`CR`), sessions, binary quarantine, Markdown/YAML/Log highlighters, 26-rule Markdown linter, YAML linter, Myers diff, search, word completion, word occurrence scanner, lock-free `LogTailSession`, tab & recovery state |
-| `SwiftEditUI` | `Sources/SwiftEditUI/` | `SwiftEditWorkbenchModel`, `TextKit2EditorView`, `LineNumberGutterView`, `MarkdownNativePreviewView`, `PropertiesPanelView`, `LogTailPanelView`, `EmbeddedTerminalEmulatorView`, `HelpDocumentationView`, semantic themes, bundled `OpenDyslexic` & `Help` resources |
+| `SwiftEditCore` | `Sources/SwiftEditCore/` | Document codec (`UTF-8`/`UTF-16`, `LF`/`CRLF`/`CR`), sessions, binary quarantine, Markdown/YAML/JSON/HTML/Log highlighters, 26-rule Markdown linter, YAML/JSON linters, native diagram parser/layout, Myers diff, literal & folder search, atomic line commands, word completion, word occurrence scanner, lock-free `LogTailSession`, tab & recovery state |
+| `SwiftEditUI` | `Sources/SwiftEditUI/` | `SwiftEditWorkbenchModel` & modular sub-controllers, `TextKit2EditorView`, `LineNumberGutterView`, `MarkdownNativePreviewView`, `MarkdownDiagramPreviewView`, `PropertiesPanelView`, `LogTailPanelView`, `QuickOpenAndFolderSearchView`, `EmbeddedTerminalEmulatorView`, `ExternalFileChangeMonitor`, `HelpDocumentationView`, semantic themes & syntax color schemes, bundled `OpenDyslexic` & `Help` resources |
 | `XcodeApp` | `XcodeApp/` | macOS application entry point, Hardened Runtime entitlements, Info.plist, and `AppIcon.appiconset` |
 
 ### Onboard Documentation Access
 
 This entire guide is bundled inside `SwiftEdit.app` under `Sources/SwiftEditUI/Resources/Help/` and can be read offline at any time from **Help → SwiftEdit Help** (`Shift+Cmd+?`).
+
+![SwiftEdit Help Window](images/help-documentation.png)

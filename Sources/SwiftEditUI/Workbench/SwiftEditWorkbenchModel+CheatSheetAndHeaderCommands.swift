@@ -108,19 +108,30 @@ extension SwiftEditWorkbenchModel {
             return requestSendSelectionToTerminal(selection: menu.selection)
         }
         defer { requestEditorFocus() }
-        if case .duplicateDocument = action.kind {
+        if let handled = performWorkbenchContextualAction(action.kind) {
+            return handled
+        }
+        return applyContextualEdit(kind: action.kind, selection: menu.selection)
+    }
+
+    private func performWorkbenchContextualAction(_ kind: ElementContextualActionKind) -> Bool? {
+        switch kind {
+        case .duplicateDocument:
             return duplicateActiveDocument()
-        }
-        if case .revealInFolderNavigator = action.kind {
+        case .revealInFolderNavigator:
             return revealActiveDocumentInFolderNavigator()
-        }
-        if case .startDictationHere = action.kind {
+        case .startDictationHere:
             return startDictationHere()
+        default:
+            return nil
         }
+    }
+
+    private func applyContextualEdit(kind: ElementContextualActionKind, selection: SwiftEditCore.TextRange) -> Bool {
         guard activeLogTail == nil, safetyBanner.canSave,
               let activeID = tabSession.activeTabID, logTailOnlyTabIDs.contains(activeID) == false,
               var session = sessionsByID[activeID],
-              let edit = ElementContextualActionCatalog.evaluate(action.kind, in: session.snapshot, selection: menu.selection) else {
+              let edit = ElementContextualActionCatalog.evaluate(kind, in: session.snapshot, selection: selection) else {
             return false
         }
         do {
@@ -140,24 +151,26 @@ extension SwiftEditWorkbenchModel {
         }
     }
 
+    private static let headerCommandActions: [HeaderCommandID: @MainActor (SwiftEditWorkbenchModel) -> Void] = [
+        .newDocument: { $0.newUntitledTab() },
+        .openFile: { $0.openFileViaPanel() },
+        .openFolder: { $0.openFolderViaPanel() },
+        .saveDocument: { $0.saveActiveDocument() },
+        .saveDocumentAs: { $0.saveActiveDocumentAsViaPanel() },
+        .duplicateLineOrSelection: { $0.performCommandD() },
+        .formatDocument: { $0.formatActiveDocument() },
+        .formatSection: { $0.formatActiveSection() },
+        .toggleMarkdownPreview: { $0.toggleMarkdownPreview() },
+        .showCheatSheet: { $0.isCheatSheetPresented = true },
+        .appearanceLight: { $0.appearanceMode = .light },
+        .appearanceDark: { $0.appearanceMode = .black },
+        .appearanceAuto: { $0.appearanceMode = .auto },
+    ]
+
     public func performHeaderCommand(_ id: HeaderCommandID) {
         guard headerCommandItems.first(where: { $0.id == id })?.isEnabled == true else { return }
         headerSubmenu.dismissAfterCommand()
-        switch id {
-        case .newDocument: newUntitledTab()
-        case .openFile: openFileViaPanel()
-        case .openFolder: openFolderViaPanel()
-        case .saveDocument: saveActiveDocument()
-        case .saveDocumentAs: saveActiveDocumentAsViaPanel()
-        case .duplicateLineOrSelection: performCommandD()
-        case .formatDocument: formatActiveDocument()
-        case .formatSection: formatActiveSection()
-        case .toggleMarkdownPreview: toggleMarkdownPreview()
-        case .showCheatSheet: isCheatSheetPresented = true
-        case .appearanceLight: appearanceMode = .light
-        case .appearanceDark: appearanceMode = .black
-        case .appearanceAuto: appearanceMode = .auto
-        }
+        Self.headerCommandActions[id]?(self)
     }
 
     /// Duplicates the active writable document either next to its file on disk (`name copy.ext`) or as an adjacent untitled tab (`REQ-021-05`).

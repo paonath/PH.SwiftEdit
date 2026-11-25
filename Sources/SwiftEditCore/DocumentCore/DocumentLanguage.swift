@@ -7,11 +7,13 @@ import Foundation
 public enum DocumentLanguage: String, Codable, Sendable, CaseIterable {
     case markdown, yaml, json, html, log, plainText
 
-    private static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd"]
-    private static let yamlExtensions: Set<String> = ["yml", "yaml"]
-    private static let jsonExtensions: Set<String> = ["json", "jsonl"]
-    private static let htmlExtensions: Set<String> = ["html", "htm"]
-    private static let logExtensions: Set<String> = ["log"]
+    private static let languageByExtension: [String: DocumentLanguage] = [
+        "md": .markdown, "markdown": .markdown, "mdown": .markdown, "mkd": .markdown,
+        "yml": .yaml, "yaml": .yaml,
+        "json": .json, "jsonl": .json,
+        "html": .html, "htm": .html,
+        "log": .log,
+    ]
 
     /// Status-bar label (`UI-001`).
     public var statusBarLabel: String {
@@ -35,12 +37,9 @@ public enum DocumentLanguage: String, Codable, Sendable, CaseIterable {
         guard !isBinary, !isDegraded else { return .plainText }
         guard let filename, !filename.isEmpty else { return .markdown }
         let ext = (filename as NSString).pathExtension.lowercased()
-        if ext.isEmpty { return filename.hasPrefix("Untitled") ? .markdown : .plainText }
-        if markdownExtensions.contains(ext) { return .markdown }
-        if yamlExtensions.contains(ext) { return .yaml }
-        if jsonExtensions.contains(ext) { return .json }
-        if htmlExtensions.contains(ext) { return .html }
-        if logExtensions.contains(ext) { return .log }
-        return .plainText
+        if ext.isEmpty {
+            return filename.hasPrefix("Untitled") ? .markdown : .plainText
+        }
+        return languageByExtension[ext] ?? .plainText
     }
 }

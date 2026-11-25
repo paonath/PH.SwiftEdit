@@ -100,29 +100,34 @@ enum MarkdownListGrammar {
         indent: Int,
         first: UInt16
     ) -> (indent: Int, markerLength: Int, nextMarker: String)? {
-        guard first >= 0x30, first <= 0x39 else { return nil }
-        var cursor = idx
-        var majorDigits = 0
+        guard first >= 0x30, first <= 0x39,
+              let majorMatch = scanBoundedDecimal(line, from: idx),
+              majorMatch.end < line.endIndex,
+              line[majorMatch.end] == 0x2E,
+              let minorMatch = scanBoundedDecimal(line, from: majorMatch.end + 1),
+              minorMatch.end < line.endIndex,
+              line[minorMatch.end] == space else {
+            return nil
+        }
+        let major = String(decoding: line[idx..<majorMatch.end], as: UTF16.self)
+        let (nextMinor, overflow) = minorMatch.value.addingReportingOverflow(1)
+        guard !overflow, nextMinor <= maxOrderedNumber else { return nil }
+        return (indent, minorMatch.end + 1 - idx, "\(major).\(nextMinor) ")
+    }
+
+    private static func scanBoundedDecimal(
+        _ line: ArraySlice<UInt16>,
+        from start: Int
+    ) -> (value: Int, end: Int)? {
+        var value = 0
+        var digits = 0
+        var cursor = start
         while cursor < line.endIndex, line[cursor] >= 0x30, line[cursor] <= 0x39 {
-            majorDigits += 1
-            guard majorDigits <= 9 else { return nil }
+            digits += 1
+            guard digits <= 9 else { return nil }
+            value = value * 10 + Int(line[cursor] - 0x30)
             cursor += 1
         }
-        guard cursor < line.endIndex, line[cursor] == 0x2E else { return nil }
-        let majorEnd = cursor
-        cursor += 1
-        var minor = 0
-        var minorDigits = 0
-        while cursor < line.endIndex, line[cursor] >= 0x30, line[cursor] <= 0x39 {
-            minorDigits += 1
-            guard minorDigits <= 9 else { return nil }
-            minor = minor * 10 + Int(line[cursor] - 0x30)
-            cursor += 1
-        }
-        guard minorDigits > 0, cursor < line.endIndex, line[cursor] == space else { return nil }
-        let major = String(decoding: line[idx..<majorEnd], as: UTF16.self)
-        let (nextMinor, overflow) = minor.addingReportingOverflow(1)
-        guard overflow == false, nextMinor <= maxOrderedNumber else { return nil }
-        return (indent, cursor + 1 - idx, "\(major).\(nextMinor) ")
+        return digits > 0 ? (value, cursor) : nil
     }
 }

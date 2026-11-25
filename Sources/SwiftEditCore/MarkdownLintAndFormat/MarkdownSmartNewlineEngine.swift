@@ -84,7 +84,7 @@ public enum MarkdownSmartNewlineEngine {
         }
         let utf8 = text.utf8
         let lineStartIdx = findLineStartUTF8(in: utf8, before: caretIdx)
-        let lineEndIdx = findLineEndUTF8(in: utf8, from: caretIdx)
+        let lineEndIdx = findLineEndUTF8(in: utf8, from: caretIdx, limit: utf8.endIndex)
         let leadingUTF16 = utf16.distance(from: lineStartIdx, to: caretIdx)
         let trailingUTF16 = utf16.distance(from: caretIdx, to: lineEndIdx)
         guard leadingUTF16 + trailingUTF16 <= SearchDiffAndBracketEngine.maxBracketScanLineUTF16Length else {
@@ -109,9 +109,9 @@ public enum MarkdownSmartNewlineEngine {
         return idx
     }
 
-    private static func findLineEndUTF8(in utf8: String.UTF8View, from caretIdx: String.Index) -> String.Index {
-        var idx = caretIdx
-        while idx < utf8.endIndex {
+    private static func findLineEndUTF8(in utf8: String.UTF8View, from startIdx: String.Index, limit: String.Index) -> String.Index {
+        var idx = startIdx
+        while idx < limit {
             let byte = utf8[idx]
             if byte == 0x0A || byte == 0x0D { break }
             idx = utf8.index(after: idx)
@@ -156,81 +156,57 @@ public enum MarkdownSmartNewlineEngine {
         var lineStart = utf8.startIndex
 
         while lineStart < limitIdx {
-            var lineEnd = lineStart
-            while lineEnd < limitIdx {
-                let b = utf8[lineEnd]
-                if b == 0x0A || b == 0x0D { break }
-                lineEnd = utf8.index(after: lineEnd)
-            }
-
-            if activeChar != 0 {
-                if isClosingFenceUTF8(utf8, lineStart: lineStart, lineEnd: lineEnd, fenceChar: activeChar, minCount: activeLength) {
-                    activeChar = 0
-                    activeLength = 0
-                }
-            } else if let opened = openingFenceUTF8(utf8, lineStart: lineStart, lineEnd: lineEnd) {
-                activeChar = opened.char
-                activeLength = opened.count
-            }
-
-            if lineEnd < limitIdx {
-                let next = utf8.index(after: lineEnd)
-                if utf8[lineEnd] == 0x0D, next < limitIdx, utf8[next] == 0x0A {
-                    lineStart = utf8.index(after: next)
-                } else {
-                    lineStart = next
-                }
-            } else {
-                break
-            }
+            let lineEnd = findLineEndUTF8(in: utf8, from: lineStart, limit: limitIdx)
+            updateFenceState(
+                activeChar: &activeChar,
+                activeLength: &activeLength,
+                utf8: utf8,
+                lineStart: lineStart,
+                lineEnd: lineEnd
+            )
+            lineStart = MarkdownUTF8FenceCursor.nextLineStart(in: utf8, after: lineEnd, limit: limitIdx)
         }
         return activeChar != 0
     }
 
-    private static func openingFenceUTF8(_ utf8: String.UTF8View, lineStart: String.Index, lineEnd: String.Index) -> (char: UInt8, count: Int)? {
-        var idx = lineStart
-        var spaces = 0
-        while idx < lineEnd && utf8[idx] == 0x20 && spaces < 3 {
-            idx = utf8.index(after: idx)
-            spaces += 1
-        }
-        guard idx < lineEnd else { return nil }
-        let ch = utf8[idx]
-        guard ch == 0x60 || ch == 0x7E else { return nil }
-        var count = 0
-        while idx < lineEnd && utf8[idx] == ch {
-            idx = utf8.index(after: idx)
-            count += 1
-        }
-        guard count >= 3 else { return nil }
-        if ch == 0x60 {
-            while idx < lineEnd {
-                if utf8[idx] == 0x60 { return nil }
-                idx = utf8.index(after: idx)
+    private static func updateFenceState(
+        activeChar: inout UInt8,
+        activeLength: inout Int,
+        utf8: String.UTF8View,
+        lineStart: String.Index,
+        lineEnd: String.Index
+    ) {
+        if activeChar != 0 {
+            if isClosingFenceUTF8(utf8, lineStart: lineStart, lineEnd: lineEnd, fenceChar: activeChar, minCount: activeLength) {
+                activeChar = 0
+                activeLength = 0
             }
+            return
+        }
+        if let opened = openingFenceUTF8(utf8, lineStart: lineStart, lineEnd: lineEnd) {
+            activeChar = opened.char
+            activeLength = opened.count
+        }
+    }
+
+    private static func openingFenceUTF8(_ utf8: String.UTF8View, lineStart: String.Index, lineEnd: String.Index) -> (char: UInt8, count: Int)? {
+        let fenceStart = MarkdownUTF8FenceCursor.skipLeadingSpaces(utf8, from: lineStart, lineEnd: lineEnd)
+        guard fenceStart < lineEnd else { return nil }
+        let ch = utf8[fenceStart]
+        guard MarkdownUTF8FenceCursor.isFenceDelimiterByte(ch) else { return nil }
+        let (afterFence, count) = MarkdownUTF8FenceCursor.consumeRepeatedByte(ch, in: utf8, from: fenceStart, lineEnd: lineEnd)
+        guard count >= 3 else { return nil }
+        if ch == 0x60 && MarkdownUTF8FenceCursor.containsByte(0x60, in: utf8, from: afterFence, to: lineEnd) {
+            return nil
         }
         return (ch, count)
     }
 
     private static func isClosingFenceUTF8(_ utf8: String.UTF8View, lineStart: String.Index, lineEnd: String.Index, fenceChar: UInt8, minCount: Int) -> Bool {
-        var idx = lineStart
-        var spaces = 0
-        while idx < lineEnd && utf8[idx] == 0x20 && spaces < 3 {
-            idx = utf8.index(after: idx)
-            spaces += 1
-        }
-        var count = 0
-        while idx < lineEnd && utf8[idx] == fenceChar {
-            idx = utf8.index(after: idx)
-            count += 1
-        }
+        let fenceStart = MarkdownUTF8FenceCursor.skipLeadingSpaces(utf8, from: lineStart, lineEnd: lineEnd)
+        let (afterFence, count) = MarkdownUTF8FenceCursor.consumeRepeatedByte(fenceChar, in: utf8, from: fenceStart, lineEnd: lineEnd)
         guard count >= minCount else { return false }
-        while idx < lineEnd {
-            let b = utf8[idx]
-            if b != 0x20 && b != 0x09 { return false }
-            idx = utf8.index(after: idx)
-        }
-        return true
+        return MarkdownUTF8FenceCursor.containsOnlyTrailingSpacesOrTabs(in: utf8, from: afterFence, to: lineEnd)
     }
 
     private static func parseContinuationMarker(in line: String) -> ParsedMarker? {
@@ -353,5 +329,77 @@ public enum MarkdownSmartNewlineEngine {
             isEmptyContent: remainder.trimmingCharacters(in: .whitespaces).isEmpty,
             isNestedOrdered: indent.utf16.count >= 4
         )
+    }
+}
+
+private enum MarkdownUTF8FenceCursor {
+    static func isFenceDelimiterByte(_ byte: UInt8) -> Bool {
+        byte == 0x60 || byte == 0x7E
+    }
+
+    static func skipLeadingSpaces(_ utf8: String.UTF8View, from lineStart: String.Index, lineEnd: String.Index) -> String.Index {
+        var idx = lineStart
+        var spaces = 0
+        while idx < lineEnd && utf8[idx] == 0x20 && spaces < 3 {
+            idx = utf8.index(after: idx)
+            spaces += 1
+        }
+        return idx
+    }
+
+    static func consumeRepeatedByte(
+        _ byte: UInt8,
+        in utf8: String.UTF8View,
+        from start: String.Index,
+        lineEnd: String.Index
+    ) -> (nextIndex: String.Index, count: Int) {
+        var idx = start
+        var count = 0
+        while idx < lineEnd && utf8[idx] == byte {
+            idx = utf8.index(after: idx)
+            count += 1
+        }
+        return (idx, count)
+    }
+
+    static func containsByte(
+        _ byte: UInt8,
+        in utf8: String.UTF8View,
+        from start: String.Index,
+        to end: String.Index
+    ) -> Bool {
+        var idx = start
+        while idx < end {
+            if utf8[idx] == byte { return true }
+            idx = utf8.index(after: idx)
+        }
+        return false
+    }
+
+    static func containsOnlyTrailingSpacesOrTabs(
+        in utf8: String.UTF8View,
+        from start: String.Index,
+        to end: String.Index
+    ) -> Bool {
+        var idx = start
+        while idx < end {
+            let b = utf8[idx]
+            if b != 0x20 && b != 0x09 { return false }
+            idx = utf8.index(after: idx)
+        }
+        return true
+    }
+
+    static func nextLineStart(
+        in utf8: String.UTF8View,
+        after lineEnd: String.Index,
+        limit: String.Index
+    ) -> String.Index {
+        guard lineEnd < limit else { return limit }
+        let next = utf8.index(after: lineEnd)
+        if utf8[lineEnd] == 0x0D, next < limit, utf8[next] == 0x0A {
+            return utf8.index(after: next)
+        }
+        return next
     }
 }

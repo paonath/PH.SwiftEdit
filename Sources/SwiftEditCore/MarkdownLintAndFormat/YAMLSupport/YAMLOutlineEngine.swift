@@ -8,36 +8,59 @@ import Foundation
 public enum YAMLOutlineEngine {
     public static func outline(index: MarkdownLineIndex) -> [MarkdownHeading] {
         var result: [MarkdownHeading] = []
-        let units = index.units
-        let unitCount = units.count
         let starts = index.lineStarts
-        let lineCount = starts.count
-        for line in 0..<lineCount {
+        for line in 0..<starts.count {
             guard result.count < YAMLSupportLimits.maxOutlineEntries else { break }
-            let start = starts[line]
-            guard start < unitCount else { continue }
-            let rawEnd = line + 1 < lineCount ? starts[line + 1] - 1 : unitCount
-            var end = max(start, rawEnd)
-            if end > start, units[end - 1] == YAMLLineTokenizer.cr { end -= 1 }
-            // Skip blank lines across LF, CRLF, and CR endings before slicing (`MODIFIED REQ-005`, `SEC-012`).
-            guard end > start, end - start <= YAMLSupportLimits.maxLineUTF16 else { continue }
-            let first = units[start]
-            guard first != YAMLLineTokenizer.space,
-                  first != YAMLLineTokenizer.tab,
-                  first != YAMLLineTokenizer.hash else { continue }
-            if end - start >= 3, (first == YAMLLineTokenizer.dash || first == YAMLLineTokenizer.dot),
-               units[start + 1] == first, units[start + 2] == first,
-               end - start == 3 || YAMLLineTokenizer.isBlank(units[start + 3]) {
-                continue
+            if let heading = outlineHeading(forLine: line, in: index) {
+                result.append(heading)
             }
-            if first == YAMLLineTokenizer.dash, start + 1 == end || YAMLLineTokenizer.isBlank(units[start + 1]) {
-                continue
-            }
-            let slice = units[start..<end]
-            guard let keyEnd = YAMLLineTokenizer.keyEnd(slice, from: start, end: end) else { continue }
-            let title = String(decoding: units[start..<keyEnd.keyUpper], as: UTF16.self)
-            result.append(MarkdownHeading(level: 1, title: title, utf16Offset: start, kind: .yamlKey))
         }
         return result
+    }
+
+    private static func outlineHeading(forLine line: Int, in index: MarkdownLineIndex) -> MarkdownHeading? {
+        let units = index.units
+        guard let range = contentLineRange(forLine: line, units: units, starts: index.lineStarts),
+              !isIgnoredTopLevelLine(units, start: range.lowerBound, end: range.upperBound) else {
+            return nil
+        }
+        let slice = units[range]
+        guard let keyEnd = YAMLLineTokenizer.keyEnd(slice, from: range.lowerBound, end: range.upperBound) else {
+            return nil
+        }
+        let title = String(decoding: units[range.lowerBound..<keyEnd.keyUpper], as: UTF16.self)
+        return MarkdownHeading(level: 1, title: title, utf16Offset: range.lowerBound, kind: .yamlKey)
+    }
+
+    private static func contentLineRange(forLine line: Int, units: [UInt16], starts: [Int]) -> Range<Int>? {
+        let unitCount = units.count
+        let lineCount = starts.count
+        let start = starts[line]
+        guard start < unitCount else { return nil }
+        let rawEnd = line + 1 < lineCount ? starts[line + 1] - 1 : unitCount
+        var end = max(start, rawEnd)
+        if end > start, units[end - 1] == YAMLLineTokenizer.cr { end -= 1 }
+        // Skip blank lines across LF, CRLF, and CR endings before slicing (`MODIFIED REQ-005`, `SEC-012`).
+        guard end > start, end - start <= YAMLSupportLimits.maxLineUTF16 else { return nil }
+        return start..<end
+    }
+
+    private static func isIgnoredTopLevelLine(_ units: [UInt16], start: Int, end: Int) -> Bool {
+        let first = units[start]
+        if first == YAMLLineTokenizer.space || first == YAMLLineTokenizer.tab || first == YAMLLineTokenizer.hash {
+            return true
+        }
+        if isDocumentBoundaryMarker(units, start: start, end: end, first: first) {
+            return true
+        }
+        return first == YAMLLineTokenizer.dash && (start + 1 == end || YAMLLineTokenizer.isBlank(units[start + 1]))
+    }
+
+    private static func isDocumentBoundaryMarker(_ units: [UInt16], start: Int, end: Int, first: UInt16) -> Bool {
+        guard end - start >= 3, first == YAMLLineTokenizer.dash || first == YAMLLineTokenizer.dot else {
+            return false
+        }
+        guard units[start + 1] == first, units[start + 2] == first else { return false }
+        return end - start == 3 || YAMLLineTokenizer.isBlank(units[start + 3])
     }
 }

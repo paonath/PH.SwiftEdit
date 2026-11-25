@@ -146,32 +146,57 @@ public enum FrontmatterPropertyParser {
         return String(decoding: slice[start..<(start + range.length)], as: UTF16.self)
     }
 
+    private static let doubleQuotedEscapes: [Character: Character] = [
+        "n": "\n",
+        "t": "\t",
+        "r": "\r",
+    ]
+
     /// Decodes a quoted scalar (`\"`, `\\`, `\n`, `\t`, `\r`, `\xHH` escapes or `''`), mirroring `FrontmatterPropertyWriter.quoted`.
     static func unquote(_ slice: ArraySlice<UInt16>, _ range: TextRange) -> String {
         let raw = text(slice, range)
         guard raw.count >= 2, let q = raw.first, q == "\"" || q == "'", raw.last == q else { return raw }
         let body = raw.dropFirst().dropLast()
         if q == "'" { return body.replacingOccurrences(of: "''", with: "'") }
+        return decodeDoubleQuotedScalar(body)
+    }
+
+    private static func decodeDoubleQuotedScalar(_ body: Substring) -> String {
         var out = ""
         var chars = Array(body)[...]
         while let ch = chars.popFirst() {
-            guard ch == "\\", let next = chars.popFirst() else { out.append(ch); continue }
-            switch next {
-            case "n": out.append("\n")
-            case "t": out.append("\t")
-            case "r": out.append("\r")
-            case "x":
-                let hex = String(chars.prefix(2))
-                if hex.count == 2, let value = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(value) {
-                    out.unicodeScalars.append(scalar)
-                    chars = chars.dropFirst(2)
-                } else {
-                    out.append("x")
-                }
-            default: out.append(next)
+            guard ch == "\\", let next = chars.popFirst() else {
+                out.append(ch)
+                continue
             }
+            appendEscapedCharacter(next, remaining: &chars, into: &out)
         }
         return out
+    }
+
+    private static func appendEscapedCharacter(
+        _ escaped: Character,
+        remaining chars: inout ArraySlice<Character>,
+        into out: inout String
+    ) {
+        if let mapped = doubleQuotedEscapes[escaped] {
+            out.append(mapped)
+            return
+        }
+        if escaped == "x", let scalar = consumeHexEscape(from: &chars) {
+            out.unicodeScalars.append(scalar)
+            return
+        }
+        out.append(escaped)
+    }
+
+    private static func consumeHexEscape(from chars: inout ArraySlice<Character>) -> Unicode.Scalar? {
+        let hex = String(chars.prefix(2))
+        guard hex.count == 2, let value = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(value) else {
+            return nil
+        }
+        chars = chars.dropFirst(2)
+        return scalar
     }
 }
 
@@ -253,16 +278,35 @@ extension FrontmatterPropertyParser {
         return line.prefix(while: { YAMLLineTokenizer.isBlank($0) }).contains(YAMLLineTokenizer.tab)
     }
 
+    private static let inlineNonEditableKinds: [(kind: YAMLTokenKind, value: FrontmatterValueKind)] = [
+        (.anchor, .aliased),
+        (.alias, .aliased),
+        (.tag, .tagged),
+        (.blockScalarIndicator, .blockScalar),
+    ]
+
+    private static func nonEditableInlineKind(in content: [YAMLToken]) -> FrontmatterValueKind? {
+        for entry in inlineNonEditableKinds where content.contains(where: { $0.kind == entry.kind }) {
+            return entry.value
+        }
+        return nil
+    }
+
     private static func classifyInlineValueTokens(
         _ slice: ArraySlice<UInt16>,
         content: [YAMLToken],
         hasChildren: Bool
     ) -> FrontmatterValueKind? {
-        if content.contains(where: { $0.kind == .anchor || $0.kind == .alias }) { return .aliased }
-        if content.contains(where: { $0.kind == .tag }) { return .tagged }
-        if content.contains(where: { $0.kind == .blockScalarIndicator }) { return .blockScalar }
+        if let special = nonEditableInlineKind(in: content) { return special }
         guard let token = content.first else { return nil }
         guard !hasChildren else { return .blockScalar }
+        return classifyInlineScalarOrFlow(slice, token: token)
+    }
+
+    private static func classifyInlineScalarOrFlow(
+        _ slice: ArraySlice<UInt16>,
+        token: YAMLToken
+    ) -> FrontmatterValueKind {
         let raw = text(slice, token.range)
         if raw.hasPrefix("{") { return .nestedMap }
         if raw.hasPrefix("[") { return flowList(raw) ?? .nestedMap }
@@ -289,12 +333,16 @@ extension FrontmatterPropertyParser {
     private static func classifySingleChildSequenceLine(_ child: ArraySlice<UInt16>) -> ChildSequenceClassification {
         let tokens = YAMLLineTokenizer.tokens(line: child).filter { $0.kind != .comment }
         guard tokens.count == 2, tokens[0].kind == .listDash else {
-            if tokens.contains(where: { $0.kind == .anchor || $0.kind == .alias }) {
-                return .nonEditable(.aliased)
-            }
-            return .nonEditable(.nestedMap)
+            let hasAliasOrAnchor = tokens.contains { $0.kind == .anchor || $0.kind == .alias }
+            return .nonEditable(hasAliasOrAnchor ? .aliased : .nestedMap)
         }
-        let item = tokens[1]
+        return classifySequenceItemToken(tokens[1], in: child)
+    }
+
+    private static func classifySequenceItemToken(
+        _ item: YAMLToken,
+        in child: ArraySlice<UInt16>
+    ) -> ChildSequenceClassification {
         switch item.kind {
         case .quotedString:
             return .item(unquote(child, item.range))

@@ -148,49 +148,71 @@ extension SwiftEditWorkbenchModel {
     }
 
     public func formatActiveDocument() {
+        guard var resolved = resolveFormattableSession() else { return }
+        if activeDocumentLanguage == .json {
+            formatJSONDocument(id: resolved.id, session: &resolved.session)
+            return
+        }
+        formatMarkdownDocument(id: resolved.id, session: &resolved.session)
+    }
+
+    private func resolveFormattableSession() -> (id: DocumentID, session: DocumentSession)? {
         guard activeLogTail == nil else {
             statusBannerMessage = "Format blocked while live log tail is active."
-            return
+            return nil
         }
         guard let activeID = tabSession.activeTabID,
               !logTailOnlyTabIDs.contains(activeID),
-              var session = sessionsByID[activeID] else { return }
+              let session = sessionsByID[activeID] else { return nil }
         guard !session.isBinaryReadOnly, safetyBanner.canFormat else {
             statusBannerMessage = "Format blocked: binary read-only file."
-            return
+            return nil
         }
+        return (activeID, session)
+    }
+
+    private func formatJSONDocument(id activeID: DocumentID, session: inout DocumentSession) {
         let snap = session.snapshot
-        if activeDocumentLanguage == .json {
-            guard let jsonEdit = JSONFormatter.prettyPrint(snapshot: snap) else {
-                statusBannerMessage = "JSON format skipped: invalid, deeply nested (> 128), or already formatted JSON."
-                return
-            }
-            if (try? session.applyTextEdits([jsonEdit], expectedRevision: snap.revision)) != nil {
-                session.reconcileDirtyState(against: savedBaselineByID[activeID])
-                sessionsByID[activeID] = session
-                try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
-                statusBannerMessage = "Formatted JSON document."
-                persistRecoveryState()
-                refreshDiagnosticsForActiveDocument()
-            }
+        guard let jsonEdit = JSONFormatter.prettyPrint(snapshot: snap) else {
+            statusBannerMessage = "JSON format skipped: invalid, deeply nested (> 128), or already formatted JSON."
             return
         }
+        guard (try? commitFormattedEdits([jsonEdit], to: &session, id: activeID, expectedRevision: snap.revision, syncUntitledTitle: false)) != nil else {
+            return
+        }
+        statusBannerMessage = "Formatted JSON document."
+    }
+
+    private func formatMarkdownDocument(id activeID: DocumentID, session: inout DocumentSession) {
+        let snap = session.snapshot
         guard let batch = MarkdownLintAndFormatEngine.formatDocument(snapshot: snap).completedValue else {
             statusBannerMessage = "Formatting skipped (degraded, binary, AST depth > 128, or > 250 ms)."
             return
         }
         do {
-            _ = try session.applyTextEdits(batch.edits, expectedRevision: snap.revision)
-            session.reconcileDirtyState(against: savedBaselineByID[activeID])
-            sessionsByID[activeID] = session
-            try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
-            syncUntitledTabTitleIfNeeded(for: activeID, session: session)
+            try commitFormattedEdits(batch.edits, to: &session, id: activeID, expectedRevision: snap.revision, syncUntitledTitle: true)
             statusBannerMessage = batch.edits.isEmpty ? "Markdown already formatted." : "Formatted \(batch.edits.count) line(s)."
-            persistRecoveryState()
-            refreshDiagnosticsForActiveDocument()
         } catch {
             statusBannerMessage = "Format failed: \(error)"
         }
+    }
+
+    private func commitFormattedEdits(
+        _ edits: [TextEdit],
+        to session: inout DocumentSession,
+        id activeID: DocumentID,
+        expectedRevision: BufferRevision,
+        syncUntitledTitle: Bool
+    ) throws {
+        _ = try session.applyTextEdits(edits, expectedRevision: expectedRevision)
+        session.reconcileDirtyState(against: savedBaselineByID[activeID])
+        sessionsByID[activeID] = session
+        try? tabSession.updateTabState(id: activeID, isDirty: session.isDirty, revision: session.revision)
+        if syncUntitledTitle {
+            syncUntitledTabTitleIfNeeded(for: activeID, session: session)
+        }
+        persistRecoveryState()
+        refreshDiagnosticsForActiveDocument()
     }
 
     public func saveActiveDocument() {

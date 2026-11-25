@@ -118,21 +118,22 @@ public struct WordCompletionIndex: Sendable, Equatable {
         guard caret > 0, caret <= length else { return nil }
         if caret < length, isWordUnit(in: text, at: caret) { return nil }
         var start = caret
-        while start > 0 {
-            let unit = text.character(at: start - 1)
-            if unit < 0x80 {
-                guard isASCIIWordUnit(unit) else { break }
-                start -= 1
-            } else {
-                let previous = text.rangeOfComposedCharacterSequence(at: start - 1)
-                guard isWordComposedCharacter(in: text, range: previous) else { break }
-                start = previous.location
-            }
+        while start > 0, let nextStart = previousWordCharacterStart(in: text, before: start) {
+            start = nextStart
             if caret - start > maxIndexedWordUTF16Length { return nil }
         }
         guard caret - start >= minPrefixUTF16Length else { return nil }
         let range = NSRange(location: start, length: caret - start)
         return (TextRange(location: start, length: caret - start), text.substring(with: range))
+    }
+
+    private static func previousWordCharacterStart(in text: NSString, before cursor: Int) -> Int? {
+        let unit = text.character(at: cursor - 1)
+        if unit < 0x80 {
+            return isASCIIWordUnit(unit) ? cursor - 1 : nil
+        }
+        let previous = text.rangeOfComposedCharacterSequence(at: cursor - 1)
+        return isWordComposedCharacter(in: text, range: previous) ? previous.location : nil
     }
 
     @inline(__always)

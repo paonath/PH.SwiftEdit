@@ -65,70 +65,111 @@ stamp_single_plist() {
     fi
 }
 
+OPT_VERSION_JSON=""
+OPT_INFO_PLIST=""
+OPT_DRY_RUN="false"
+CONSUMED_ARGS=1
+RESOLVED_FULL_VERSION=""
+RESOLVED_SHORT_VERSION=""
+
+require_arg_value() {
+    local flag="$1"
+    local arg_count="$2"
+    local hint="$3"
+    if [[ "$arg_count" -lt 2 ]]; then
+        printf 'Error: %s requires %s\n' "$flag" "$hint" >&2
+        exit 1
+    fi
+}
+
+apply_cli_option() {
+    local flag="$1"
+    local arg_count="$2"
+    local next_val="${3:-}"
+    CONSUMED_ARGS=1
+
+    case "$flag" in
+        --version-json)
+            require_arg_value "--version-json" "$arg_count" "a path"
+            OPT_VERSION_JSON="$next_val"
+            CONSUMED_ARGS=2
+            ;;
+        --info-plist)
+            require_arg_value "--info-plist" "$arg_count" "a path"
+            OPT_INFO_PLIST="$next_val"
+            CONSUMED_ARGS=2
+            ;;
+        --dry-run)
+            OPT_DRY_RUN="true"
+            ;;
+        --help|-h)
+            print_help
+            exit 0
+            ;;
+        *)
+            printf 'Error: Unknown argument: %s\n' "$flag" >&2
+            exit 1
+            ;;
+    esac
+}
+
+parse_args() {
+    local repo_root="$1"
+    shift
+
+    OPT_VERSION_JSON="${repo_root}/version.json"
+    OPT_INFO_PLIST="${repo_root}/XcodeApp/Info.plist"
+    OPT_DRY_RUN="false"
+
+    while [[ $# -gt 0 ]]; do
+        apply_cli_option "$1" "$#" "${2:-}"
+        shift "$CONSUMED_ARGS"
+    done
+}
+
+resolve_versions_from_json() {
+    local version_json="$1"
+    [[ -f "$version_json" ]] || {
+        printf 'Error: version.json not found at %s\n' "$version_json" >&2
+        exit 1
+    }
+
+    RESOLVED_FULL_VERSION="$(/usr/bin/plutil -extract version raw -o - "$version_json" | tr -d '[:space:]')"
+    [[ -n "$RESOLVED_FULL_VERSION" ]] || {
+        printf 'Error: empty version in %s\n' "$version_json" >&2
+        exit 1
+    }
+
+    local short_version="${RESOLVED_FULL_VERSION%%-*}"
+    RESOLVED_SHORT_VERSION="${short_version%%+*}"
+    [[ -n "$RESOLVED_SHORT_VERSION" ]] || {
+        printf 'Error: invalid SemVer prefix in %s\n' "$RESOLVED_FULL_VERSION" >&2
+        exit 1
+    }
+}
+
+stamp_built_plist_if_present() {
+    local short_ver="$1"
+    local full_ver="$2"
+    local dry_run="$3"
+
+    [[ -n "${TARGET_BUILD_DIR:-}" && -n "${INFOPLIST_PATH:-}" ]] || return 0
+    local built_plist="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+    if [[ -f "$built_plist" ]]; then
+        stamp_single_plist "$built_plist" "$short_ver" "$full_ver" "$dry_run"
+    fi
+}
+
 main() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local repo_root
     repo_root="$(cd "$script_dir/.." && pwd)"
 
-    local version_json="${repo_root}/version.json"
-    local info_plist="${repo_root}/XcodeApp/Info.plist"
-    local dry_run="false"
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --version-json)
-                [[ $# -ge 2 ]] || { printf 'Error: --version-json requires a path\n' >&2; exit 1; }
-                version_json="$2"
-                shift 2
-                ;;
-            --info-plist)
-                [[ $# -ge 2 ]] || { printf 'Error: --info-plist requires a path\n' >&2; exit 1; }
-                info_plist="$2"
-                shift 2
-                ;;
-            --dry-run)
-                dry_run="true"
-                shift
-                ;;
-            --help|-h)
-                print_help
-                exit 0
-                ;;
-            *)
-                printf 'Error: Unknown argument: %s\n' "$1" >&2
-                exit 1
-                ;;
-        esac
-    done
-
-    [[ -f "$version_json" ]] || {
-        printf 'Error: version.json not found at %s\n' "$version_json" >&2
-        exit 1
-    }
-
-    local full_version
-    full_version="$(/usr/bin/plutil -extract version raw -o - "$version_json" | tr -d '[:space:]')"
-    [[ -n "$full_version" ]] || {
-        printf 'Error: empty version in %s\n' "$version_json" >&2
-        exit 1
-    }
-
-    local short_version="${full_version%%-*}"
-    short_version="${short_version%%+*}"
-    [[ -n "$short_version" ]] || {
-        printf 'Error: invalid SemVer prefix in %s\n' "$full_version" >&2
-        exit 1
-    }
-
-    stamp_single_plist "$info_plist" "$short_version" "$full_version" "$dry_run"
-
-    if [[ -n "${TARGET_BUILD_DIR:-}" && -n "${INFOPLIST_PATH:-}" ]]; then
-        local built_plist="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
-        if [[ -f "$built_plist" ]]; then
-            stamp_single_plist "$built_plist" "$short_version" "$full_version" "$dry_run"
-        fi
-    fi
+    parse_args "$repo_root" "$@"
+    resolve_versions_from_json "$OPT_VERSION_JSON"
+    stamp_single_plist "$OPT_INFO_PLIST" "$RESOLVED_SHORT_VERSION" "$RESOLVED_FULL_VERSION" "$OPT_DRY_RUN"
+    stamp_built_plist_if_present "$RESOLVED_SHORT_VERSION" "$RESOLVED_FULL_VERSION" "$OPT_DRY_RUN"
 }
 
 main "$@"

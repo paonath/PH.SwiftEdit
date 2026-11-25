@@ -1,10 +1,10 @@
 ---
 title: "Workspace Layout, Tabs, Folder Navigator & Session Recovery"
-summary: "Complete guide to the SwiftEdit window chrome, multi-tab management, Folder Navigator file operations, Drag & Drop, Duplicate Document, Session Recovery, Document Navigator, and Distraction-Free mode."
-commit: "ea62d54"
-date: "2026-11-23"
-branch: "feature/contaxtual_actions"
-review_date: "2026-12-23"
+summary: "Complete guide to the SwiftEdit window chrome, multi-tab management, Quick Open, Find in Folder, Folder Navigator, external disk monitoring, Session Recovery, Document Navigator, and Distraction-Free mode."
+commit: "b6ee821"
+date: "2026-11-25"
+branch: "main"
+review_date: "2026-12-25"
 ---
 
 # Chapter 1: Workspace Layout, Tabs & Navigation
@@ -19,7 +19,7 @@ SwiftEdit presents a minimal, distraction-free workspace composed of four chrome
    - **Breadcrumb** (top-right): displays `folder / filename` for the active file-backed tab.
 2. **Tab Bar**: flat tabs with a 2 pt purple accent bar on the active tab, a dot indicator for unsaved changes, a pin icon for pinned tabs, and a close button shown on the active or hovered tab.
 3. **Editor Canvas & Line-Number Gutter**: pure `#FFFFFF`/`#000000` (Light) or `#000000`/`#FFFFFF` (Dark) canvas with a neutral grey gutter showing line numbers at 85% of the editor font size and a dedicated column for lint severity badges.
-4. **Status Bar** (24 pt): sidebar toggle, Markdown/YAML lint status button (`Shift+Cmd+M`), unbalanced bracket counter (shown only when unbalanced brackets exist), cursor position (`Ln`, `Col`), character count, encoding (`UTF-8` / `UTF-16`), clickable line-ending menu (`LF`, `CRLF`, `CR`), detected language, clickable zoom menu (`50%–300%`), and theme cycle button (`Light → Dark → Auto`).
+4. **Status Bar** (24 pt): sidebar toggle, confined `.git/HEAD` branch badge, Markdown/YAML/JSON lint status button (`Shift+Cmd+M`), unbalanced bracket counter (shown only when unbalanced brackets exist), cursor position (`Ln`, `Col`), selection character/line counts, character & Markdown word count, clickable encoding menu (`UTF-8` / `UTF-16`), clickable line-ending menu (`LF`, `CRLF`, `CR`), detected language, clickable zoom menu (`50%–300%`), and theme cycle button (`Light → Dark → Auto`).
 
 ---
 
@@ -37,7 +37,7 @@ SwiftEdit presents a minimal, distraction-free workspace composed of four chrome
 
 ## Functional: Folder Navigator & File Operations
 
-Toggle the left Folder Navigator with **`Cmd+B`** or the sidebar header icon. The sidebar is collapsed by default on empty launch or single-file open (`Cmd+O`) and expands automatically when opening a folder (`Shift+Cmd+O`).
+Toggle the left Folder Navigator with **`Cmd+B`** or the sidebar header icon. The sidebar is collapsed by default on empty launch or single-file open (`Cmd+O`) and expands automatically when opening a folder (`Shift+Cmd+O`). You can also reveal any open disk-backed file directly in the Folder Navigator using **Reveal in Folder Navigator** from the `Cmd+Return` palette or editor right-click menu.
 
 ![Folder Navigator Sidebar](images/folder-navigator.png)
 
@@ -79,9 +79,9 @@ Right-click any file, folder, or empty space in the Folder Navigator to access:
 
 ## Functional: Binary Quarantine, Clean Startup & Session Recovery
 
-- **Clean Startup & Pinned Tab Reopen**: on first launch (when no pinned documents or unsaved recovery snapshots exist), SwiftEdit opens directly onto a minimal empty workspace canvas (`New Document ⌘N`, `Open File… ⌘O`, `Open Folder… ⇧⌘O`) without creating a placeholder document. On subsequent launches, pinned documents are automatically reopened from disk alongside any unsaved crash-recovery snapshots.
+- **Clean Startup & Empty Session Filter**: on first launch (when no pinned documents or non-empty recovery snapshots exist), SwiftEdit opens directly onto a minimal empty workspace canvas (`New Document ⌘N`, `Open File… ⌘O`, `Open Folder… ⇧⌘O`) without creating a placeholder document. Empty or whitespace-only untitled tabs (`fileURL == nil`) are excluded from recovery persistence and startup restoration so stale blank tabs never accumulate across restarts. On subsequent launches, pinned documents are automatically reopened from disk alongside any non-empty unsaved recovery snapshots.
 - **Binary Quarantine**: files containing NUL (`0x00`) bytes are never loaded into persistent tabs. Instead, SwiftEdit opens them in a transient read-only inspection banner where Save, Save As, Format, Duplicate, Pin, and Session Recovery are disabled. Closing or dismissing releases the buffer immediately.
-- **Automatic Session Recovery**: unsaved edits and untitled tabs are persisted atomically to `~/Library/Application Support/PH.SwiftEdit/SessionRecovery/` (debounced during typing, flushed immediately on tab switch or close). Orphaned snapshots are garbage-collected on startup.
+- **Automatic Session Recovery**: unsaved edits and non-empty untitled tabs are persisted atomically to `~/Library/Application Support/PH.SwiftEdit/SessionRecovery/` (debounced during typing, flushed immediately on tab switch or close). Orphaned and legacy empty snapshots are garbage-collected on startup.
 
 ---
 
@@ -99,9 +99,10 @@ Right-click any file, folder, or empty space in the Folder Navigator to access:
 
 | Component | Source File | Responsibility |
 | :--- | :--- | :--- |
-| `SwiftEditWorkbenchModel` | `Sources/SwiftEditUI/Views/SwiftEditRootView.swift` | `@MainActor @Observable` application coordinator managing tabs, sessions, sidebar, navigator, and recovery |
-| `WorkspaceTabSession` | `Sources/SwiftEditCore/WorkspaceAndTabSession/WorkspaceTabSession.swift` | Pinned-first tab ordering, rename/trash reconciliation, active tab fallback |
+| `SwiftEditWorkbenchModel` & Sub-Controllers | `Sources/SwiftEditUI/Workbench/` | `@MainActor @Observable` coordinator decomposed across focused extensions and sub-controllers for tabs, search, sidebar, terminal, and updates |
+| `WorkspaceTabSession` & `WorkbenchBulkCloseAndHistoryController` | `Sources/SwiftEditCore/WorkspaceAndTabSession/` & `Sources/SwiftEditUI/Workbench/` | Pinned-first tab ordering, bulk close, closed-tab history (`<= 20`), rename/trash reconciliation |
 | `DotfileFolderNavigator` | `Sources/SwiftEditCore/WorkspaceAndTabSession/DotfileFolderNavigator.swift` | Confined directory listing with dotfile visibility and symlink escape protection |
-| `SessionRecoveryStore` | `Sources/SwiftEditCore/WorkspaceAndTabSession/SessionRecoveryStore.swift` | Atomic manifest and recovery snapshot storage with symlink validation |
+| `SessionRecoveryStore` & `SessionRecoveryEligibility` | `Sources/SwiftEditCore/WorkspaceAndTabSession/SessionRecoveryStore.swift` | Atomic manifest and recovery snapshot storage with empty-untitled filtering and symlink validation |
+| `ExternalFileChangeMonitor` | `Sources/SwiftEditUI/Workspace/ExternalFileChangeMonitor.swift` | Confined `O_EVTONLY` disk watcher with clean auto-reload and dirty conflict detection |
 | `RecentFilesStore` | `Sources/SwiftEditCore/WorkspaceAndTabSession/RecentFilesStore.swift` | 10-entry MRU store with balanced security-scoped bookmark resolution |
 | `DocumentLoader` | `Sources/SwiftEditCore/DocumentCore/DocumentLoader.swift` | 64 MiB open size gate, binary NUL detection, encoding & line-ending round-trip |

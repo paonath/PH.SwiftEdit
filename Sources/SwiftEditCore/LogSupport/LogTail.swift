@@ -296,26 +296,49 @@ public struct LocalLogFileReader: LogFileReading {
         guard fd >= 0 else { throw DomainError.ioFailure("Cannot open log file (errno \(errno))") }
         defer { close(fd) }
         var data = Data(count: length)
-        var totalRead = 0
-        try data.withUnsafeMutableBytes { rawBuffer in
-            guard let base = rawBuffer.baseAddress else { return }
-            while totalRead < length {
-                let n = pread(fd, base.advanced(by: totalRead), length - totalRead, off_t(offset) + off_t(totalRead))
-                if n > 0 {
-                    totalRead += n
-                } else if n == 0 {
-                    break
-                } else if errno == EINTR {
-                    continue
-                } else {
-                    throw DomainError.ioFailure("Cannot read log file (errno \(errno))")
-                }
-            }
+        let totalRead = try data.withUnsafeMutableBytes { rawBuffer in
+            try Self.readContiguousBytes(fd: fd, into: rawBuffer, offset: offset, length: length)
         }
         if totalRead < length {
             data.removeSubrange(totalRead..<length)
         }
         return data
+    }
+
+    private static func readContiguousBytes(
+        fd: Int32,
+        into buffer: UnsafeMutableRawBufferPointer,
+        offset: UInt64,
+        length: Int
+    ) throws -> Int {
+        guard let base = buffer.baseAddress else { return 0 }
+        var totalRead = 0
+        while totalRead < length {
+            let chunk = try readPreadChunk(
+                fd: fd,
+                destination: base.advanced(by: totalRead),
+                remaining: length - totalRead,
+                offset: off_t(offset) + off_t(totalRead)
+            )
+            guard let chunk else { break }
+            totalRead += chunk
+        }
+        return totalRead
+    }
+
+    private static func readPreadChunk(
+        fd: Int32,
+        destination: UnsafeMutableRawPointer,
+        remaining: Int,
+        offset: off_t
+    ) throws -> Int? {
+        let n = pread(fd, destination, remaining, offset)
+        if n > 0 { return n }
+        if n == 0 { return nil }
+        guard errno == EINTR else {
+            throw DomainError.ioFailure("Cannot read log file (errno \(errno))")
+        }
+        return 0
     }
 }
 

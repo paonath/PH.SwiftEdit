@@ -335,125 +335,183 @@ extension SwiftEditNSTextView {
         }
     }
 
+    /// Layout context passed to per-occurrence background rendering helpers.
+    private struct WordOccurrenceDrawContext {
+        let layoutManager: NSTextLayoutManager
+        let contentManager: NSTextContentManager
+        let docStart: any NSTextLocation
+        let viewportStart: any NSTextLocation
+        let visStart: Int
+        let origin: NSPoint
+        let hasUnderline: Bool
+    }
+
     /// Paints rounded secondary occurrence boxes and non-color-only bottom underlines directly on the `NSTextView` background canvas for all occurrences intersecting `rect`.
     private func drawWordOccurrencesBackground(in rect: NSRect) {
         let activeOccurrences = effectiveWordOccurrenceRanges
+        let totalUTF16 = textStorage?.length ?? 0
         guard !activeOccurrences.isEmpty,
               wordOccurrenceBackgroundColor.alphaComponent > 0,
+              totalUTF16 > 0,
               let textLayoutManager,
               let contentManager = textLayoutManager.textContentManager else {
             return
         }
         let docRange = contentManager.documentRange
-        let totalUTF16 = textStorage?.length ?? 0
-        guard totalUTF16 > 0 else { return }
-
         let viewportRange = textLayoutManager.textViewportLayoutController.viewportRange ?? docRange
         let visStart = max(0, contentManager.offset(from: docRange.location, to: viewportRange.location))
         let visEnd = min(totalUTF16, max(visStart, contentManager.offset(from: docRange.location, to: viewportRange.endLocation)))
         let rangeStart = max(0, visStart - 256)
         let rangeEnd = min(totalUTF16, visEnd + 256)
-        let origin = textContainerOrigin
+        let context = WordOccurrenceDrawContext(
+            layoutManager: textLayoutManager,
+            contentManager: contentManager,
+            docStart: docRange.location,
+            viewportStart: viewportRange.location,
+            visStart: visStart,
+            origin: textContainerOrigin,
+            hasUnderline: wordOccurrenceUnderlineColor.alphaComponent > 0
+        )
 
+        var idx = Self.firstOccurrenceIndex(in: activeOccurrences, intersectingFrom: rangeStart)
+        while idx < activeOccurrences.count, activeOccurrences[idx].location < rangeEnd {
+            drawWordOccurrence(activeOccurrences[idx], in: rect, context: context)
+            idx += 1
+        }
+    }
+
+    private static func firstOccurrenceIndex(
+        in occurrences: [SwiftEditCore.TextRange],
+        intersectingFrom rangeStart: Int
+    ) -> Int {
         var lo = 0
-        var hi = activeOccurrences.count
+        var hi = occurrences.count
         while lo < hi {
             let mid = lo + (hi - lo) / 2
-            if activeOccurrences[mid].upperBound <= rangeStart {
+            if occurrences[mid].upperBound <= rangeStart {
                 lo = mid + 1
             } else {
                 hi = mid
             }
         }
+        return lo
+    }
 
-        let hasUnderline = wordOccurrenceUnderlineColor.alphaComponent > 0
-        var idx = lo
-        while idx < activeOccurrences.count {
-            let occ = activeOccurrences[idx]
-            if occ.location >= rangeEnd { break }
-            let startLoc: (any NSTextLocation)? = occ.location >= visStart
-                ? contentManager.location(viewportRange.location, offsetBy: occ.location - visStart)
-                : contentManager.location(docRange.location, offsetBy: occ.location)
-            if let startLoc,
-               let endLoc = contentManager.location(startLoc, offsetBy: occ.length),
-               let nsTextRange = NSTextRange(location: startLoc, end: endLoc) {
-                textLayoutManager.enumerateTextSegments(in: nsTextRange, type: .standard, options: []) { _, segmentFrame, _, _ in
-                    let segRect = NSRect(
-                        x: origin.x + segmentFrame.origin.x,
-                        y: origin.y + segmentFrame.origin.y,
-                        width: segmentFrame.width,
-                        height: segmentFrame.height
-                    )
-                    if segRect.width > 0, segRect.height > 0, segRect.intersects(rect) {
-                        wordOccurrenceBackgroundColor.setFill()
-                        let pill = NSBezierPath(roundedRect: segRect.insetBy(dx: -1.0, dy: 0), xRadius: 2.5, yRadius: 2.5)
-                        pill.fill()
-                        if hasUnderline {
-                            wordOccurrenceUnderlineColor.setFill()
-                            let underlineRect = NSRect(
-                                x: segRect.minX,
-                                y: segRect.maxY - 1.5,
-                                width: segRect.width,
-                                height: 1.5
-                            )
-                            underlineRect.fill()
-                        }
-                    }
-                    return true
-                }
-            }
-            idx += 1
+    private func drawWordOccurrence(
+        _ occ: SwiftEditCore.TextRange,
+        in dirtyRect: NSRect,
+        context: WordOccurrenceDrawContext
+    ) {
+        let startLoc: (any NSTextLocation)? = occ.location >= context.visStart
+            ? context.contentManager.location(context.viewportStart, offsetBy: occ.location - context.visStart)
+            : context.contentManager.location(context.docStart, offsetBy: occ.location)
+        guard let startLoc,
+              let endLoc = context.contentManager.location(startLoc, offsetBy: occ.length),
+              let nsTextRange = NSTextRange(location: startLoc, end: endLoc) else {
+            return
         }
+        context.layoutManager.enumerateTextSegments(in: nsTextRange, type: .standard, options: []) { _, segmentFrame, _, _ in
+            paintOccurrenceSegment(
+                frame: segmentFrame,
+                dirtyRect: dirtyRect,
+                origin: context.origin,
+                hasUnderline: context.hasUnderline
+            )
+            return true
+        }
+    }
+
+    private func paintOccurrenceSegment(
+        frame: CGRect,
+        dirtyRect: NSRect,
+        origin: NSPoint,
+        hasUnderline: Bool
+    ) {
+        let segRect = NSRect(
+            x: origin.x + frame.origin.x,
+            y: origin.y + frame.origin.y,
+            width: frame.width,
+            height: frame.height
+        )
+        guard segRect.width > 0, segRect.height > 0, segRect.intersects(dirtyRect) else { return }
+        wordOccurrenceBackgroundColor.setFill()
+        NSBezierPath(roundedRect: segRect.insetBy(dx: -1.0, dy: 0), xRadius: 2.5, yRadius: 2.5).fill()
+        guard hasUnderline else { return }
+        wordOccurrenceUnderlineColor.setFill()
+        NSRect(x: segRect.minX, y: segRect.maxY - 1.5, width: segRect.width, height: 1.5).fill()
     }
 
     /// Computes full-width highlight rect covering every wrapped `textLineFragment` of the active paragraph/line (`BUG-013`).
     func currentLineFullWidthRect(onlyIfInViewport: Bool = false) -> NSRect? {
         let origin = textContainerOrigin
         let fallbackHeight = max(14.0, (font?.ascender ?? 12.0) - (font?.descender ?? -3.0) + (font?.leading ?? 2.0))
+        let fallbackRect = NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
         guard let textLayoutManager,
               let contentManager = textLayoutManager.textContentManager else {
-            return NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
+            return fallbackRect
         }
 
         let totalLength = textStorage?.length ?? 0
         let caretOffset = min(selectedRange().location, totalLength)
         guard let caretLocation = contentManager.location(contentManager.documentRange.location, offsetBy: caretOffset) else {
-            return NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
+            return fallbackRect
         }
-
-        // During scroll redraws, skip forcing `.ensuresLayout` on off-screen paragraphs far outside the active viewport.
-        if onlyIfInViewport, let viewportRange = textLayoutManager.textViewportLayoutController.viewportRange {
-            if caretLocation.compare(viewportRange.location) == .orderedAscending
-                || caretLocation.compare(viewportRange.endLocation) == .orderedDescending {
-                return nil
-            }
+        if Self.isLocationOutsideViewport(caretLocation, in: textLayoutManager, onlyIfInViewport: onlyIfInViewport) {
+            return nil
         }
 
         var resolvedRect: NSRect?
         let options: NSTextLayoutFragment.EnumerationOptions = onlyIfInViewport ? [] : [.ensuresLayout]
         textLayoutManager.enumerateTextLayoutFragments(from: caretLocation, options: options) { fragment in
-            let fragmentOrigin = fragment.layoutFragmentFrame.origin
-            if !fragment.textLineFragments.isEmpty {
-                var minLineY = CGFloat.greatestFiniteMagnitude
-                var maxLineY: CGFloat = 0
-                for lineFragment in fragment.textLineFragments {
-                    let frame = lineFragment.typographicBounds
-                    minLineY = min(minLineY, frame.minY)
-                    maxLineY = max(maxLineY, frame.maxY)
-                }
-                let y = origin.y + fragmentOrigin.y + minLineY
-                let height = max(maxLineY - minLineY, fallbackHeight)
-                resolvedRect = NSRect(x: 0, y: y, width: bounds.width, height: height)
-                return false
-            }
-            let fallbackY = origin.y + fragmentOrigin.y
-            resolvedRect = NSRect(x: 0, y: fallbackY, width: bounds.width, height: max(fragment.layoutFragmentFrame.height, fallbackHeight))
+            resolvedRect = fullWidthLineRect(for: fragment, origin: origin, fallbackHeight: fallbackHeight)
             return false
         }
         if onlyIfInViewport && resolvedRect == nil {
             return nil
         }
-        return resolvedRect ?? NSRect(x: 0, y: origin.y, width: bounds.width, height: fallbackHeight)
+        return resolvedRect ?? fallbackRect
+    }
+
+    private static func isLocationOutsideViewport(
+        _ location: any NSTextLocation,
+        in layoutManager: NSTextLayoutManager,
+        onlyIfInViewport: Bool
+    ) -> Bool {
+        guard onlyIfInViewport,
+              let viewportRange = layoutManager.textViewportLayoutController.viewportRange else {
+            return false
+        }
+        return location.compare(viewportRange.location) == .orderedAscending
+            || location.compare(viewportRange.endLocation) == .orderedDescending
+    }
+
+    private func fullWidthLineRect(
+        for fragment: NSTextLayoutFragment,
+        origin: NSPoint,
+        fallbackHeight: CGFloat
+    ) -> NSRect {
+        let fragmentOrigin = fragment.layoutFragmentFrame.origin
+        guard !fragment.textLineFragments.isEmpty else {
+            return NSRect(
+                x: 0,
+                y: origin.y + fragmentOrigin.y,
+                width: bounds.width,
+                height: max(fragment.layoutFragmentFrame.height, fallbackHeight)
+            )
+        }
+        var minLineY = CGFloat.greatestFiniteMagnitude
+        var maxLineY: CGFloat = 0
+        for lineFragment in fragment.textLineFragments {
+            let frame = lineFragment.typographicBounds
+            minLineY = min(minLineY, frame.minY)
+            maxLineY = max(maxLineY, frame.maxY)
+        }
+        return NSRect(
+            x: 0,
+            y: origin.y + fragmentOrigin.y + minLineY,
+            width: bounds.width,
+            height: max(maxLineY - minLineY, fallbackHeight)
+        )
     }
 }
 

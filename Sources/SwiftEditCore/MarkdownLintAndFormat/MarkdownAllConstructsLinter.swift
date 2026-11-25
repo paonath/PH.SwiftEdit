@@ -180,7 +180,6 @@ enum MarkdownAllConstructsLinter {
         maxLine: Int,
         context: inout MarkdownLinterPassContext
     ) -> Int {
-        let isBlankLine = context.isBlank(line)
         if let fence = context.currentFence(at: line) {
             return MarkdownLinterRuleFamilyPasses.evaluateFenceBlock(at: line, range: range, slice: slice, fence: fence, context: &context)
         }
@@ -188,31 +187,45 @@ enum MarkdownAllConstructsLinter {
             context.prevBlank = false
             return line + 1
         }
+        let isBlankLine = context.isBlank(line)
         if MarkdownLinterRuleFamilyPasses.evaluateWhitespaceAndBlankLine(at: line, range: range, slice: slice, isBlankLine: isBlankLine, context: &context) {
             return line + 1
         }
         let wasBlank = context.prevBlank
         context.prevBlank = false
+        let lead = leadingIndentAndUnit(in: slice)
+        if let nextLine = MarkdownLinterRuleFamilyPasses.evaluateTableBlock(at: line, range: range, slice: slice, first: lead.first, indent: lead.indent, context: &context) {
+            return nextLine
+        }
+        evaluateSingleLineConstruct(at: line, range: range, slice: slice, lead: lead, wasBlank: wasBlank, context: &context)
+        return line + 1
+    }
 
+    private static func leadingIndentAndUnit(
+        in slice: ArraySlice<UInt16>
+    ) -> (idx: ArraySlice<UInt16>.Index, indent: Int, first: UInt16) {
         var idx = slice.startIndex
         while idx < slice.endIndex, slice[idx] == 0x20 { idx += 1 }
         let indent = idx - slice.startIndex
         let first = idx < slice.endIndex ? slice[idx] : 0
+        return (idx, indent, first)
+    }
 
-        if let nextLine = MarkdownLinterRuleFamilyPasses.evaluateTableBlock(at: line, range: range, slice: slice, first: first, indent: indent, context: &context) {
-            return nextLine
+    private static func evaluateSingleLineConstruct(
+        at line: Int,
+        range: TextRange,
+        slice: ArraySlice<UInt16>,
+        lead: (idx: ArraySlice<UInt16>.Index, indent: Int, first: UInt16),
+        wasBlank: Bool,
+        context: inout MarkdownLinterPassContext
+    ) {
+        let handled =
+            MarkdownLinterRuleFamilyPasses.evaluateHeadingLine(at: line, range: range, slice: slice, first: lead.first, indent: lead.indent, idx: lead.idx, context: &context)
+            || MarkdownLinterRuleFamilyPasses.evaluateBlockquoteLine(at: line, range: range, slice: slice, first: lead.first, indent: lead.indent, idx: lead.idx, context: &context)
+            || MarkdownLinterRuleFamilyPasses.evaluateListItemLine(at: line, range: range, slice: slice, wasBlank: wasBlank, context: &context)
+        if !handled {
+            MarkdownLinterRuleFamilyPasses.evaluateParagraphLine(at: line, range: range, slice: slice, indent: lead.indent, wasBlank: wasBlank, context: &context)
         }
-        if MarkdownLinterRuleFamilyPasses.evaluateHeadingLine(at: line, range: range, slice: slice, first: first, indent: indent, idx: idx, context: &context) {
-            return line + 1
-        }
-        if MarkdownLinterRuleFamilyPasses.evaluateBlockquoteLine(at: line, range: range, slice: slice, first: first, indent: indent, idx: idx, context: &context) {
-            return line + 1
-        }
-        if MarkdownLinterRuleFamilyPasses.evaluateListItemLine(at: line, range: range, slice: slice, wasBlank: wasBlank, context: &context) {
-            return line + 1
-        }
-        MarkdownLinterRuleFamilyPasses.evaluateParagraphLine(at: line, range: range, slice: slice, indent: indent, wasBlank: wasBlank, context: &context)
-        return line + 1
     }
 }
 

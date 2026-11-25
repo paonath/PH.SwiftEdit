@@ -89,31 +89,45 @@ extension MarkdownDiagramParser {
         }
     }
 
+    private static let ignoredFlowchartPrefixes = ["classdef ", "class ", "style ", "click "]
+
     fileprivate static func parseFlowchartDiagram(_ lines: [String], direction: DiagramDirection) -> MarkdownDiagramParseOutcome {
         var spec = ParsedGraphSpec()
         var subgraphStack: [String] = []
-
         for rawLine in lines {
-            let line = rawLine.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: ";"))
-            if line.lowercased().hasPrefix("classdef ") || line.lowercased().hasPrefix("class ") || line.lowercased().hasPrefix("style ") || line.lowercased().hasPrefix("click ") {
-                continue
-            }
-            if line.lowercased().hasPrefix("subgraph ") {
-                guard subgraphStack.count < maxDepth else { return .unsupportedOrOversized }
-                let title = String(line.dropFirst("subgraph ".count)).trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
-                subgraphStack.append(title.isEmpty ? "Group" : title)
-                continue
-            }
-            if line.lowercased() == "end" {
-                if !subgraphStack.isEmpty { subgraphStack.removeLast() }
-                continue
-            }
-            if !consumeFlowchartStatement(line, activeSubgraph: subgraphStack.last, into: &spec) {
+            guard consumeFlowchartLine(rawLine, subgraphStack: &subgraphStack, into: &spec) else {
                 return .unsupportedOrOversized
             }
         }
         guard !spec.order.isEmpty else { return .unsupportedOrOversized }
         return .diagram(layoutLayeredGraph(spec: spec, kind: .flowchart, direction: direction))
+    }
+
+    private static func consumeFlowchartLine(
+        _ rawLine: String,
+        subgraphStack: inout [String],
+        into spec: inout ParsedGraphSpec
+    ) -> Bool {
+        let line = rawLine.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: ";"))
+        let lower = line.lowercased()
+        if ignoredFlowchartPrefixes.contains(where: { lower.hasPrefix($0) }) {
+            return true
+        }
+        if lower.hasPrefix("subgraph ") {
+            return pushFlowchartSubgraph(from: line, onto: &subgraphStack)
+        }
+        if lower == "end" {
+            _ = subgraphStack.popLast()
+            return true
+        }
+        return consumeFlowchartStatement(line, activeSubgraph: subgraphStack.last, into: &spec)
+    }
+
+    private static func pushFlowchartSubgraph(from line: String, onto subgraphStack: inout [String]) -> Bool {
+        guard subgraphStack.count < maxDepth else { return false }
+        let title = String(line.dropFirst("subgraph ".count)).trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
+        subgraphStack.append(title.isEmpty ? "Group" : title)
+        return true
     }
 
     private static func consumeFlowchartStatement(_ line: String, activeSubgraph: String?, into spec: inout ParsedGraphSpec) -> Bool {

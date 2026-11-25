@@ -44,6 +44,24 @@ public struct TerminalSelectionPayload: Equatable, Sendable {
         in sourceText: String,
         isBinaryReadOnly: Bool = false
     ) -> TerminalSelectionPayload? {
+        guard let scalarRange = scalarSelectionRange(
+            for: selection,
+            in: sourceText,
+            isBinaryReadOnly: isBinaryReadOnly
+        ) else {
+            return nil
+        }
+        let sanitized = sanitizeTerminalText(sourceText.unicodeScalars[scalarRange], capacity: selection.length)
+        guard !sanitized.isEmpty else { return nil }
+        let lines = sanitized.utf8.count(where: { $0 == 0x0A }) + 1
+        return TerminalSelectionPayload(text: sanitized, lineCount: lines)
+    }
+
+    private static func scalarSelectionRange(
+        for selection: TextRange,
+        in sourceText: String,
+        isBinaryReadOnly: Bool
+    ) -> Range<String.UnicodeScalarView.Index>? {
         guard !isBinaryReadOnly,
               selection.location >= 0,
               selection.length > 0,
@@ -57,44 +75,51 @@ public struct TerminalSelectionPayload: Equatable, Sendable {
               let scalarEnd = end.samePosition(in: sourceText.unicodeScalars) else {
             return nil
         }
+        return scalarStart..<scalarEnd
+    }
 
+    private static func sanitizeTerminalText(
+        _ scalars: String.UnicodeScalarView.SubSequence,
+        capacity: Int
+    ) -> String {
         var sanitized = String()
-        sanitized.reserveCapacity(selection.length)
+        sanitized.reserveCapacity(capacity)
         var previousWasCR = false
-        for scalar in sourceText.unicodeScalars[scalarStart..<scalarEnd] {
-            let v = scalar.value
-            if v == 0x0D { // CR
-                sanitized.unicodeScalars.append(UnicodeScalar(0x0A)!)
-                previousWasCR = true
-                continue
-            }
-            if v == 0x0A { // LF
-                if !previousWasCR {
-                    sanitized.unicodeScalars.append(scalar)
-                }
-                previousWasCR = false
-                continue
-            }
-            previousWasCR = false
-            // Strip C0 control characters (including ESC 0x1B to prevent terminal escape/bracketed-paste breakout)
-            // and DEL (0x7F), preserving horizontal tab (0x09).
-            if (v < 0x20 && v != 0x09) || v == 0x7F {
-                continue
-            }
-            sanitized.unicodeScalars.append(scalar)
+        for scalar in scalars {
+            appendSanitizedScalar(scalar, previousWasCR: &previousWasCR, into: &sanitized)
         }
-
         // Never append or forward trailing line breaks so sending text to the terminal NEVER auto-executes Return.
         while sanitized.last == "\n" {
             sanitized.removeLast()
         }
-        guard !sanitized.isEmpty else { return nil }
+        return sanitized
+    }
 
-        var lines = 1
-        for byte in sanitized.utf8 where byte == 0x0A {
-            lines += 1
+    private static func appendSanitizedScalar(
+        _ scalar: UnicodeScalar,
+        previousWasCR: inout Bool,
+        into sanitized: inout String
+    ) {
+        let v = scalar.value
+        if v == 0x0D { // CR
+            sanitized.unicodeScalars.append(UnicodeScalar(0x0A)!)
+            previousWasCR = true
+            return
         }
-        return TerminalSelectionPayload(text: sanitized, lineCount: lines)
+        if v == 0x0A { // LF
+            if !previousWasCR {
+                sanitized.unicodeScalars.append(scalar)
+            }
+            previousWasCR = false
+            return
+        }
+        previousWasCR = false
+        // Strip C0 control characters (including ESC 0x1B to prevent terminal escape/bracketed-paste breakout)
+        // and DEL (0x7F), preserving horizontal tab (0x09).
+        if (v < 0x20 && v != 0x09) || v == 0x7F {
+            return
+        }
+        sanitized.unicodeScalars.append(scalar)
     }
 }
 

@@ -4,6 +4,36 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "041-complexity-pass-10-codec-fences-and-remaining-scripts"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/specs/workbench-editor-and-linter-modular-decomposition/spec.md"
+    summary: "Iteration 10 complexity reduction for DocumentCodec, SmartNewline fences, stamp-info-plist, and verify-design-assets"
+  - id: "040-complexity-pass-9-workbench-commands-filesystem-and-mermaid"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/specs/workbench-editor-and-linter-modular-decomposition/spec.md"
+    summary: "Iteration 9 complexity reduction for FileSystemProviding, MermaidParserAndLayout, CheatSheet, and DocumentLifecycle"
+  - id: "039-complexity-pass-8-markdown-linters-frontmatter-and-palette"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/specs/workbench-editor-and-linter-modular-decomposition/spec.md"
+    summary: "Iteration 8 complexity reduction for MarkdownAllConstructsLinter, HeadingPass, FrontmatterProperties, and Palette"
+  - id: "038-complexity-pass-7-yaml-outline-contextual-and-completion"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/specs/workbench-editor-and-linter-modular-decomposition/spec.md"
+    summary: "Iteration 7 complexity reduction for YAMLOutlineEngine, TerminalSelectionPayload, WordCompletionIndex, ListGrammar"
+  - id: "037-complexity-pass-6-safety-banner-textview-and-logtail"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/specs/workbench-editor-and-linter-modular-decomposition/spec.md"
+    summary: "Iteration 6 complexity reduction for InspectionSafetyBannerState, SwiftEditNSTextView, LogTail, and DocumentLanguage"
   - id: "036-complexity-pass-5-scripts-and-asset-verifier"
     status: "implemented"
     date: "2026-11-25"

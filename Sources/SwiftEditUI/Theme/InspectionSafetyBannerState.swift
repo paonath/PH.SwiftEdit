@@ -94,13 +94,21 @@ public struct InspectionSafetyBannerState: Equatable, Sendable {
         )
     }
 
+    private static let bidiDescriptorsByScalar: [UInt32: (hex: String, name: String)] = [
+        0x202A: ("U+202A", "LEFT-TO-RIGHT EMBEDDING"),
+        0x202B: ("U+202B", "RIGHT-TO-LEFT EMBEDDING"),
+        0x202C: ("U+202C", "POP DIRECTIONAL FORMATTING"),
+        0x202D: ("U+202D", "LEFT-TO-RIGHT OVERRIDE"),
+        0x202E: ("U+202E", "RIGHT-TO-LEFT OVERRIDE"),
+        0x2066: ("U+2066", "LEFT-TO-RIGHT ISOLATE"),
+        0x2067: ("U+2067", "RIGHT-TO-LEFT ISOLATE"),
+        0x2068: ("U+2068", "FIRST STRONG ISOLATE"),
+        0x2069: ("U+2069", "POP DIRECTIONAL ISOLATE"),
+        0x061C: ("U+061C", "ARABIC LETTER MARK"),
+    ]
+
     private static func scanBiDiControlScalars(in text: String) -> [BiDiControlCharacterWarning] {
-        let mayContainBiDi: Bool = text.utf8.withContiguousStorageIfAvailable { buf -> Bool in
-            guard let base = buf.baseAddress, buf.isEmpty == false else { return false }
-            let count = buf.count
-            return memchr(base, 0xE2, count) != nil || memchr(base, 0xD8, count) != nil
-        } ?? true
-        guard mayContainBiDi else { return [] }
+        guard textMayContainBiDiBytes(text) else { return [] }
 
         var warnings: [BiDiControlCharacterWarning] = []
         let scalars = text.unicodeScalars
@@ -118,33 +126,33 @@ public struct InspectionSafetyBannerState: Equatable, Sendable {
                     name: descriptor.name
                 ))
             }
-            if scalar.value == 0x0A {
-                line += 1
-            } else if scalar.value == 0x0D {
-                let nextIndex = scalars.index(after: index)
-                if nextIndex == scalars.endIndex || scalars[nextIndex].value != 0x0A {
-                    line += 1
-                }
-            }
+            line += lineIncrement(at: index, in: scalars)
             utf16Offset += scalar.utf16.count
             index = scalars.index(after: index)
         }
         return warnings
     }
 
+    private static func textMayContainBiDiBytes(_ text: String) -> Bool {
+        text.utf8.withContiguousStorageIfAvailable { buf -> Bool in
+            guard let base = buf.baseAddress, buf.isEmpty == false else { return false }
+            let count = buf.count
+            return memchr(base, 0xE2, count) != nil || memchr(base, 0xD8, count) != nil
+        } ?? true
+    }
+
+    private static func lineIncrement(
+        at index: String.UnicodeScalarView.Index,
+        in scalars: String.UnicodeScalarView
+    ) -> Int {
+        let value = scalars[index].value
+        if value == 0x0A { return 1 }
+        guard value == 0x0D else { return 0 }
+        let nextIndex = scalars.index(after: index)
+        return (nextIndex == scalars.endIndex || scalars[nextIndex].value != 0x0A) ? 1 : 0
+    }
+
     private static func bidiDescriptor(for value: UInt32) -> (hex: String, name: String)? {
-        switch value {
-        case 0x202A: return ("U+202A", "LEFT-TO-RIGHT EMBEDDING")
-        case 0x202B: return ("U+202B", "RIGHT-TO-LEFT EMBEDDING")
-        case 0x202C: return ("U+202C", "POP DIRECTIONAL FORMATTING")
-        case 0x202D: return ("U+202D", "LEFT-TO-RIGHT OVERRIDE")
-        case 0x202E: return ("U+202E", "RIGHT-TO-LEFT OVERRIDE")
-        case 0x2066: return ("U+2066", "LEFT-TO-RIGHT ISOLATE")
-        case 0x2067: return ("U+2067", "RIGHT-TO-LEFT ISOLATE")
-        case 0x2068: return ("U+2068", "FIRST STRONG ISOLATE")
-        case 0x2069: return ("U+2069", "POP DIRECTIONAL ISOLATE")
-        case 0x061C: return ("U+061C", "ARABIC LETTER MARK")
-        default: return nil
-        }
+        bidiDescriptorsByScalar[value]
     }
 }

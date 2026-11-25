@@ -21,6 +21,7 @@ public enum DocumentCodec {
     public static let binaryProbeBytes: Int = 8 * 1024
     /// Maximum number of bytes (`1 MiB`) converted into read-only printable ASCII inspection text for binary files (`SEC-011`).
     public static let maxBinaryInspectionBytes: Int = 1_048_576
+    private static let bomDetectionOrder: [TextEncoding] = [.utf8WithBOM, .utf16LEWithBOM, .utf16BEWithBOM]
 
     /// Returns `true` when the first `8 KiB` of a non-UTF-16-BOM byte buffer contains at least one `0x00` NUL byte.
     public static func isBinaryPrefix(_ data: Data) -> Bool {
@@ -72,77 +73,70 @@ public enum DocumentCodec {
         if isBinaryPrefix(data) {
             return decodeBinaryInspectionPreview(data)
         }
-        let rawString: String
-        let detectedEncoding: TextEncoding
-
-        if data.starts(with: TextEncoding.utf8WithBOM.bomBytes) {
-            let body = data.dropFirst(TextEncoding.utf8WithBOM.bomBytes.count)
-            guard let decoded = String(bytes: body, encoding: .utf8) else {
-                throw DomainError.unsupportedEncoding
-            }
-            rawString = decoded
-            detectedEncoding = .utf8WithBOM
-        } else if data.starts(with: TextEncoding.utf16LEWithBOM.bomBytes) {
-            let body = data.dropFirst(TextEncoding.utf16LEWithBOM.bomBytes.count)
-            guard body.count % 2 == 0, let decoded = decodeStrictUTF16(body, littleEndian: true) else {
-                throw DomainError.unsupportedEncoding
-            }
-            rawString = decoded
-            detectedEncoding = .utf16LEWithBOM
-        } else if data.starts(with: TextEncoding.utf16BEWithBOM.bomBytes) {
-            let body = data.dropFirst(TextEncoding.utf16BEWithBOM.bomBytes.count)
-            guard body.count % 2 == 0, let decoded = decodeStrictUTF16(body, littleEndian: false) else {
-                throw DomainError.unsupportedEncoding
-            }
-            rawString = decoded
-            detectedEncoding = .utf16BEWithBOM
-        } else {
-            guard let decoded = String(bytes: data, encoding: .utf8) else {
-                throw DomainError.unsupportedEncoding
-            }
-            rawString = decoded
-            detectedEncoding = .utf8
-        }
-
-        let detectedLineEnding = LineEnding.detect(in: rawString)
-        let normalized = detectedLineEnding == .lf ? rawString : LineEnding.normalizeToLF(rawString)
-
-        return DecodedDocumentPayload(
-            text: normalized,
-            encoding: detectedEncoding,
-            lineEnding: detectedLineEnding,
-            isBinaryReadOnly: false
-        )
+        let (detectedEncoding, body) = detectBOMEncoding(in: data)
+        let rawString = try decodePayloadText(body, encoding: detectedEncoding)
+        return makeTextPayload(rawString: rawString, encoding: detectedEncoding)
     }
 
     /// Decodes `data` using an explicit user-chosen `TextEncoding` (`Reopen with Encoding`, `REQ-012`).
     public static func decode(_ data: Data, explicitEncoding: TextEncoding) throws -> DecodedDocumentPayload {
-        let bom = explicitEncoding.bomBytes
-        let body = (!bom.isEmpty && data.starts(with: bom)) ? Data(data.dropFirst(bom.count)) : data
-        let rawString: String
-        switch explicitEncoding {
+        let body = stripOptionalBOM(from: data, for: explicitEncoding)
+        if isUTF8Encoding(explicitEncoding), isBinaryPrefix(body) {
+            throw DomainError.unsupportedEncoding
+        }
+        let rawString = try decodePayloadText(body, encoding: explicitEncoding)
+        return makeTextPayload(rawString: rawString, encoding: explicitEncoding)
+    }
+
+    private static func detectBOMEncoding(in data: Data) -> (encoding: TextEncoding, body: Data) {
+        for candidate in bomDetectionOrder {
+            let bom = candidate.bomBytes
+            if data.starts(with: bom) {
+                return (candidate, data.dropFirst(bom.count))
+            }
+        }
+        return (.utf8, data)
+    }
+
+    private static func stripOptionalBOM(from data: Data, for encoding: TextEncoding) -> Data {
+        let bom = encoding.bomBytes
+        guard !bom.isEmpty, data.starts(with: bom) else {
+            return data
+        }
+        return Data(data.dropFirst(bom.count))
+    }
+
+    private static func isUTF8Encoding(_ encoding: TextEncoding) -> Bool {
+        encoding == .utf8 || encoding == .utf8WithBOM
+    }
+
+    private static func decodePayloadText(_ body: Data, encoding: TextEncoding) throws -> String {
+        switch encoding {
         case .utf8, .utf8WithBOM:
-            if isBinaryPrefix(body) { throw DomainError.unsupportedEncoding }
             guard let decoded = String(bytes: body, encoding: .utf8) else {
                 throw DomainError.unsupportedEncoding
             }
-            rawString = decoded
+            return decoded
         case .utf16LEWithBOM:
-            guard body.count % 2 == 0, let decoded = decodeStrictUTF16(body, littleEndian: true) else {
-                throw DomainError.unsupportedEncoding
-            }
-            rawString = decoded
+            return try requireStrictUTF16(body, littleEndian: true)
         case .utf16BEWithBOM:
-            guard body.count % 2 == 0, let decoded = decodeStrictUTF16(body, littleEndian: false) else {
-                throw DomainError.unsupportedEncoding
-            }
-            rawString = decoded
+            return try requireStrictUTF16(body, littleEndian: false)
         }
+    }
+
+    private static func requireStrictUTF16(_ body: Data, littleEndian: Bool) throws -> String {
+        guard body.count % 2 == 0, let decoded = decodeStrictUTF16(body, littleEndian: littleEndian) else {
+            throw DomainError.unsupportedEncoding
+        }
+        return decoded
+    }
+
+    private static func makeTextPayload(rawString: String, encoding: TextEncoding) -> DecodedDocumentPayload {
         let detectedLineEnding = LineEnding.detect(in: rawString)
         let normalized = detectedLineEnding == .lf ? rawString : LineEnding.normalizeToLF(rawString)
         return DecodedDocumentPayload(
             text: normalized,
-            encoding: explicitEncoding,
+            encoding: encoding,
             lineEnding: detectedLineEnding,
             isBinaryReadOnly: false
         )

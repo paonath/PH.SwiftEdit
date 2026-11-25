@@ -1,17 +1,17 @@
 ---
-title: "Markdown Authoring, Linting, Native Preview & YAML Support"
-summary: "Complete guide to GitHub Flavored Markdown editing, adaptive lists, table navigation, AST formatting, 26-rule linting with quick fixes, native offline preview, frontmatter Properties panel, and YAML editing."
-commit: "ea62d54"
-date: "2026-11-23"
-branch: "feature/contaxtual_actions"
-review_date: "2026-12-23"
+title: "Markdown Authoring, Linting, Native Preview, YAML & JSON Support"
+summary: "Complete guide to GitHub Flavored Markdown editing, adaptive lists, table navigation, AST formatting, 26-rule linting with quick fixes, native offline preview with Copy buttons and Markmap/Mermaid diagrams, frontmatter Properties panel, and YAML/JSON support."
+commit: "b6ee821"
+date: "2026-11-25"
+branch: "main"
+review_date: "2026-12-25"
 ---
 
-# Chapter 3: Markdown & YAML
+# Chapter 3: Markdown, YAML & JSON
 
 ## Functional: GitHub Flavored Markdown (GFM) Authoring
 
-SwiftEdit automatically detects `.md`, `.markdown`, `.mdown`, `.mkd`, and `.mkdn` files (and new untitled tabs) as Markdown and provides viewport-only syntax highlighting plus structured authoring commands:
+SwiftEdit automatically detects `.md`, `.markdown`, `.mdown`, `.mkd`, and `.mkdn` files (and new untitled tabs) as Markdown and provides viewport-only syntax highlighting (themed by your active **Syntax Color Scheme**) plus structured authoring commands:
 
 | Command | Shortcut | Action |
 | :--- | :--- | :--- |
@@ -50,8 +50,8 @@ Diagnostics appear in three synchronized places:
 Press **`Cmd+P`** (or click the eye icon in the header bar) to toggle the side-by-side **Preview** pane:
 
 - Rendered natively in SwiftUI with **zero WebKit and zero network access**, scaling linearly with global zoom (`50%–300%`).
-- Renders line-1 YAML frontmatter as a structured **Properties** metadata card, and displays a top-right **Copy** button on every fenced code block.
-- Renders **`markmap` / `mindmap`** trees and core **`mermaid`** diagrams (`flowchart`/`graph`, `sequenceDiagram`, `stateDiagram`) natively on SwiftUI `Canvas` with a top-right **`Diagram / Code`** toggle and **Copy** button.
+- Renders line-1 YAML frontmatter as a structured **Properties** metadata card with a top-right **Copy** button, and displays a top-right **Copy** button on every fenced code block.
+- Renders **`markmap` / `mindmap`** trees and core **`mermaid`** diagrams (`flowchart`/`graph`, `sequenceDiagram`, `stateDiagram`/`stateDiagram-v2`) natively on SwiftUI `Canvas` with a top-right **`Diagram / Code`** toggle and **Copy** button.
 - Supports headings, paragraphs, emphasis, strikethrough, inline code, fenced code blocks, blockquotes, lists, task lists, tables, thematic breaks, and local images.
 - Local image loading is strictly confined to the granted workspace folder scope (`PreviewResourceAndLinkGate`); external network images are never fetched.
 - Synchronizes with the active source line as you navigate the document and releases preview/thumbnail caches immediately when closed.
@@ -76,7 +76,7 @@ Opening a `.yml` or `.yaml` file enables native YAML tooling:
 
 - **Syntax Highlighting**: distinguishes keys, values, punctuation, comments, quoted strings, anchors, aliases, tags, block scalars, and document markers (`---`, `...`).
 - **Structural Linter (`YML001`–`YML005`)**: detects tabs in indentation, inconsistent indentation, duplicate keys within the same mapping (including quoted equivalents), malformed mappings, and unterminated quotes — also runs on Markdown frontmatter blocks.
-- **Document Navigator (`Option+\`)**: lists top-level YAML keys for instant keyboard jump.
+- **Document Navigator (`Option+\`)**: lists top-level YAML keys for instant keyboard jump across `LF`, `CRLF`, and `CR` files (including files with blank lines).
 - **Smart Indentation**: `Tab` / `Shift+Tab` and `Return` apply two-space YAML indentation automatically.
 
 ---
@@ -91,13 +91,14 @@ Opening a `.json` or `.jsonl` file enables native JSON tooling:
 
 ---
 
-## Technical: Markdown & YAML Architecture
+## Technical: Markdown, YAML & JSON Architecture
 
 | Component | Source File | Key Details |
 | :--- | :--- | :--- |
-| `DocumentSyntaxHighlighter` | `Sources/SwiftEditCore/MarkdownLintAndFormat/MarkdownSyntaxHighlighter.swift` | Viewport-only token projection driven by `NSTextLayoutManager.renderingAttributesValidator` |
-| `MarkdownAllConstructsLinter` | `Sources/SwiftEditCore/MarkdownLintAndFormat/MarkdownAllConstructsLinter.swift` | 26 rules, `250 ms` deadline with security fast-path fallback, AST depth cap (`128`) |
+| `DocumentSyntaxHighlighter` & `MarkdownSyntaxHighlighter` | `Sources/SwiftEditCore/MarkdownLintAndFormat/` | Viewport-only token projection driven by `NSTextLayoutManager.renderingAttributesValidator` |
+| `MarkdownAllConstructsLinter` & `MarkdownLinterRuleFamilyPasses` | `Sources/SwiftEditCore/MarkdownLintAndFormat/` | 26 rules, `250 ms` deadline with security fast-path fallback, AST depth cap (`128`) |
 | `MarkdownQuickFixResolver` | `Sources/SwiftEditCore/MarkdownLintAndFormat/MarkdownQuickFixResolver.swift` | Revision-pinned single quick fix and idempotent batch Fix All |
-| `MarkdownPreviewProjector` | `Sources/SwiftEditCore/MarkdownLintAndFormat/MarkdownPreviewProjector.swift` | Off-main-thread projection above `64 KiB` (`syncPreviewThresholdUTF8`), zero WebKit |
+| `MarkdownPreviewProjector` & `MarkdownDiagramPreviewView` | `Sources/SwiftEditCore/MarkdownLintAndFormat/` & `Sources/SwiftEditUI/Views/` | Off-main-thread projection above `64 KiB`, zero WebKit, native SwiftUI `Canvas` diagrams |
 | `FrontmatterPropertyParser` / `Writer` | `Sources/SwiftEditCore/MarkdownLintAndFormat/YAMLSupport/FrontmatterProperties.swift` | Parses and mutates YAML frontmatter into single atomic `TextEdit` operations |
-| `YAMLStructureLinter` & `YAMLOutlineEngine` | `Sources/SwiftEditCore/MarkdownLintAndFormat/YAMLSupport/` | Linear `YML001`–`YML005` validation and key outline extraction |
+| `YAMLStructureLinter` & `YAMLOutlineEngine` | `Sources/SwiftEditCore/MarkdownLintAndFormat/YAMLSupport/` | Linear `YML001`–`YML005` validation and bounds-safe key outline extraction |
+| `JSONSyntaxHighlighter`, `JSONStructureLinter` & `JSONFormatter` | `Sources/SwiftEditCore/MarkdownLintAndFormat/JSONSupport/` | Viewport JSON/JSONL highlighting, iterative `128`-depth linter, and sorted-key formatting |
