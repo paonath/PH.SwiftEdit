@@ -135,24 +135,35 @@ extension JSONStructureLinter {
         }
         let u = state.units[state.cursor]
         switch u {
-        case 0x7B, 0x5B: // '{' or '['
-            return consumeOpenContainer(u, state: &state)
-        case 0x7D, 0x5D: // '}' or ']'
-            return consumeCloseContainer(u, state: &state)
-        case 0x3A: // ':'
-            guard state.expected == .colon else {
-                return makeDiagnostic(.jsonSyntaxError, line: state.line, at: state.cursor, baseOffset: state.baseOffset, detail: "Unexpected ':'")
-            }
-            state.cursor += 1
-            state.expected = .valueOnly
-            return nil
-        case 0x2C: // ','
-            return consumeComma(&state)
-        case 0x22: // '"'
+        case 0x7B, 0x5B, 0x7D, 0x5D, 0x3A, 0x2C:
+            return consumeStructuralDelimiter(u, state: &state)
+        case 0x22:
             return consumeString(&state)
         default:
             return consumeScalarValue(&state)
         }
+    }
+
+    private static func consumeStructuralDelimiter(_ u: UInt16, state: inout ScannerState) -> MarkdownLintDiagnostic? {
+        switch u {
+        case 0x7B, 0x5B:
+            return consumeOpenContainer(u, state: &state)
+        case 0x7D, 0x5D:
+            return consumeCloseContainer(u, state: &state)
+        case 0x3A:
+            return consumeColon(&state)
+        default:
+            return consumeComma(&state)
+        }
+    }
+
+    private static func consumeColon(_ state: inout ScannerState) -> MarkdownLintDiagnostic? {
+        guard state.expected == .colon else {
+            return makeDiagnostic(.jsonSyntaxError, line: state.line, at: state.cursor, baseOffset: state.baseOffset, detail: "Unexpected ':'")
+        }
+        state.cursor += 1
+        state.expected = .valueOnly
+        return nil
     }
 
     private static func consumeOpenContainer(_ u: UInt16, state: inout ScannerState) -> MarkdownLintDiagnostic? {

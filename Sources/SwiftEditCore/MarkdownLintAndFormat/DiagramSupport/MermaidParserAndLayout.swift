@@ -13,26 +13,33 @@ public enum MarkdownDiagramParser {
     public static func parse(language: String?, source: String) -> MarkdownDiagramParseOutcome {
         guard source.utf8.count <= maxSourceUTF8Bytes else { return .unsupportedOrOversized }
         let normalizedLang = (language ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalizedLang == "markmap" || normalizedLang == "mindmap" {
+        switch normalizedLang {
+        case "markmap", "mindmap":
             return MarkmapParserAndLayout.parse(source: source, isMermaidMindmap: false)
-        }
-        guard normalizedLang == "mermaid" else { return .unsupportedOrOversized }
-        let activeLines = nonCommentLines(from: source)
-        guard let header = activeLines.first?.trimmingCharacters(in: .whitespaces) else {
+        case "mermaid":
+            return parseMermaidDiagram(source: source)
+        default:
             return .unsupportedOrOversized
         }
-        let lowerHeader = header.lowercased()
-        if lowerHeader.hasPrefix("mindmap") {
+    }
+
+    private static func parseMermaidDiagram(source: String) -> MarkdownDiagramParseOutcome {
+        let activeLines = nonCommentLines(from: source)
+        guard let header = activeLines.first?.trimmingCharacters(in: .whitespaces).lowercased() else {
+            return .unsupportedOrOversized
+        }
+        if header.hasPrefix("mindmap") {
             return MarkmapParserAndLayout.parse(source: source, isMermaidMindmap: true)
         }
-        if lowerHeader.hasPrefix("sequencediagram") {
-            return parseSequenceDiagram(Array(activeLines.dropFirst()))
+        let body = Array(activeLines.dropFirst())
+        if header.hasPrefix("sequencediagram") {
+            return parseSequenceDiagram(body)
         }
-        if lowerHeader.hasPrefix("statediagram") {
-            return parseStateDiagram(Array(activeLines.dropFirst()))
+        if header.hasPrefix("statediagram") {
+            return parseStateDiagram(body)
         }
-        if let direction = parseFlowchartHeader(lowerHeader) {
-            return parseFlowchartDiagram(Array(activeLines.dropFirst()), direction: direction)
+        if let direction = parseFlowchartHeader(header) {
+            return parseFlowchartDiagram(body, direction: direction)
         }
         return .unsupportedOrOversized
     }

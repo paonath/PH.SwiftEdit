@@ -4,6 +4,36 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "036-complexity-pass-5-scripts-and-asset-verifier"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/specs/workbench-editor-and-linter-modular-decomposition/spec.md"
+    summary: "Iteration 5 complexity reduction for install-from-github.sh, build-app.sh, and verify-design-assets.swift"
+  - id: "035-complexity-pass-4-parsers-linters-and-updates"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/specs/workbench-editor-and-linter-modular-decomposition/spec.md"
+    summary: "Iteration 4 complexity reduction for Mermaid parser, JSON linter, Markdown highlighter, and GitHub update checker"
+  - id: "034-complexity-pass-3-markdown-engines-and-codec"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/specs/workbench-editor-and-linter-modular-decomposition/spec.md"
+    summary: "Iteration 3 complexity reduction for MarkdownSmartNewlineEngine, DocumentCodec, and MarkdownSmartListEngine"
+  - id: "033-complexity-pass-2-shortcuts-and-rendering-attrs"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/specs/workbench-editor-and-linter-modular-decomposition/spec.md"
+    summary: "Iteration 2 complexity reduction for SwiftEditShortcutDispatcher and EditorRenderingAttributeTable"
+  - id: "032-complexity-pass-1-core-search-fs-preview"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["workbench-editor-and-linter-modular-decomposition"]
+    path: "openspec/specs/workbench-editor-and-linter-modular-decomposition/spec.md"
+    summary: "Iteration 1 complexity reduction for DocumentSearchEngine.find, preScanCopySourceTree, and MarkdownNativePreviewView...."
   - id: "031-contextual-reveal-dictation-and-empty-session-filter"
     status: "implemented"
     date: "2026-11-25"

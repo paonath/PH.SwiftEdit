@@ -41,50 +41,21 @@ public enum DocumentSearchEngine {
         }
 
         // Zero-bridging raw UTF-8 fast path for unconstrained non-whole-word ASCII queries.
-        if !options.isWholeWord, options.searchRange == nil, query.utf8.allSatisfy({ $0 < 0x80 }) {
-            if let fastResult = findASCIIUTF8(
-                query: query,
-                in: snapshot.text,
-                isCaseSensitive: options.isCaseSensitive,
-                maxMatches: maxMatches
-            ) {
-                return fastResult
-            }
+        if let fastResult = findASCIIUTF8(
+            query: query,
+            in: snapshot.text,
+            options: options,
+            maxMatches: maxMatches
+        ) {
+            return fastResult
         }
 
-        let nsText = snapshot.text as NSString
-        let totalLength = nsText.length
-        guard let initialBounds = docSearchResolveSearchBounds(options.searchRange, totalLength: totalLength) else {
-            return .completed([])
-        }
-        let compareOptions: NSString.CompareOptions = options.isCaseSensitive ? [.literal] : [.caseInsensitive, .literal]
-        let boundsEnd = initialBounds.location + initialBounds.length
-        var searchRange = initialBounds
-        var matches: [TextRange] = []
-
-        while searchRange.length > 0 {
-            let found = nsText.range(of: query, options: compareOptions, range: searchRange)
-            guard found.location != NSNotFound && found.length > 0 else {
-                break
-            }
-            if options.isWholeWord, !docSearchHasWordBoundaries(in: nsText, location: found.location, length: found.length, totalLength: totalLength) {
-                let stepStart = found.location + 1
-                guard stepStart < boundsEnd else { break }
-                searchRange = NSRange(location: stepStart, length: boundsEnd - stepStart)
-                continue
-            }
-            if matches.count >= maxMatches {
-                return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
-            }
-            matches.append(TextRange(location: found.location, length: found.length))
-            let nextStart = found.location + found.length
-            guard nextStart <= boundsEnd else {
-                break
-            }
-            searchRange = NSRange(location: nextStart, length: boundsEnd - nextStart)
-        }
-
-        return .completed(matches)
+        return docSearchFindWithNSString(
+            query: query,
+            in: snapshot.text,
+            options: options,
+            maxMatches: maxMatches
+        )
     }
 
     /// Produces a non-overlapping `[TextEdit]` batch replacing every literal occurrence of `query` with `replacement` for atomic execution via `DocumentSession.applyTextEdits`.
@@ -127,6 +98,47 @@ private extension DocumentSearchEngine {
         return nil
     }
 
+    static func docSearchFindWithNSString(
+        query: String,
+        in text: String,
+        options: SearchOptions,
+        maxMatches: Int
+    ) -> EngineEvaluationOutcome<[TextRange]> {
+        let nsText = text as NSString
+        let totalLength = nsText.length
+        guard let initialBounds = docSearchResolveSearchBounds(options.searchRange, totalLength: totalLength) else {
+            return .completed([])
+        }
+        let compareOptions: NSString.CompareOptions = options.isCaseSensitive ? [.literal] : [.caseInsensitive, .literal]
+        let boundsEnd = initialBounds.location + initialBounds.length
+        var searchRange = initialBounds
+        var matches: [TextRange] = []
+
+        while searchRange.length > 0 {
+            let found = nsText.range(of: query, options: compareOptions, range: searchRange)
+            guard found.location != NSNotFound, found.length > 0 else {
+                break
+            }
+            if options.isWholeWord,
+               !docSearchHasWordBoundaries(in: nsText, location: found.location, length: found.length, totalLength: totalLength) {
+                searchRange = docSearchAdvanceRange(from: found.location + 1, boundsEnd: boundsEnd)
+                continue
+            }
+            if matches.count >= maxMatches {
+                return .degradedOrTimedOut(.matchLimitExceeded(maxMatches: maxMatches))
+            }
+            matches.append(TextRange(location: found.location, length: found.length))
+            searchRange = docSearchAdvanceRange(from: found.location + found.length, boundsEnd: boundsEnd)
+        }
+
+        return .completed(matches)
+    }
+
+    @inline(__always)
+    static func docSearchAdvanceRange(from start: Int, boundsEnd: Int) -> NSRange {
+        start < boundsEnd ? NSRange(location: start, length: boundsEnd - start) : NSRange(location: boundsEnd, length: 0)
+    }
+
     static func docSearchResolveSearchBounds(_ customRange: TextRange?, totalLength: Int) -> NSRange? {
         guard let customRange else {
             return NSRange(location: 0, length: totalLength)
@@ -163,19 +175,22 @@ private extension DocumentSearchEngine {
         return CharacterSet.alphanumerics.contains(scalar)
     }
 
-    /// Scans contiguous UTF-8 bytes directly for an ASCII query without `NSString` bridging.
-    /// Returns `nil` in case-insensitive mode if the text contains non-ASCII bytes so Unicode case folding falls back to `NSString`.
+    /// Scans contiguous UTF-8 bytes directly for an unconstrained non-whole-word ASCII query without `NSString` bridging.
+    /// Returns `nil` when options require `NSString` semantics or in case-insensitive mode if the text contains non-ASCII bytes.
     static func findASCIIUTF8(
         query: String,
         in text: String,
-        isCaseSensitive: Bool,
+        options: SearchOptions,
         maxMatches: Int
     ) -> EngineEvaluationOutcome<[TextRange]>? {
-        text.utf8.withContiguousStorageIfAvailable { textBuf -> EngineEvaluationOutcome<[TextRange]>? in
+        guard !options.isWholeWord, options.searchRange == nil, query.utf8.allSatisfy({ $0 < 0x80 }) else {
+            return nil
+        }
+        return text.utf8.withContiguousStorageIfAvailable { textBuf -> EngineEvaluationOutcome<[TextRange]>? in
             guard let textBase = textBuf.baseAddress else { return .completed([]) }
             let qBytes = Array(query.utf8)
             guard !qBytes.isEmpty, qBytes.count <= textBuf.count else { return .completed([]) }
-            if isCaseSensitive {
+            if options.isCaseSensitive {
                 return docSearchFindCaseSensitiveASCII(
                     qBytes: qBytes,
                     textBase: textBase,

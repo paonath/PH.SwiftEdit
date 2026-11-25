@@ -181,3 +181,88 @@ WHEN executing the continuous verification and TokenSave re-analysis pipeline ac
 - **GIVEN** a synthetic coverage report where `SwiftEditCore` is `92.0%` but `SwiftEditUI` is `84.9%` (or aggregate coverage is `< 85.0%`) or where a residual recursion cycle remains in `Sources/`
 - **WHEN** the coverage and convergence fitness evaluator validates the report against the `85.0%` per-target floor
 - **THEN** validation fails closed and reports the exact target name, observed line coverage percentage, and failing threshold
+
+### Requirement: REQ-011 Core Search Filesystem Pre-Scan and Native Preview Block Complexity Decomposition
+WHEN executing literal document searches (`DocumentSearchEngine.find`), copy-tree pre-scans (`LocalFileSystemAdapter.preScanCopySourceTree`), and native Markdown block rendering (`MarkdownNativePreviewView.blockView`), the runtime SHALL decompose each entrypoint into cohesive helpers satisfying `cognitive <= 12`, `cyclomatic <= 9`, and `max_nesting <= 3` (with `blockView` at `cognitive <= 8` and `max_nesting <= 3`) while preserving all symlink, confinement, batch-limit, and offline-preview security controls [AR-006][BC-004][SEC-003][SEC-004][SEC-010][SEC-012][TEST-006].
+
+#### Scenario: P11 Decomposed Search Filesystem Pre-Scan and Preview Block Views Meet Complexity Targets With Passing Regression Tests
+- **Path**: P11
+- **Trait**: positive
+- **GIVEN** the refactored `DocumentSearchEngine.find`, `LocalFileSystemAdapter.preScanCopySourceTree`, and `MarkdownNativePreviewView.blockView` implementations and their extracted helpers
+- **WHEN** `swift test` and `tokensave_complexity` evaluate `Sources/SwiftEditCore` and `Sources/SwiftEditUI` after `tokensave sync`
+- **THEN** all `472` tests across `130` suites pass, `tokensave_circular` reports `0` cycles, and `find`, `preScanCopySourceTree`, and `blockView` satisfy `cyclomatic <= 9`, `cognitive <= 12` (`<= 8` for `blockView`), and `max_nesting <= 3`
+
+#### Scenario: N12 Symlink Copy Escape Oversized Batch Search Flood or Malicious Preview HTML Link Continues Failing Closed
+- **Path**: N12
+- **Trait**: security
+- **GIVEN** a copy source tree containing a symbolic link or exceeding `maxCopyItems`/`maxCopyBytes`, a search query exceeding `1024` UTF-16 units or `maxMatches`, or Markdown containing raw HTML or untrusted external links
+- **WHEN** the decomposed `preScanCopySourceTree`, `DocumentSearchEngine.find`, or `MarkdownNativePreviewView.blockView` evaluates the input
+- **THEN** symbolic links and oversized batches throw `DomainError.securityScopeViolation` or `DomainError.batchLimitExceeded`, oversized or flooded searches return `.degradedOrTimedOut`, and raw HTML renders strictly as inert monospaced text
+
+### Requirement: REQ-012 Shortcut Dispatcher and Rendering Attribute Table Complexity Decomposition
+WHEN dispatching keyboard shortcuts (`SwiftEditShortcutDispatcher.dispatchNonCommandChord`, `SwiftEditShortcutDispatcher.dispatchCommandOption`) and resolving TextKit 2 rendering attributes (`EditorRenderingAttributeTable.lookupSemanticEntries`, `EditorRenderingAttributeTable.attributes`), the UI layer SHALL decompose each entrypoint into cohesive table-driven or role-group helpers satisfying `cognitive <= 10, cyclomatic <= 8` for shortcut dispatchers and `cognitive <= 8, cyclomatic <= 8` for rendering attribute lookups while preserving `<= 20` nominal members in `EditorRenderingAttributes.swift` and all malformed, BiDi, overlay, and quarantine guards [AR-006][UI-002][UI-005][UI-009][UI-010][SEC-012][TEST-006].
+
+#### Scenario: P12 Decomposed Shortcut Dispatcher and Rendering Attribute Lookups Meet Complexity Targets With Passing Regression Tests
+- **Path**: P12
+- **Trait**: positive
+- **GIVEN** the refactored `SwiftEditShortcutDispatcher` (`dispatchNonCommandChord`, `dispatchCommandOption`, `commandOptionTable`, `dispatchTableEntry`) and `EditorRenderingAttributeTable` (`attributes`, `lookupSemanticEntries`, `lookupHTMLEntries`, `lookupJSONEntries`, `lookupInlineEntries`, `lookupBlockAndYAMLEntries`)
+- **WHEN** `swift test` and `tokensave_complexity` evaluate `Sources/SwiftEditUI/Views/SwiftEditShortcutDispatcher.swift` and `Sources/SwiftEditUI/Views/EditorRenderingAttributes.swift` after `tokensave sync`
+- **THEN** all `472` tests across `130` suites pass (including `<= 20` nominal member budget in `EditorRenderingAttributes.swift`), `tokensave_circular` reports `0` cycles, `dispatchNonCommandChord` and `dispatchCommandOption` satisfy `cyclomatic <= 8` and `cognitive <= 10`, and `lookupSemanticEntries` and `attributes` satisfy `cyclomatic <= 8` and `cognitive <= 8`
+
+#### Scenario: N13 Malformed BiDi Chord Overlay Text Field Quarantine or Unmapped Attribute Fails Closed
+- **Path**: N13
+- **Trait**: security
+- **GIVEN** a malformed, oversized, NUL-embedded, or BiDi-tainted keyboard chord, an editing shortcut dispatched while `isEditingOverlayTextField` is `true`, a quarantined binary tab, or an unstyled `.yamlValue` syntax kind
+- **WHEN** `SwiftEditShortcutDispatcher.dispatch` or `EditorRenderingAttributeTable.attributes(for:)` evaluates the input
+- **THEN** `SwiftEditShortcutDispatcher` rejects malformed, unmapped, or overlay-blocked chords fail-closed (`false`) without mutating workbench state and `EditorRenderingAttributeTable.attributes(for: .yamlValue)` returns `[]` preserving `21:1` canvas text contrast
+
+### Requirement: REQ-013 Core Markdown Engines and Strict UTF-16 Codec Complexity Decomposition
+WHEN evaluating Markdown smart newlines (`MarkdownSmartNewlineEngine.evaluateNewline`), decoding strict UTF-16 streams (`DocumentCodec.decodeStrictUTF16`), and indenting Markdown list selections (`MarkdownSmartListEngine.evaluateIndent`), the core domain layer SHALL decompose each entrypoint into cohesive helpers satisfying `cognitive <= 10` and `cyclomatic <= 8` while preserving `<= 25` nominal members per type and all line-bounds, overflow, nesting-cap, and strict surrogate-pair validation controls [AR-006][BC-004][BC-006][BC-007][DATA-003][DATA-004][SEC-012][TEST-006].
+
+#### Scenario: P13 Decomposed Markdown Smart Newline Smart List and Strict UTF-16 Codec Meet Complexity Targets With Passing Regression Tests
+- **Path**: P13
+- **Trait**: positive
+- **GIVEN** the refactored `MarkdownSmartNewlineEngine.evaluateNewline`, `DocumentCodec.decodeStrictUTF16`, and `MarkdownSmartListEngine.evaluateIndent` implementations and their extracted cohesive helpers (`resolveCaretLine`, `emptyMarkerNewlineEdit`, `decodeNextUTF16Scalar`, `appendUTF8Bytes`, and `collectIndentEdits`)
+- **WHEN** `swift test` and `tokensave_complexity` evaluate `Sources/SwiftEditCore` after `tokensave sync`
+- **THEN** all `473` tests across `130` suites pass, `tokensave_circular` reports `0` cycles, and `evaluateNewline`, `decodeStrictUTF16`, and `evaluateIndent` each satisfy `cyclomatic <= 8` and `cognitive <= 10`
+
+#### Scenario: N14 Unpaired UTF-16 Surrogates Odd Byte Payloads Overlong Lines and Level-32 or Overflowing Lists Fail Closed
+- **Path**: N14
+- **Trait**: security
+- **GIVEN** a UTF-16LE/BE payload with unpaired high/low surrogates, truncated high surrogate, or odd byte length, a binary/degraded snapshot or `> 4096` UTF-16 line, or a level-32 or `999_999_999`-overflowing ordered list
+- **WHEN** the decomposed `DocumentCodec.decode`, `MarkdownSmartNewlineEngine.evaluateNewline`, or `MarkdownSmartListEngine.evaluateIndent` evaluates the input
+- **THEN** `DocumentCodec.decode` throws `DomainError.unsupportedEncoding` and `MarkdownSmartNewlineEngine` and `MarkdownSmartListEngine` fail closed without out-of-bounds access or buffer mutations
+
+### Requirement: REQ-014 Diagram Parser JSON Linter Syntax Highlighter and Release Update Checker Complexity Decomposition
+WHEN parsing Mermaid and Markmap diagrams (`MarkdownDiagramParser.parse`), advancing JSON tokens (`JSONStructureLinter.advanceJSONToken`), matching inline GFM syntax constructs (`MarkdownSyntaxHighlighter.matchInlineSyntaxConstruct`), and comparing or evaluating GitHub release versions (`SemanticVersion.<`, `GitHubReleaseUpdateChecker.evaluate`), each entrypoint SHALL delegate to cohesive helpers satisfying `cognitive <= 10, cyclomatic <= 8` (`cognitive <= 8, cyclomatic <= 7` for `SemanticVersion.<` and `evaluate`) while preserving `<= 25` nominal members per type and all size, depth, linear-scan, and HTTPS host-allowlist security controls [AR-006][BC-004][SEC-001][SEC-004][SEC-012][TEST-006].
+
+#### Scenario: P14 Decomposed Parsers Linters Highlighter and Update Checker Meet Complexity Targets With Passing Regression Tests
+- **Path**: P14
+- **Trait**: positive
+- **GIVEN** the refactored `MarkdownDiagramParser.parse`, `JSONStructureLinter.advanceJSONToken`, `MarkdownSyntaxHighlighter.matchInlineSyntaxConstruct`, `SemanticVersion.<`, and `GitHubReleaseUpdateChecker.evaluate` implementations and their extracted helpers (`parseMermaidDiagram`, `consumeStructuralDelimiter`, `consumeColon`, `matchLinkOrTagConstruct`, `matchDelimitedInlineConstruct`, `comparePrereleaseLists`, `newestRelease`)
+- **WHEN** `swift test` and `tokensave_complexity` evaluate all four source files after `tokensave sync`
+- **THEN** all `473` tests across `130` suites pass, `tokensave_circular` reports `0` cycles, `MarkdownDiagramParser.parse`, `advanceJSONToken`, and `matchInlineSyntaxConstruct` satisfy `cyclomatic <= 8` and `cognitive <= 10`, and `SemanticVersion.<` and `evaluate` satisfy `cyclomatic <= 7` and `cognitive <= 8`
+
+#### Scenario: N15 Oversized Diagrams Deep JSON Unclosed Inline Delimiters and Untrusted Release URLs Fail Closed
+- **Path**: N15
+- **Trait**: security
+- **GIVEN** a Mermaid block exceeding `65_536` UTF-8 bytes or `12` subgraph nesting levels, a JSON payload with trailing tokens or nesting exceeding `128` levels, a GFM line exceeding `4096` UTF-16 units, or a GitHub release payload containing an HTTP or non-allowlisted release or download URL
+- **WHEN** the decomposed `MarkdownDiagramParser.parse`, `JSONStructureLinter.lint`, `MarkdownSyntaxHighlighter.spans`, or `GitHubReleaseUpdateChecker.evaluateReleaseUpdate` evaluates the input
+- **THEN** oversized diagrams return `.unsupportedOrOversized`, invalid or over-deep JSON emits `JSN003`/syntax diagnostics, overlong GFM lines yield no spans, and untrusted release URLs fail closed via `verifiedGitHubHTTPSURL`
+
+### Requirement: REQ-015 Automation Scripts and Design Asset Verifier Complexity Decomposition
+WHEN executing GitHub release installation (`Scripts/install-from-github.sh` `main`), macOS app bundle staging (`Scripts/build-app.sh` `main`), and Xcode `AppIcon.appiconset` validation (`Scripts/verify-design-assets.swift` `verifySingleAppIconSet`), each entrypoint SHALL delegate to cohesive helpers satisfying `cognitive <= 12, cyclomatic <= 10` for Bash scripts and `cognitive <= 8, cyclomatic <= 8` for Swift asset verification while preserving `set -euo pipefail`, `"$var"` quoting (`CWE-78`), SHA-256 checksum/HTTPS verification, build/packaging flags, and AppIcon symlink/confinement/size/alpha controls [AR-001][AR-006][UI-001][SEC-001][SEC-003][SEC-004][SEC-012][TEST-006][TEST-007].
+
+#### Scenario: P15 Decomposed Release Installer Build Script and AppIcon Verifier Meet Complexity Targets With Passing Checks
+- **Path**: P15
+- **Trait**: positive
+- **GIVEN** the refactored `Scripts/install-from-github.sh`, `Scripts/build-app.sh`, and `Scripts/verify-design-assets.swift` implementations and their extracted cohesive helpers (`apply_cli_option`, `parse_args`, `resolve_release_tag`, `determine_quarantine_plan`, `download_and_verify_archive`, `install_verified_app`, `prepare_xcodebuild_args`, `stage_built_product`, `loadAppIconManifest`, `validateAppIconSlot`, `validateAppIconFile`, `validatePngRaster`, `verifyStrayAppIconEntries`)
+- **WHEN** `bash -n`, dry-run CLI checks, `swift Scripts/verify-design-assets.swift --self-test`, `swift Scripts/verify-design-assets.swift --root .`, `swift test`, and `tokensave_complexity(path="Scripts")` execute after `tokensave sync`
+- **THEN** all `14` asset verifier self-tests, live workspace asset checks, and `473` Swift tests across `130` suites pass (`exit 0`), `tokensave_circular(path="Sources")` reports `0` cycles, Bash `main` and helpers satisfy `cyclomatic <= 10` and `cognitive <= 12`, and `verifySingleAppIconSet` and its helpers satisfy `cyclomatic <= 8` and `cognitive <= 8`
+
+#### Scenario: N16 Invalid Tags Unquoted Traversal Filenames Symlinks Oversized Payloads and Alpha Mismatches Fail Closed
+- **Path**: N16
+- **Trait**: security
+- **GIVEN** a release tag containing `..` or whitespace, an unknown or invalid `-c` build configuration, or an `AppIcon.appiconset` containing a path-traversal filename, symlink, out-of-root path, `> 16 MiB` PNG payload, or platform alpha mismatch (`ITMS-90717`)
+- **WHEN** `Scripts/install-from-github.sh`, `Scripts/build-app.sh`, or `DesignAssetsVerifier.verifySingleAppIconSet` evaluates the input
+- **THEN** invalid CLI tags or build configurations fail closed with exit code `1` without downloading or building, and `AppIcon.appiconset` traversal, symlink, `> 16 MiB`, and alpha violations fail closed with `VerificationReport.exitCode == 2`

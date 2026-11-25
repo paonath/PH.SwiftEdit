@@ -179,22 +179,47 @@ extension MarkdownSyntaxHighlighter {
         at i: Int,
         memo: inout InlineHighlightMemo
     ) -> (kind: MarkdownSyntaxKind, end: Int)? {
-        let end = line.endIndex
         switch line[i] {
-        case 0x60:
-            return matchInlineCodeSpan(in: line, at: i, noBacktick: &memo.noBacktick)
-        case 0x21 where i + 1 < end && line[i + 1] == 0x5B:
+        case 0x21, 0x5B, 0x3C:
+            return matchLinkOrTagConstruct(in: line, at: i, memo: &memo)
+        case 0x60, 0x2A, 0x7E, 0x5F:
+            return matchDelimitedInlineConstruct(in: line, at: i, memo: &memo)
+        default:
+            return nil
+        }
+    }
+
+    private static func matchLinkOrTagConstruct(
+        in line: ArraySlice<UInt16>,
+        at i: Int,
+        memo: inout InlineHighlightMemo
+    ) -> (kind: MarkdownSyntaxKind, end: Int)? {
+        switch line[i] {
+        case 0x21 where i + 1 < line.endIndex && line[i + 1] == 0x5B:
             return findLinearLinkEnd(in: line, openBracket: i + 1, memo: &memo).map { (.image, $0 + 1) }
         case 0x5B:
             return findLinearLinkEnd(in: line, openBracket: i, memo: &memo).map { (.link, $0 + 1) }
+        case 0x3C:
+            return matchInlineHTMLTagSpan(in: line, at: i, noCloseAngle: &memo.noCloseAngle)
+        default:
+            return nil
+        }
+    }
+
+    private static func matchDelimitedInlineConstruct(
+        in line: ArraySlice<UInt16>,
+        at i: Int,
+        memo: inout InlineHighlightMemo
+    ) -> (kind: MarkdownSyntaxKind, end: Int)? {
+        switch line[i] {
+        case 0x60:
+            return matchInlineCodeSpan(in: line, at: i, noBacktick: &memo.noBacktick)
         case 0x2A:
             return matchStarEmphasisOrBold(in: line, at: i, memo: &memo)
-        case 0x7E where i + 1 < end && line[i + 1] == 0x7E:
+        case 0x7E where i + 1 < line.endIndex && line[i + 1] == 0x7E:
             return matchPairedDelimiterSpan(unit: 0x7E, kind: .strikethrough, in: line, at: i, disabled: &memo.noDoubleTilde)
         case 0x5F:
             return matchSingleItalicSpan(unit: 0x5F, in: line, at: i, disabled: &memo.noUnderscore)
-        case 0x3C:
-            return matchInlineHTMLTagSpan(in: line, at: i, noCloseAngle: &memo.noCloseAngle)
         default:
             return nil
         }

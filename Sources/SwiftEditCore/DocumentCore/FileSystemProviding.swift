@@ -384,52 +384,18 @@ public struct LocalFileSystemAdapter: FileSystemProviding, Sendable {
 
     private func preScanCopySourceTree(at sourceURL: URL) throws {
         let fm = FileManager.default
-        let rootAttrs: [FileAttributeKey: Any]
-        do {
-            rootAttrs = try fm.attributesOfItem(atPath: sourceURL.path)
-        } catch {
-            throw DomainError.ioFailure(error.localizedDescription)
-        }
+        let rootAttrs = try readAttributesOrIOFailure(at: sourceURL, fileManager: fm)
         let rootType = rootAttrs[.type] as? FileAttributeType
         if rootType == .typeSymbolicLink {
             throw DomainError.securityScopeViolation(path: sourceURL.path)
         }
         if rootType != .typeDirectory {
-            guard maxCopyItems >= 1 else {
-                throw DomainError.batchLimitExceeded(maxBytes: maxCopyBytes)
-            }
-            let size = (rootAttrs[.size] as? UInt64) ?? 0
-            if size > maxCopyBytes {
-                throw DomainError.batchLimitExceeded(maxBytes: maxCopyBytes)
-            }
+            var itemCount = 0
+            var totalBytes: UInt64 = 0
+            try accountCopyEntry(attributes: rootAttrs, at: sourceURL, itemCount: &itemCount, totalBytes: &totalBytes)
             return
         }
-
-        guard let enumerator = fm.enumerator(atPath: sourceURL.path) else {
-            throw DomainError.ioFailure("Unable to enumerate copy source at \(sourceURL.path)")
-        }
-        var itemCount = 0
-        var totalBytes: UInt64 = 0
-        while let relativeSubpath = enumerator.nextObject() as? String {
-            let childURL = sourceURL.appendingPathComponent(relativeSubpath)
-            let childAttrs = try fm.attributesOfItem(atPath: childURL.path)
-            let childType = childAttrs[.type] as? FileAttributeType
-            if childType == .typeSymbolicLink {
-                throw DomainError.securityScopeViolation(path: childURL.path)
-            }
-            itemCount += 1
-            if itemCount > maxCopyItems {
-                throw DomainError.batchLimitExceeded(maxBytes: maxCopyBytes)
-            }
-            if childType != .typeDirectory {
-                let childSize = (childAttrs[.size] as? UInt64) ?? 0
-                let (nextTotal, overflow) = totalBytes.addingReportingOverflow(childSize)
-                if overflow || nextTotal > maxCopyBytes {
-                    throw DomainError.batchLimitExceeded(maxBytes: maxCopyBytes)
-                }
-                totalBytes = nextTotal
-            }
-        }
+        try scanCopyDirectoryTree(at: sourceURL, fileManager: fm)
     }
 
     private func verifyNotScopeRootAndConfined(itemURL: URL, withinScope scopeURL: URL?) throws {
@@ -475,5 +441,51 @@ public struct LocalFileSystemAdapter: FileSystemProviding, Sendable {
         if !isInsideScope {
             throw DomainError.securityScopeViolation(path: reportedPath)
         }
+    }
+}
+
+private extension LocalFileSystemAdapter {
+    func readAttributesOrIOFailure(at url: URL, fileManager: FileManager) throws -> [FileAttributeKey: Any] {
+        do {
+            return try fileManager.attributesOfItem(atPath: url.path)
+        } catch {
+            throw DomainError.ioFailure(error.localizedDescription)
+        }
+    }
+
+    func scanCopyDirectoryTree(at sourceURL: URL, fileManager: FileManager) throws {
+        guard let enumerator = fileManager.enumerator(atPath: sourceURL.path) else {
+            throw DomainError.ioFailure("Unable to enumerate copy source at \(sourceURL.path)")
+        }
+        var itemCount = 0
+        var totalBytes: UInt64 = 0
+        while let relativeSubpath = enumerator.nextObject() as? String {
+            let childURL = sourceURL.appendingPathComponent(relativeSubpath)
+            let childAttrs = try fileManager.attributesOfItem(atPath: childURL.path)
+            try accountCopyEntry(attributes: childAttrs, at: childURL, itemCount: &itemCount, totalBytes: &totalBytes)
+        }
+    }
+
+    func accountCopyEntry(
+        attributes: [FileAttributeKey: Any],
+        at itemURL: URL,
+        itemCount: inout Int,
+        totalBytes: inout UInt64
+    ) throws {
+        let itemType = attributes[.type] as? FileAttributeType
+        if itemType == .typeSymbolicLink {
+            throw DomainError.securityScopeViolation(path: itemURL.path)
+        }
+        itemCount += 1
+        if itemCount > maxCopyItems {
+            throw DomainError.batchLimitExceeded(maxBytes: maxCopyBytes)
+        }
+        guard itemType != .typeDirectory else { return }
+        let itemSize = (attributes[.size] as? UInt64) ?? 0
+        let (nextTotal, overflow) = totalBytes.addingReportingOverflow(itemSize)
+        if overflow || nextTotal > maxCopyBytes {
+            throw DomainError.batchLimitExceeded(maxBytes: maxCopyBytes)
+        }
+        totalBytes = nextTotal
     }
 }

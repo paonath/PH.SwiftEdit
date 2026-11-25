@@ -172,6 +172,26 @@ public enum SwiftEditShortcutDispatcher {
         "{": CommandTableEntry(blocksOnOverlayField: false) { $0.selectPreviousTab(); return true },
     ]
 
+    private static let commandOptionTable: [String: CommandTableEntry] = [
+        "/": CommandTableEntry(blocksOnOverlayField: false) { $0.toggleShortcutsPanel(); return true },
+        "÷": CommandTableEntry(blocksOnOverlayField: false) { $0.toggleShortcutsPanel(); return true },
+        "f": CommandTableEntry(blocksOnOverlayField: false) { $0.presentFindBar(mode: .findAndReplace); return true },
+        "e": CommandTableEntry(blocksOnOverlayField: true) { $0.useSelectionForFind(); return true },
+        "t": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.insertTable) }; return true },
+        "l": CommandTableEntry(blocksOnOverlayField: true) { if $0.isMarkdownMenuEnabled { $0.applyMarkdownCommand(.taskToggle) }; return true },
+    ]
+
+    private static func dispatchTableEntry(
+        _ table: [String: CommandTableEntry],
+        key: String,
+        model: SwiftEditWorkbenchModel,
+        isEditingOverlayTextField: Bool
+    ) -> Bool? {
+        guard let entry = table[key] else { return nil }
+        guard !(entry.blocksOnOverlayField && isEditingOverlayTextField) else { return false }
+        return entry.run(model)
+    }
+
     private static func dispatchCommandOnly(
         _ key: ShortcutKeyEvent,
         chars: String,
@@ -179,9 +199,13 @@ public enum SwiftEditShortcutDispatcher {
         model: SwiftEditWorkbenchModel,
         isEditingOverlayTextField: Bool
     ) -> Bool {
-        if let entry = commandOnlyTable[charsIgnored] {
-            guard !(entry.blocksOnOverlayField && isEditingOverlayTextField) else { return false }
-            return entry.run(model)
+        if let handled = dispatchTableEntry(
+            commandOnlyTable,
+            key: charsIgnored,
+            model: model,
+            isEditingOverlayTextField: isEditingOverlayTextField
+        ) {
+            return handled
         }
         return dispatchCommandOnlyHardwareKeyFallback(key, chars: chars, model: model)
     }
@@ -225,9 +249,13 @@ public enum SwiftEditShortcutDispatcher {
             model.zoomController.zoomIn()
             return true
         }
-        if let entry = commandShiftTable[charsIgnored] {
-            guard !(entry.blocksOnOverlayField && isEditingOverlayTextField) else { return false }
-            return entry.run(model)
+        if let handled = dispatchTableEntry(
+            commandShiftTable,
+            key: charsIgnored,
+            model: model,
+            isEditingOverlayTextField: isEditingOverlayTextField
+        ) {
+            return handled
         }
         if key.keyCode == ansiPeriodKeyCode || chars == ":" || chars == ">" {
             guard !isEditingOverlayTextField else { return false }
@@ -242,28 +270,12 @@ public enum SwiftEditShortcutDispatcher {
         model: SwiftEditWorkbenchModel,
         isEditingOverlayTextField: Bool
     ) -> Bool {
-        switch charsIgnored {
-        case "/", "÷":
-            model.toggleShortcutsPanel()
-            return true
-        case "f":
-            model.presentFindBar(mode: .findAndReplace)
-            return true
-        case "e":
-            guard !isEditingOverlayTextField else { return false }
-            model.useSelectionForFind()
-            return true
-        case "t":
-            guard !isEditingOverlayTextField else { return false }
-            if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.insertTable) }
-            return true
-        case "l":
-            guard !isEditingOverlayTextField else { return false }
-            if model.isMarkdownMenuEnabled { model.applyMarkdownCommand(.taskToggle) }
-            return true
-        default:
-            return false
-        }
+        dispatchTableEntry(
+            commandOptionTable,
+            key: charsIgnored,
+            model: model,
+            isEditingOverlayTextField: isEditingOverlayTextField
+        ) ?? false
     }
 
     private static func dispatchCommandShiftOption(
@@ -319,34 +331,71 @@ extension SwiftEditShortcutDispatcher {
         case [.option]:
             return dispatchOptionOnly(key, chars: chars, charsIgnored: charsIgnored, model: model, isEditingOverlayTextField: isEditingOverlayTextField)
         case [.option, .shift]:
-            return (chars == "\\" || charsIgnored == "\\") ? toggleNavigatorIfEligible(model: model) : false
+            return dispatchOptionShift(chars: chars, charsIgnored: charsIgnored, model: model)
         case [.control]:
-            if charsIgnored == "j", !isEditingOverlayTextField {
-                model.joinActiveLines()
-                return true
-            }
-            return dispatchControlTabOrKey(key, charsIgnored: charsIgnored, reverse: false, model: model)
+            return dispatchControlOnly(key, charsIgnored: charsIgnored, model: model, isEditingOverlayTextField: isEditingOverlayTextField)
         case [.control, .shift]:
-            if charsIgnored == "f" {
-                model.toggleFindInFolder()
-                return true
-            }
-            if charsIgnored == "k", !isEditingOverlayTextField {
-                model.deleteActiveLines()
-                return true
-            }
-            return dispatchControlTabOrKey(key, charsIgnored: charsIgnored, reverse: true, model: model)
+            return dispatchControlShift(key, charsIgnored: charsIgnored, model: model, isEditingOverlayTextField: isEditingOverlayTextField)
         case []:
-            guard isF7FunctionKey(key), model.showDiffPane else { return false }
-            model.selectNextDiffHunk()
-            return true
+            return dispatchDiffHunkNavigation(key, reverse: false, model: model)
         case [.shift]:
-            guard isF7FunctionKey(key), model.showDiffPane else { return false }
-            model.selectPreviousDiffHunk()
-            return true
+            return dispatchDiffHunkNavigation(key, reverse: true, model: model)
         default:
             return false
         }
+    }
+
+    private static func dispatchOptionShift(
+        chars: String,
+        charsIgnored: String,
+        model: SwiftEditWorkbenchModel
+    ) -> Bool {
+        guard chars == "\\" || charsIgnored == "\\" else { return false }
+        return toggleNavigatorIfEligible(model: model)
+    }
+
+    private static func dispatchControlOnly(
+        _ key: ShortcutKeyEvent,
+        charsIgnored: String,
+        model: SwiftEditWorkbenchModel,
+        isEditingOverlayTextField: Bool
+    ) -> Bool {
+        if charsIgnored == "j", !isEditingOverlayTextField {
+            model.joinActiveLines()
+            return true
+        }
+        return dispatchControlTabOrKey(key, charsIgnored: charsIgnored, reverse: false, model: model)
+    }
+
+    private static func dispatchControlShift(
+        _ key: ShortcutKeyEvent,
+        charsIgnored: String,
+        model: SwiftEditWorkbenchModel,
+        isEditingOverlayTextField: Bool
+    ) -> Bool {
+        if charsIgnored == "f" {
+            model.toggleFindInFolder()
+            return true
+        }
+        if charsIgnored == "k", !isEditingOverlayTextField {
+            model.deleteActiveLines()
+            return true
+        }
+        return dispatchControlTabOrKey(key, charsIgnored: charsIgnored, reverse: true, model: model)
+    }
+
+    private static func dispatchDiffHunkNavigation(
+        _ key: ShortcutKeyEvent,
+        reverse: Bool,
+        model: SwiftEditWorkbenchModel
+    ) -> Bool {
+        guard isF7FunctionKey(key), model.showDiffPane else { return false }
+        if reverse {
+            model.selectPreviousDiffHunk()
+        } else {
+            model.selectNextDiffHunk()
+        }
+        return true
     }
 
     private static func dispatchControlTabOrKey(

@@ -185,37 +185,59 @@ extension EditorRenderingAttributeTable {
     var unbalancedBracketBackground: NSColor { highlights.unbalancedBracketBackground }
 
     func attributes(for kind: MarkdownSyntaxKind) -> Entries {
-        if let logResult = lookupLogEntries(for: kind) { return logResult }
-        if let semanticResult = lookupSemanticEntries(for: kind) { return semanticResult }
-        switch kind {
-        case .bold: return bold
-        case .italic: return italic
-        case .strikethrough: return strikethrough
-        case .inlineCode, .codeBlock: return code
-        case .link, .image: return link
-        case .inlineHTML: return inlineHTML
-        case .task, .blockquote, .tableRow, .thematicBreak, .yamlPunctuation, .yamlComment: return secondary
-        case .yamlKey: return yamlKey
-        default: return []
-        }
+        lookupLogEntries(for: kind)
+            ?? lookupSemanticEntries(for: kind)
+            ?? lookupInlineEntries(for: kind)
+            ?? lookupBlockAndYAMLEntries(for: kind)
+            ?? []
     }
 }
 
 extension EditorRenderingAttributeTable {
     private func lookupSemanticEntries(for kind: MarkdownSyntaxKind) -> Entries? {
+        if case .heading = kind { return semanticEntries.heading }
+        return lookupHTMLEntries(for: kind) ?? lookupJSONEntries(for: kind)
+    }
+
+    private func lookupHTMLEntries(for kind: MarkdownSyntaxKind) -> Entries? {
         switch kind {
-        case .heading: return semanticEntries.heading
         case .htmlTag: return semanticEntries.htmlTag
         case .htmlAttribute: return semanticEntries.htmlAttribute
         case .htmlString: return semanticEntries.htmlString
         case .htmlComment: return semanticEntries.htmlComment
         case .htmlEntity: return semanticEntries.htmlEntity
         case .htmlDoctype: return semanticEntries.htmlDoctype
+        default: return nil
+        }
+    }
+
+    private func lookupJSONEntries(for kind: MarkdownSyntaxKind) -> Entries? {
+        switch kind {
         case .jsonKey: return semanticEntries.jsonKey
         case .jsonString: return semanticEntries.jsonString
         case .jsonNumber: return semanticEntries.jsonNumber
         case .jsonLiteral: return semanticEntries.jsonLiteral
         case .jsonPunctuation: return semanticEntries.jsonPunctuation
+        default: return nil
+        }
+    }
+
+    private func lookupInlineEntries(for kind: MarkdownSyntaxKind) -> Entries? {
+        switch kind {
+        case .bold: return bold
+        case .italic: return italic
+        case .strikethrough: return strikethrough
+        case .inlineCode, .codeBlock: return code
+        case .link, .image: return link
+        default: return nil
+        }
+    }
+
+    private func lookupBlockAndYAMLEntries(for kind: MarkdownSyntaxKind) -> Entries? {
+        switch kind {
+        case .inlineHTML: return inlineHTML
+        case .task, .blockquote, .tableRow, .thematicBreak, .yamlPunctuation, .yamlComment: return secondary
+        case .yamlKey: return yamlKey
         default: return nil
         }
     }

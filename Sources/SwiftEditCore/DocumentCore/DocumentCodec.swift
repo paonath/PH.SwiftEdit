@@ -188,49 +188,76 @@ public enum DocumentCodec {
 
     private static func decodeStrictUTF16(_ body: Data, littleEndian: Bool) -> String? {
         guard !body.isEmpty else { return "" }
+        guard body.count % 2 == 0 else { return nil }
         return body.withUnsafeBytes { rawBuf -> String? in
             guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return "" }
             let pairCount = body.count / 2
             var utf8Bytes: [UInt8] = []
             utf8Bytes.reserveCapacity(pairCount)
-            var i = 0
-            while i < pairCount {
-                let b0 = base[i * 2]
-                let b1 = base[i * 2 + 1]
-                let u1: UInt16 = littleEndian ? (UInt16(b0) | (UInt16(b1) << 8)) : ((UInt16(b0) << 8) | UInt16(b1))
-                i += 1
-                let scalarValue: UInt32
-                if u1 < 0xD800 || u1 > 0xDFFF {
-                    scalarValue = UInt32(u1)
-                } else if u1 <= 0xDBFF {
-                    guard i < pairCount else { return nil }
-                    let lb0 = base[i * 2]
-                    let lb1 = base[i * 2 + 1]
-                    let u2: UInt16 = littleEndian ? (UInt16(lb0) | (UInt16(lb1) << 8)) : ((UInt16(lb0) << 8) | UInt16(lb1))
-                    guard u2 >= 0xDC00 && u2 <= 0xDFFF else { return nil }
-                    i += 1
-                    scalarValue = 0x10000 + ((UInt32(u1 - 0xD800) << 10) | UInt32(u2 - 0xDC00))
-                } else {
+            var index = 0
+            while index < pairCount {
+                guard let scalarValue = decodeNextUTF16Scalar(
+                    from: base,
+                    pairCount: pairCount,
+                    index: &index,
+                    littleEndian: littleEndian
+                ) else {
                     return nil
                 }
-
-                if scalarValue < 0x80 {
-                    utf8Bytes.append(UInt8(scalarValue))
-                } else if scalarValue < 0x800 {
-                    utf8Bytes.append(UInt8(0xC0 | (scalarValue >> 6)))
-                    utf8Bytes.append(UInt8(0x80 | (scalarValue & 0x3F)))
-                } else if scalarValue < 0x10000 {
-                    utf8Bytes.append(UInt8(0xE0 | (scalarValue >> 12)))
-                    utf8Bytes.append(UInt8(0x80 | ((scalarValue >> 6) & 0x3F)))
-                    utf8Bytes.append(UInt8(0x80 | (scalarValue & 0x3F)))
-                } else {
-                    utf8Bytes.append(UInt8(0xF0 | (scalarValue >> 18)))
-                    utf8Bytes.append(UInt8(0x80 | ((scalarValue >> 12) & 0x3F)))
-                    utf8Bytes.append(UInt8(0x80 | ((scalarValue >> 6) & 0x3F)))
-                    utf8Bytes.append(UInt8(0x80 | (scalarValue & 0x3F)))
-                }
+                appendUTF8Bytes(for: scalarValue, to: &utf8Bytes)
             }
             return String(decoding: utf8Bytes, as: UTF8.self)
+        }
+    }
+
+    private static func readUTF16CodeUnit(
+        from base: UnsafePointer<UInt8>,
+        pairIndex: Int,
+        littleEndian: Bool
+    ) -> UInt16 {
+        let b0 = UInt16(base[pairIndex * 2])
+        let b1 = UInt16(base[pairIndex * 2 + 1])
+        return littleEndian ? (b0 | (b1 << 8)) : ((b0 << 8) | b1)
+    }
+
+    private static func decodeNextUTF16Scalar(
+        from base: UnsafePointer<UInt8>,
+        pairCount: Int,
+        index: inout Int,
+        littleEndian: Bool
+    ) -> UInt32? {
+        let u1 = readUTF16CodeUnit(from: base, pairIndex: index, littleEndian: littleEndian)
+        index += 1
+        if u1 < 0xD800 || u1 > 0xDFFF {
+            return UInt32(u1)
+        }
+        guard u1 <= 0xDBFF, index < pairCount else {
+            return nil
+        }
+        let u2 = readUTF16CodeUnit(from: base, pairIndex: index, littleEndian: littleEndian)
+        guard u2 >= 0xDC00 && u2 <= 0xDFFF else {
+            return nil
+        }
+        index += 1
+        return 0x10000 + ((UInt32(u1 - 0xD800) << 10) | UInt32(u2 - 0xDC00))
+    }
+
+    private static func appendUTF8Bytes(for scalarValue: UInt32, to utf8Bytes: inout [UInt8]) {
+        switch scalarValue {
+        case ..<0x80:
+            utf8Bytes.append(UInt8(scalarValue))
+        case ..<0x800:
+            utf8Bytes.append(UInt8(0xC0 | (scalarValue >> 6)))
+            utf8Bytes.append(UInt8(0x80 | (scalarValue & 0x3F)))
+        case ..<0x10000:
+            utf8Bytes.append(UInt8(0xE0 | (scalarValue >> 12)))
+            utf8Bytes.append(UInt8(0x80 | ((scalarValue >> 6) & 0x3F)))
+            utf8Bytes.append(UInt8(0x80 | (scalarValue & 0x3F)))
+        default:
+            utf8Bytes.append(UInt8(0xF0 | (scalarValue >> 18)))
+            utf8Bytes.append(UInt8(0x80 | ((scalarValue >> 12) & 0x3F)))
+            utf8Bytes.append(UInt8(0x80 | ((scalarValue >> 6) & 0x3F)))
+            utf8Bytes.append(UInt8(0x80 | (scalarValue & 0x3F)))
         }
     }
 }

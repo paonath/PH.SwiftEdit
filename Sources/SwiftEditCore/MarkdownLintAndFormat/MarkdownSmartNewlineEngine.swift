@@ -46,57 +46,86 @@ public enum MarkdownSmartNewlineEngine {
         guard isMarkdownDocument,
               !snapshot.isBinaryReadOnly,
               !snapshot.isDegradedPlainText,
-              caretLocation >= 0 else {
+              caretLocation >= 0,
+              let line = resolveCaretLine(in: snapshot.text, caretLocation: caretLocation),
+              let parsed = parseContinuationMarker(in: line.text),
+              caretLocation >= line.startOffset + parsed.markerUTF16Length,
+              !isInsideFencedCodeBlockUTF8(in: snapshot.text, beforeIndex: line.startIdx) else {
             return nil
         }
 
-        // Resolve the caret line directly in UTF-8 without copying the entire document into `[UInt16]`.
-        let text = snapshot.text
+        if parsed.isEmptyContent {
+            return emptyMarkerNewlineEdit(
+                in: snapshot,
+                caretLocation: caretLocation,
+                line: line,
+                isNestedOrdered: parsed.isNestedOrdered
+            )
+        }
+
+        let insertion = "\n" + parsed.nextLinePrefix
+        return SmartNewlineEdit(
+            edit: TextEdit(range: TextRange(location: caretLocation, length: 0), replacement: insertion),
+            newCaretLocation: caretLocation + insertion.utf16.count
+        )
+    }
+
+    private struct CaretLineContext {
+        let startIdx: String.Index
+        let startOffset: Int
+        let endOffset: Int
+        let text: String
+    }
+
+    private static func resolveCaretLine(in text: String, caretLocation: Int) -> CaretLineContext? {
         let utf16 = text.utf16
         guard let caretIdx = utf16.index(utf16.startIndex, offsetBy: caretLocation, limitedBy: utf16.endIndex) else {
             return nil
         }
         let utf8 = text.utf8
-        var lineStartIdx = caretIdx
-        while lineStartIdx > utf8.startIndex {
-            let prev = utf8.index(before: lineStartIdx)
-            let b = utf8[prev]
-            if b == 0x0A || b == 0x0D { break }
-            lineStartIdx = prev
-        }
-        var lineEndIdx = caretIdx
-        while lineEndIdx < utf8.endIndex {
-            let b = utf8[lineEndIdx]
-            if b == 0x0A || b == 0x0D { break }
-            lineEndIdx = utf8.index(after: lineEndIdx)
-        }
-
+        let lineStartIdx = findLineStartUTF8(in: utf8, before: caretIdx)
+        let lineEndIdx = findLineEndUTF8(in: utf8, from: caretIdx)
         let leadingUTF16 = utf16.distance(from: lineStartIdx, to: caretIdx)
         let trailingUTF16 = utf16.distance(from: caretIdx, to: lineEndIdx)
-        let lineUTF16Length = leadingUTF16 + trailingUTF16
-        guard lineUTF16Length <= SearchDiffAndBracketEngine.maxBracketScanLineUTF16Length else {
+        guard leadingUTF16 + trailingUTF16 <= SearchDiffAndBracketEngine.maxBracketScanLineUTF16Length else {
             return nil
         }
-        let lineStart = caretLocation - leadingUTF16
-        let lineEnd = caretLocation + trailingUTF16
+        return CaretLineContext(
+            startIdx: lineStartIdx,
+            startOffset: caretLocation - leadingUTF16,
+            endOffset: caretLocation + trailingUTF16,
+            text: String(text[lineStartIdx..<lineEndIdx])
+        )
+    }
 
-        // Parse the current line FIRST: on normal prose (90%+ of Enter presses), returns nil in O(lineLength) with zero prefix scan.
-        let lineString = String(text[lineStartIdx..<lineEndIdx])
-        guard let parsed = parseContinuationMarker(in: lineString) else {
-            return nil
+    private static func findLineStartUTF8(in utf8: String.UTF8View, before caretIdx: String.Index) -> String.Index {
+        var idx = caretIdx
+        while idx > utf8.startIndex {
+            let prev = utf8.index(before: idx)
+            let byte = utf8[prev]
+            if byte == 0x0A || byte == 0x0D { break }
+            idx = prev
         }
+        return idx
+    }
 
-        let markerEndOffset = lineStart + parsed.markerUTF16Length
-        guard caretLocation >= markerEndOffset else {
-            return nil
+    private static func findLineEndUTF8(in utf8: String.UTF8View, from caretIdx: String.Index) -> String.Index {
+        var idx = caretIdx
+        while idx < utf8.endIndex {
+            let byte = utf8[idx]
+            if byte == 0x0A || byte == 0x0D { break }
+            idx = utf8.index(after: idx)
         }
+        return idx
+    }
 
-        // Only verify fenced-code state when the current line actually has a continuation marker.
-        if isInsideFencedCodeBlockUTF8(in: text, beforeIndex: lineStartIdx) {
-            return nil
-        }
-
-        if parsed.isEmptyContent, parsed.isNestedOrdered,
+    private static func emptyMarkerNewlineEdit(
+        in snapshot: DocumentSnapshot,
+        caretLocation: Int,
+        line: CaretLineContext,
+        isNestedOrdered: Bool
+    ) -> SmartNewlineEdit {
+        if isNestedOrdered,
            case .edit(let outdented) = MarkdownSmartListEngine.evaluateIndent(
                in: snapshot,
                selection: TextRange(location: caretLocation, length: 0),
@@ -106,18 +135,9 @@ public enum MarkdownSmartNewlineEngine {
            let outdentEdit = outdented.edits.first {
             return SmartNewlineEdit(edit: outdentEdit, newCaretLocation: outdented.newSelection.location)
         }
-
-        if parsed.isEmptyContent {
-            return SmartNewlineEdit(
-                edit: TextEdit(range: TextRange(location: lineStart, length: lineEnd - lineStart), replacement: ""),
-                newCaretLocation: lineStart
-            )
-        }
-
-        let insertion = "\n" + parsed.nextLinePrefix
         return SmartNewlineEdit(
-            edit: TextEdit(range: TextRange(location: caretLocation, length: 0), replacement: insertion),
-            newCaretLocation: caretLocation + insertion.utf16.count
+            edit: TextEdit(range: TextRange(location: line.startOffset, length: line.endOffset - line.startOffset), replacement: ""),
+            newCaretLocation: line.startOffset
         )
     }
 

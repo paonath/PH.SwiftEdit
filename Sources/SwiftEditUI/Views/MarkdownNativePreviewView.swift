@@ -172,87 +172,29 @@ struct MarkdownNativePreviewView: View {
     ) -> some View {
         switch block {
         case .heading(let level, let text, _):
-            let headingSize = level <= 1 ? metrics.previewH1FontSize
-                : (level == 2 ? metrics.previewH2FontSize : (level == 3 ? metrics.previewH3FontSize : metrics.previewBodyFontSize))
-            Text(inline(text))
-                .appFont(size: headingSize, weight: level <= 2 ? .semibold : .medium)
-                .foregroundStyle(palette.chromeForeground.swiftUIColor)
-                .padding(.top, (level <= 2 ? 6 : 2) * metrics.factor)
+            headingBlockView(level: level, text: text, metrics: metrics)
         case .paragraph(let text, _):
-            VStack(alignment: .leading, spacing: 6 * metrics.factor) {
-                Text(inline(text))
-                    .appFont(size: metrics.previewBodyFontSize)
-                    .foregroundStyle(palette.chromeForeground.swiftUIColor)
-                imageViews(entries: imageEntries, metrics: metrics)
-            }
+            paragraphBlockView(text: text, imageEntries: imageEntries, metrics: metrics)
         case .listItem(let text, let ordered, let indent, let task, _):
-            HStack(alignment: .top, spacing: 6 * metrics.factor) {
-                Text(MarkdownPreviewProjector.listMarkerText(ordered: ordered, taskChecked: task, ordinal: ordinal))
-                    .appFont(size: metrics.previewBodyFontSize)
-                VStack(alignment: .leading, spacing: 4 * metrics.factor) {
-                    Text(inline(text))
-                        .appFont(size: metrics.previewBodyFontSize)
-                    imageViews(entries: imageEntries, metrics: metrics)
-                }
-            }
-            .padding(.leading, CGFloat(indent) * metrics.previewIndentStep)
-            .foregroundStyle(palette.chromeForeground.swiftUIColor)
+            listItemBlockView(
+                text: text,
+                ordered: ordered,
+                indent: indent,
+                task: task,
+                ordinal: ordinal,
+                imageEntries: imageEntries,
+                metrics: metrics
+            )
         case .quote(let text, _):
-            Text(inline(text))
-                .appFont(size: metrics.previewBodyFontSize)
-                .foregroundStyle(palette.secondaryForeground.swiftUIColor)
-                .padding(.leading, 10 * metrics.factor)
-                .overlay(alignment: .leading) {
-                    Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(width: metrics.previewQuoteBarWidth)
-                }
+            quoteBlockView(text: text, metrics: metrics)
         case .table(let header, let rows, _):
-            Grid(alignment: .leading, horizontalSpacing: 12 * metrics.factor, verticalSpacing: 4 * metrics.factor) {
-                GridRow {
-                    ForEach(header.indices, id: \.self) { idx in
-                        Text(inline(header[idx])).appFont(size: metrics.previewBodyFontSize, weight: .semibold)
-                    }
-                }
-                Divider()
-                ForEach(rows.indices, id: \.self) { rowIdx in
-                    let row = rows[rowIdx]
-                    GridRow {
-                        ForEach(row.indices, id: \.self) { colIdx in
-                            Text(inline(row[colIdx])).appFont(size: metrics.previewBodyFontSize)
-                        }
-                    }
-                }
-            }
-            .foregroundStyle(palette.chromeForeground.swiftUIColor)
+            tableBlockView(header: header, rows: rows, metrics: metrics)
         case .code(let text, _):
-            if let diagram {
-                MarkdownDiagramPreviewView(
-                    diagram: diagram,
-                    rawCode: text,
-                    languageLabel: fenceLanguage,
-                    palette: palette,
-                    metrics: metrics,
-                    onCopyCode: onCopyCode
-                )
-            } else {
-                PreviewCodeFenceBlockView(
-                    text: text,
-                    languageLabel: fenceLanguage,
-                    palette: palette,
-                    metrics: metrics,
-                    onCopyCode: onCopyCode
-                )
-            }
+            codeBlockView(text: text, fenceLanguage: fenceLanguage, diagram: diagram, metrics: metrics)
         case .thematicBreak:
             Divider()
         case .inertHTML(let text, _):
-            Text(text)
-                .appFont(size: metrics.previewCodeFontSize, monospaced: true, role: .editor)
-                .padding(6 * metrics.factor)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .foregroundStyle(palette.inertHTMLWarningForeground.swiftUIColor)
-                .background(palette.inertHTMLWarningBackground.swiftUIColor)
-                .overlay { RoundedRectangle(cornerRadius: 4).stroke(palette.inertHTMLWarningBorder.swiftUIColor, lineWidth: 1) }
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+            inertHTMLBlockView(text: text, metrics: metrics)
         }
     }
 
@@ -280,6 +222,128 @@ struct MarkdownNativePreviewView: View {
     /// Inline Markdown only (bold, italic, code, links); plain text bypasses the Foundation Markdown parser and parsed runs are cached (`PERF-005`).
     private func inline(_ text: String) -> AttributedString {
         InlineMarkdownRenderCache.shared.attributedString(for: text)
+    }
+}
+
+private extension MarkdownNativePreviewView {
+    func headingFontSize(for level: Int, metrics: ZoomedChromeMetrics) -> CGFloat {
+        switch level {
+        case ...1:
+            return metrics.previewH1FontSize
+        case 2:
+            return metrics.previewH2FontSize
+        case 3:
+            return metrics.previewH3FontSize
+        default:
+            return metrics.previewBodyFontSize
+        }
+    }
+
+    func headingBlockView(level: Int, text: String, metrics: ZoomedChromeMetrics) -> some View {
+        let headingSize = headingFontSize(for: level, metrics: metrics)
+        return Text(inline(text))
+            .appFont(size: headingSize, weight: level <= 2 ? .semibold : .medium)
+            .foregroundStyle(palette.chromeForeground.swiftUIColor)
+            .padding(.top, (level <= 2 ? 6 : 2) * metrics.factor)
+    }
+
+    func paragraphBlockView(text: String, imageEntries: [GFMPreviewImageEntry], metrics: ZoomedChromeMetrics) -> some View {
+        VStack(alignment: .leading, spacing: 6 * metrics.factor) {
+            Text(inline(text))
+                .appFont(size: metrics.previewBodyFontSize)
+                .foregroundStyle(palette.chromeForeground.swiftUIColor)
+            imageViews(entries: imageEntries, metrics: metrics)
+        }
+    }
+
+    func listItemBlockView(
+        text: String,
+        ordered: Bool,
+        indent: Int,
+        task: Bool?,
+        ordinal: Int,
+        imageEntries: [GFMPreviewImageEntry],
+        metrics: ZoomedChromeMetrics
+    ) -> some View {
+        HStack(alignment: .top, spacing: 6 * metrics.factor) {
+            Text(MarkdownPreviewProjector.listMarkerText(ordered: ordered, taskChecked: task, ordinal: ordinal))
+                .appFont(size: metrics.previewBodyFontSize)
+            VStack(alignment: .leading, spacing: 4 * metrics.factor) {
+                Text(inline(text))
+                    .appFont(size: metrics.previewBodyFontSize)
+                imageViews(entries: imageEntries, metrics: metrics)
+            }
+        }
+        .padding(.leading, CGFloat(indent) * metrics.previewIndentStep)
+        .foregroundStyle(palette.chromeForeground.swiftUIColor)
+    }
+
+    func quoteBlockView(text: String, metrics: ZoomedChromeMetrics) -> some View {
+        Text(inline(text))
+            .appFont(size: metrics.previewBodyFontSize)
+            .foregroundStyle(palette.secondaryForeground.swiftUIColor)
+            .padding(.leading, 10 * metrics.factor)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(palette.hairlineBorder.swiftUIColor).frame(width: metrics.previewQuoteBarWidth)
+            }
+    }
+
+    func tableBlockView(header: [String], rows: [[String]], metrics: ZoomedChromeMetrics) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: 12 * metrics.factor, verticalSpacing: 4 * metrics.factor) {
+            tableRowView(cells: header, isHeader: true, metrics: metrics)
+            Divider()
+            ForEach(rows.indices, id: \.self) { rowIdx in
+                tableRowView(cells: rows[rowIdx], isHeader: false, metrics: metrics)
+            }
+        }
+        .foregroundStyle(palette.chromeForeground.swiftUIColor)
+    }
+
+    func tableRowView(cells: [String], isHeader: Bool, metrics: ZoomedChromeMetrics) -> some View {
+        GridRow {
+            ForEach(cells.indices, id: \.self) { idx in
+                Text(inline(cells[idx]))
+                    .appFont(size: metrics.previewBodyFontSize, weight: isHeader ? .semibold : .regular)
+            }
+        }
+    }
+
+    @ViewBuilder
+    func codeBlockView(
+        text: String,
+        fenceLanguage: String?,
+        diagram: MarkdownDiagramModel?,
+        metrics: ZoomedChromeMetrics
+    ) -> some View {
+        if let diagram {
+            MarkdownDiagramPreviewView(
+                diagram: diagram,
+                rawCode: text,
+                languageLabel: fenceLanguage,
+                palette: palette,
+                metrics: metrics,
+                onCopyCode: onCopyCode
+            )
+        } else {
+            PreviewCodeFenceBlockView(
+                text: text,
+                languageLabel: fenceLanguage,
+                palette: palette,
+                metrics: metrics,
+                onCopyCode: onCopyCode
+            )
+        }
+    }
+
+    func inertHTMLBlockView(text: String, metrics: ZoomedChromeMetrics) -> some View {
+        Text(text)
+            .appFont(size: metrics.previewCodeFontSize, monospaced: true, role: .editor)
+            .padding(6 * metrics.factor)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundStyle(palette.inertHTMLWarningForeground.swiftUIColor)
+            .background(palette.inertHTMLWarningBackground.swiftUIColor)
+            .overlay { RoundedRectangle(cornerRadius: 4).stroke(palette.inertHTMLWarningBorder.swiftUIColor, lineWidth: 1) }
+            .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }
 

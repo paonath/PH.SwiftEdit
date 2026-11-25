@@ -67,27 +67,23 @@ public struct SemanticVersion: Comparable, Equatable, Sendable {
     }
 
     public static func < (lhs: SemanticVersion, rhs: SemanticVersion) -> Bool {
-        if lhs.major != rhs.major { return lhs.major < rhs.major }
-        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
-        if lhs.patch != rhs.patch { return lhs.patch < rhs.patch }
-
-        // Absence of prerelease has higher precedence than any prerelease (`0.0.1-alpha5 < 0.0.1`).
-        switch (lhs.prereleaseIdentifiers.isEmpty, rhs.prereleaseIdentifiers.isEmpty) {
-        case (true, true): return false
-        case (true, false): return false
-        case (false, true): return true
-        case (false, false):
-            let count = max(lhs.prereleaseIdentifiers.count, rhs.prereleaseIdentifiers.count)
-            for idx in 0..<count {
-                if idx >= lhs.prereleaseIdentifiers.count { return true }
-                if idx >= rhs.prereleaseIdentifiers.count { return false }
-                let a = lhs.prereleaseIdentifiers[idx]
-                let b = rhs.prereleaseIdentifiers[idx]
-                if a == b { continue }
-                return comparePrereleaseIdentifier(a, b) == .orderedAscending
-            }
-            return false
+        let lhsCore = (lhs.major, lhs.minor, lhs.patch)
+        let rhsCore = (rhs.major, rhs.minor, rhs.patch)
+        if lhsCore != rhsCore {
+            return lhsCore < rhsCore
         }
+        return comparePrereleaseLists(lhs.prereleaseIdentifiers, rhs.prereleaseIdentifiers)
+    }
+
+    private static func comparePrereleaseLists(_ lhs: [String], _ rhs: [String]) -> Bool {
+        // Absence of prerelease has higher precedence than any prerelease (`0.0.1-alpha5 < 0.0.1`).
+        if lhs.isEmpty || rhs.isEmpty {
+            return !lhs.isEmpty && rhs.isEmpty
+        }
+        for (a, b) in zip(lhs, rhs) where a != b {
+            return comparePrereleaseIdentifier(a, b) == .orderedAscending
+        }
+        return lhs.count < rhs.count
     }
 
     private static func comparePrereleaseIdentifier(_ lhs: String, _ rhs: String) -> ComparisonResult {
@@ -196,29 +192,11 @@ public struct GitHubReleaseUpdateChecker: Sendable {
     }
 
     private func evaluate(releases: [GitHubRelease], currentVersion: String) -> UpdateCheckOutcome {
-        let candidates = releases.filter { ($0.draft ?? false) == false }
-        guard !candidates.isEmpty else {
+        guard let best = Self.newestRelease(in: releases) else {
             return .noReleasesFound(currentVersion: currentVersion)
         }
 
-        let currentSemVer = SemanticVersion(parsing: currentVersion)
-        var bestRelease: (release: GitHubRelease, version: SemanticVersion)?
-        for item in candidates {
-            guard let parsed = SemanticVersion(parsing: item.tagName) else { continue }
-            if let currentBest = bestRelease {
-                if parsed > currentBest.version {
-                    bestRelease = (item, parsed)
-                }
-            } else {
-                bestRelease = (item, parsed)
-            }
-        }
-
-        guard let best = bestRelease else {
-            return .noReleasesFound(currentVersion: currentVersion)
-        }
-
-        guard let currentSemVer else {
+        guard let currentSemVer = SemanticVersion(parsing: currentVersion) else {
             return .error(message: "Invalid local version string '\(currentVersion)'.")
         }
 
@@ -240,6 +218,16 @@ public struct GitHubReleaseUpdateChecker: Sendable {
             releaseURL: safeReleaseURL,
             downloadURL: preferredZipAsset
         )
+    }
+
+    private static func newestRelease(in releases: [GitHubRelease]) -> (release: GitHubRelease, version: SemanticVersion)? {
+        releases
+            .filter { $0.draft != true }
+            .compactMap { release -> (release: GitHubRelease, version: SemanticVersion)? in
+                guard let version = SemanticVersion(parsing: release.tagName) else { return nil }
+                return (release, version)
+            }
+            .max { $0.version < $1.version }
     }
 
     private static func makeAPIRequest(url: URL) -> URLRequest {

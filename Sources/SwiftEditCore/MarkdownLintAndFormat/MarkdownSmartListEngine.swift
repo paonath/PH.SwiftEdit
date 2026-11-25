@@ -84,14 +84,30 @@ public enum MarkdownSmartListEngine {
             return .notApplicable
         }
         let units = Array(snapshot.text.utf16)
-        guard selection.location >= 0, selection.length >= 0, selection.upperBound <= units.count else {
+        guard selection.location >= 0,
+              selection.length >= 0,
+              selection.upperBound <= units.count,
+              let lines = splitLines(units) else {
             return .notApplicable
         }
-
-        guard let lines = splitLines(units) else { return .notApplicable }
         let targets = targetLineIndices(lines, selection: selection)
         guard !targets.isEmpty else { return .notApplicable }
 
+        let batch = collectIndentEdits(for: targets, in: lines, units: units, outdent: outdent)
+        guard batch.sawList else { return .notApplicable }
+        guard !batch.edits.isEmpty else { return .consumedNoOp }
+
+        let newStart = translate(selection.location, through: batch.deltas)
+        let newEnd = translate(selection.upperBound, through: batch.deltas)
+        return .edit(SmartListEdit(edits: batch.edits, newSelection: TextRange(location: newStart, length: max(0, newEnd - newStart))))
+    }
+
+    private static func collectIndentEdits(
+        for targets: [Int],
+        in lines: [Line],
+        units: [UInt16],
+        outdent: Bool
+    ) -> (edits: [TextEdit], deltas: [(lineStart: Int, oldPrefixEnd: Int, newPrefixLength: Int, delta: Int)], sawList: Bool) {
         var edits: [TextEdit] = []
         var deltas: [(lineStart: Int, oldPrefixEnd: Int, newPrefixLength: Int, delta: Int)] = []
         var sawList = false
@@ -105,12 +121,7 @@ public enum MarkdownSmartListEngine {
             edits.append(TextEdit(range: TextRange(location: line.start, length: item.prefixLength), replacement: newPrefix))
             deltas.append((line.start, line.start + item.prefixLength, newPrefix.utf16.count, newPrefix.utf16.count - item.prefixLength))
         }
-        guard sawList else { return .notApplicable }
-        guard !edits.isEmpty else { return .consumedNoOp }
-
-        let newStart = translate(selection.location, through: deltas)
-        let newEnd = translate(selection.upperBound, through: deltas)
-        return .edit(SmartListEdit(edits: edits, newSelection: TextRange(location: newStart, length: max(0, newEnd - newStart))))
+        return (edits, deltas, sawList)
     }
 
     // MARK: - Line model

@@ -399,15 +399,11 @@ struct DesignAssetsVerifier: Sendable {
 
     /// Evaluates one `.appiconset` directory against slot completeness, `size * scale` pixel dimensions, platform alpha rules, symlink bans, and `16 MiB` caps.
     private func verifySingleAppIconSet(spec: AppIconCatalogSpec) -> [VerificationIssue] {
-        var issues: [VerificationIssue] = []
-        let fm = FileManager.default
         let setURL = rootURL.appendingPathComponent(spec.relativeDir)
         let manifestRel = "\(spec.relativeDir)/Contents.json"
         let manifestURL = setURL.appendingPathComponent("Contents.json")
 
-        guard fm.fileExists(atPath: manifestURL.path),
-              let data = try? Data(contentsOf: manifestURL),
-              let manifest = try? JSONDecoder().decode(AppIconContentsManifest.self, from: data) else {
+        guard let manifest = loadAppIconManifest(at: manifestURL) else {
             return [VerificationIssue(
                 severity: .integrity,
                 path: manifestRel,
@@ -415,6 +411,7 @@ struct DesignAssetsVerifier: Sendable {
             )]
         }
 
+        var issues: [VerificationIssue] = []
         if manifest.images.count != spec.slots.count {
             issues.append(VerificationIssue(
                 severity: .integrity,
@@ -426,77 +423,14 @@ struct DesignAssetsVerifier: Sendable {
         let canonicalSetDir = setURL.resolvingSymlinksInPath().standardizedFileURL.path
         var uniqueFilenames = Set<String>()
         for expected in spec.slots {
-            guard let entry = manifest.images.first(where: {
-                $0.idiom == expected.idiom && $0.size == expected.sizeString && $0.scale == expected.scaleString
-            }), let filename = entry.filename, !filename.isEmpty else {
-                issues.append(VerificationIssue(
-                    severity: .integrity,
-                    path: manifestRel,
-                    message: "Missing required slot \(expected.idiom) \(expected.sizeString) @\(expected.scaleString)"
-                ))
-                continue
-            }
-            if filename.contains("/") || filename.contains("\\") || filename.contains("..") {
-                issues.append(VerificationIssue(
-                    severity: .security,
-                    path: manifestRel,
-                    message: "Icon filename '\(filename)' contains path separator or traversal segment (CWE-22)"
-                ))
-                continue
-            }
-            uniqueFilenames.insert(filename)
-            let pngRel = "\(spec.relativeDir)/\(filename)"
-            let pngURL = setURL.appendingPathComponent(filename)
-            if PathConfinementGuard.isSymbolicLink(at: pngURL) {
-                issues.append(VerificationIssue(
-                    severity: .security,
-                    path: pngRel,
-                    message: "Symbolic link inside AppIcon.appiconset is forbidden (CWE-22)"
-                ))
-                continue
-            }
-            guard fm.fileExists(atPath: pngURL.path) else {
-                issues.append(VerificationIssue(
-                    severity: .integrity,
-                    path: pngRel,
-                    message: "Referenced icon PNG file does not exist"
-                ))
-                continue
-            }
-            if !PathConfinementGuard.isConfined(candidateURL: pngURL, withinCanonicalDirectory: canonicalSetDir) {
-                issues.append(VerificationIssue(
-                    severity: .security,
-                    path: pngRel,
-                    message: "Icon path escapes AppIcon.appiconset boundary (CWE-22)"
-                ))
-                continue
-            }
-            if let sizeIssue = PathConfinementGuard.validateFileSize(at: pngURL, reportedPath: pngRel) {
-                issues.append(sizeIssue)
-                continue
-            }
-            guard let header = PngHeaderInspector.inspect(url: pngURL) else {
-                issues.append(VerificationIssue(
-                    severity: .integrity,
-                    path: pngRel,
-                    message: "Unable to decode PNG header via ImageIO"
-                ))
-                continue
-            }
-            if header.width != expected.expectedPixels || header.height != expected.expectedPixels {
-                issues.append(VerificationIssue(
-                    severity: .integrity,
-                    path: pngRel,
-                    message: "Expected \(expected.expectedPixels)x\(expected.expectedPixels) px, got \(header.width)x\(header.height) px"
-                ))
-            }
-            if header.hasAlpha != spec.requiredHasAlpha {
-                issues.append(VerificationIssue(
-                    severity: .security,
-                    path: pngRel,
-                    message: "Alpha channel mismatch: expected hasAlpha == \(spec.requiredHasAlpha), got \(header.hasAlpha) (UI-001 / ITMS-90717)"
-                ))
-            }
+            issues.append(contentsOf: validateAppIconSlot(
+                expected,
+                in: manifest,
+                spec: spec,
+                setURL: setURL,
+                canonicalSetDir: canonicalSetDir,
+                uniqueFilenames: &uniqueFilenames
+            ))
         }
 
         if uniqueFilenames.count != spec.expectedUniqueFilesCount {
@@ -507,20 +441,153 @@ struct DesignAssetsVerifier: Sendable {
             ))
         }
 
-        if let dirItems = try? fm.contentsOfDirectory(atPath: setURL.path) {
-            let allowed = uniqueFilenames.union(["Contents.json"])
-            for item in dirItems where !allowed.contains(item) {
-                let strayURL = setURL.appendingPathComponent(item)
-                let severity: IssueSeverity = PathConfinementGuard.isSymbolicLink(at: strayURL) ? .security : .integrity
-                issues.append(VerificationIssue(
-                    severity: severity,
-                    path: "\(spec.relativeDir)/\(item)",
-                    message: "Unexpected file or symbolic link inside AppIcon.appiconset"
-                ))
-            }
+        issues.append(contentsOf: verifyStrayAppIconEntries(
+            in: setURL,
+            relativeDir: spec.relativeDir,
+            allowedFilenames: uniqueFilenames
+        ))
+        return issues
+    }
+
+    private func loadAppIconManifest(at manifestURL: URL) -> AppIconContentsManifest? {
+        guard FileManager.default.fileExists(atPath: manifestURL.path),
+              let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode(AppIconContentsManifest.self, from: data) else {
+            return nil
+        }
+        return manifest
+    }
+
+    private func validateAppIconSlot(
+        _ expected: IconSlotSpec,
+        in manifest: AppIconContentsManifest,
+        spec: AppIconCatalogSpec,
+        setURL: URL,
+        canonicalSetDir: String,
+        uniqueFilenames: inout Set<String>
+    ) -> [VerificationIssue] {
+        let manifestRel = "\(spec.relativeDir)/Contents.json"
+        guard let entry = manifest.images.first(where: {
+            $0.idiom == expected.idiom && $0.size == expected.sizeString && $0.scale == expected.scaleString
+        }), let filename = entry.filename, !filename.isEmpty else {
+            return [VerificationIssue(
+                severity: .integrity,
+                path: manifestRel,
+                message: "Missing required slot \(expected.idiom) \(expected.sizeString) @\(expected.scaleString)"
+            )]
         }
 
+        if filename.contains("/") || filename.contains("\\") || filename.contains("..") {
+            return [VerificationIssue(
+                severity: .security,
+                path: manifestRel,
+                message: "Icon filename '\(filename)' contains path separator or traversal segment (CWE-22)"
+            )]
+        }
+
+        uniqueFilenames.insert(filename)
+        let pngRel = "\(spec.relativeDir)/\(filename)"
+        let pngURL = setURL.appendingPathComponent(filename)
+        return validateAppIconFile(
+            at: pngURL,
+            pngRel: pngRel,
+            expectedPixels: expected.expectedPixels,
+            requiredHasAlpha: spec.requiredHasAlpha,
+            canonicalSetDir: canonicalSetDir
+        )
+    }
+
+    private func validateAppIconFile(
+        at pngURL: URL,
+        pngRel: String,
+        expectedPixels: Int,
+        requiredHasAlpha: Bool,
+        canonicalSetDir: String
+    ) -> [VerificationIssue] {
+        if PathConfinementGuard.isSymbolicLink(at: pngURL) {
+            return [VerificationIssue(
+                severity: .security,
+                path: pngRel,
+                message: "Symbolic link inside AppIcon.appiconset is forbidden (CWE-22)"
+            )]
+        }
+        guard FileManager.default.fileExists(atPath: pngURL.path) else {
+            return [VerificationIssue(
+                severity: .integrity,
+                path: pngRel,
+                message: "Referenced icon PNG file does not exist"
+            )]
+        }
+        if !PathConfinementGuard.isConfined(candidateURL: pngURL, withinCanonicalDirectory: canonicalSetDir) {
+            return [VerificationIssue(
+                severity: .security,
+                path: pngRel,
+                message: "Icon path escapes AppIcon.appiconset boundary (CWE-22)"
+            )]
+        }
+        if let sizeIssue = PathConfinementGuard.validateFileSize(at: pngURL, reportedPath: pngRel) {
+            return [sizeIssue]
+        }
+        return validatePngRaster(
+            at: pngURL,
+            pngRel: pngRel,
+            expectedPixels: expectedPixels,
+            requiredHasAlpha: requiredHasAlpha
+        )
+    }
+
+    private func validatePngRaster(
+        at pngURL: URL,
+        pngRel: String,
+        expectedPixels: Int,
+        requiredHasAlpha: Bool
+    ) -> [VerificationIssue] {
+        guard let header = PngHeaderInspector.inspect(url: pngURL) else {
+            return [VerificationIssue(
+                severity: .integrity,
+                path: pngRel,
+                message: "Unable to decode PNG header via ImageIO"
+            )]
+        }
+
+        var issues: [VerificationIssue] = []
+        if header.width != expectedPixels || header.height != expectedPixels {
+            issues.append(VerificationIssue(
+                severity: .integrity,
+                path: pngRel,
+                message: "Expected \(expectedPixels)x\(expectedPixels) px, got \(header.width)x\(header.height) px"
+            ))
+        }
+        if header.hasAlpha != requiredHasAlpha {
+            issues.append(VerificationIssue(
+                severity: .security,
+                path: pngRel,
+                message: "Alpha channel mismatch: expected hasAlpha == \(requiredHasAlpha), got \(header.hasAlpha) (UI-001 / ITMS-90717)"
+            ))
+        }
         return issues
+    }
+
+    private func verifyStrayAppIconEntries(
+        in setURL: URL,
+        relativeDir: String,
+        allowedFilenames: Set<String>
+    ) -> [VerificationIssue] {
+        guard let dirItems = try? FileManager.default.contentsOfDirectory(atPath: setURL.path) else {
+            return []
+        }
+        let allowed = allowedFilenames.union(["Contents.json"])
+        return dirItems
+            .filter { !allowed.contains($0) }
+            .map { item in
+                let strayURL = setURL.appendingPathComponent(item)
+                let severity: IssueSeverity = PathConfinementGuard.isSymbolicLink(at: strayURL) ? .security : .integrity
+                return VerificationIssue(
+                    severity: severity,
+                    path: "\(relativeDir)/\(item)",
+                    message: "Unexpected file or symbolic link inside AppIcon.appiconset"
+                )
+            }
     }
 
     /// Executes all documentation, link-confinement, SVG, and `AppIcon.appiconset` checks and aggregates them into a `VerificationReport`.

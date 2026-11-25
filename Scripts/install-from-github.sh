@@ -80,105 +80,142 @@ quit_running_app() {
     fi
 }
 
-main() {
-    local version="latest"
-    local install_dir="/Applications"
-    local remove_quarantine="false"
-    local relaunch="true"
-    local dry_run="false"
+INSTALL_WORKDIR=""
+
+cleanup_workdir() {
+    if [[ -n "${INSTALL_WORKDIR:-}" ]]; then
+        rm -rf "$INSTALL_WORKDIR"
+    fi
+}
+
+require_arg_value() {
+    local flag="$1"
+    local arg_count="$2"
+    local hint="$3"
+    if [[ "$arg_count" -lt 2 ]]; then
+        printf 'Error: %s requires %s\n' "$flag" "$hint" >&2
+        exit 1
+    fi
+}
+
+apply_cli_option() {
+    local flag="$1"
+    local arg_count="$2"
+    local next_val="${3:-}"
+    CONSUMED_ARGS=1
+
+    case "$flag" in
+        --version)
+            require_arg_value "--version" "$arg_count" 'a tag or "latest"'
+            OPT_VERSION="$next_val"
+            CONSUMED_ARGS=2
+            ;;
+        --install-dir)
+            require_arg_value "--install-dir" "$arg_count" "a path"
+            OPT_INSTALL_DIR="$next_val"
+            CONSUMED_ARGS=2
+            ;;
+        --remove-quarantine)
+            OPT_REMOVE_QUARANTINE="true"
+            ;;
+        --no-relaunch)
+            OPT_RELAUNCH="false"
+            ;;
+        --dry-run)
+            OPT_DRY_RUN="true"
+            ;;
+        -h|--help)
+            print_help
+            exit 0
+            ;;
+        *)
+            printf 'Error: Unknown argument: %s\n' "$flag" >&2
+            exit 1
+            ;;
+    esac
+}
+
+parse_args() {
+    OPT_VERSION="latest"
+    OPT_INSTALL_DIR="/Applications"
+    OPT_REMOVE_QUARANTINE="false"
+    OPT_RELAUNCH="true"
+    OPT_DRY_RUN="false"
 
     while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --version)
-                [[ $# -ge 2 ]] || { printf 'Error: --version requires a tag or "latest"\n' >&2; exit 1; }
-                version="$2"
-                shift 2
-                ;;
-            --install-dir)
-                [[ $# -ge 2 ]] || { printf 'Error: --install-dir requires a path\n' >&2; exit 1; }
-                install_dir="$2"
-                shift 2
-                ;;
-            --remove-quarantine)
-                remove_quarantine="true"
-                shift
-                ;;
-            --no-relaunch)
-                relaunch="false"
-                shift
-                ;;
-            --dry-run)
-                dry_run="true"
-                shift
-                ;;
-            -h|--help)
-                print_help
-                exit 0
-                ;;
-            *)
-                printf 'Error: Unknown argument: %s\n' "$1" >&2
-                exit 1
-                ;;
-        esac
+        apply_cli_option "$1" "$#" "${2:-}"
+        shift "$CONSUMED_ARGS"
     done
+}
 
+require_tools() {
+    local cmd
     for cmd in curl shasum ditto python3 xattr open; do
-        command -v "$cmd" >/dev/null 2>&1 || {
+        if ! command -v "$cmd" >/dev/null 2>&1; then
             printf 'Error: required tool "%s" not found in PATH\n' "$cmd" >&2
             exit 1
-        }
+        fi
     done
+}
 
-    local tag="$version"
-    if [[ "$tag" == "latest" ]]; then
+resolve_release_tag() {
+    local version="$1"
+    local dry_run="$2"
+    RESOLVED_TAG="$version"
+    if [[ "$RESOLVED_TAG" == "latest" ]]; then
         if [[ "$dry_run" == "true" ]]; then
-            tag="latest"
+            RESOLVED_TAG="latest"
             printf '[dry-run] Would query https://api.github.com/repos/%s/releases/latest\n' "$REPO"
         else
-            tag="$(resolve_latest_tag)"
+            RESOLVED_TAG="$(resolve_latest_tag)"
         fi
     fi
-    validate_tag "$tag"
+    validate_tag "$RESOLVED_TAG"
+}
 
-    local safe_tag="${tag//\//-}"
-    local archive_name="PH.SwiftEdit-${safe_tag}-macOS-arm64.zip"
-    local sha_name="${archive_name}.sha256"
-    local base_url="https://github.com/${REPO}/releases/download/${tag}"
-    local archive_url="${base_url}/${archive_name}"
-    local sha_url="${base_url}/${sha_name}"
-    local dest_app="${install_dir}/${APP_NAME}"
-
+determine_quarantine_plan() {
+    local dest_app="$1"
+    local remove_quarantine="$2"
     # Detect whether an existing installation is already quarantine-free so updating never re-introduces quarantine.
-    local had_existing_app="false"
-    local existing_had_quarantine="false"
+    HAD_EXISTING_APP="false"
+    EXISTING_HAD_QUARANTINE="false"
+    SHOULD_STRIP_QUARANTINE="false"
+
     if [[ -d "$dest_app" ]]; then
-        had_existing_app="true"
+        HAD_EXISTING_APP="true"
         if app_has_quarantine "$dest_app"; then
-            existing_had_quarantine="true"
+            EXISTING_HAD_QUARANTINE="true"
         fi
     fi
 
-    local should_strip_quarantine="false"
     if [[ "$remove_quarantine" == "true" ]]; then
-        should_strip_quarantine="true"
-    elif [[ "$had_existing_app" == "true" && "$existing_had_quarantine" == "false" ]]; then
-        should_strip_quarantine="true"
+        SHOULD_STRIP_QUARANTINE="true"
+    elif [[ "$HAD_EXISTING_APP" == "true" && "$EXISTING_HAD_QUARANTINE" == "false" ]]; then
+        SHOULD_STRIP_QUARANTINE="true"
     fi
+}
 
-    if [[ "$dry_run" == "true" ]]; then
-        printf '[dry-run] Archive URL:  %s\n' "$archive_url"
-        printf '[dry-run] Checksum URL: %s\n' "$sha_url"
-        printf '[dry-run] Verify:       shasum -a 256 -c %s\n' "$sha_name"
-        printf '[dry-run] Install to:   %s\n' "$dest_app"
-        printf '[dry-run] Quarantine:   strip=%s (explicit=%s, existing_app=%s, existing_had_quarantine=%s)\n' \
-            "$should_strip_quarantine" "$remove_quarantine" "$had_existing_app" "$existing_had_quarantine"
-        printf '[dry-run] Relaunch:     %s\n' "$relaunch"
-        return 0
-    fi
+print_dry_run_plan() {
+    local archive_url="$1"
+    local sha_url="$2"
+    local sha_name="$3"
+    local dest_app="$4"
+    printf '[dry-run] Archive URL:  %s\n' "$archive_url"
+    printf '[dry-run] Checksum URL: %s\n' "$sha_url"
+    printf '[dry-run] Verify:       shasum -a 256 -c %s\n' "$sha_name"
+    printf '[dry-run] Install to:   %s\n' "$dest_app"
+    printf '[dry-run] Quarantine:   strip=%s (explicit=%s, existing_app=%s, existing_had_quarantine=%s)\n' \
+        "$SHOULD_STRIP_QUARANTINE" "$OPT_REMOVE_QUARANTINE" "$HAD_EXISTING_APP" "$EXISTING_HAD_QUARANTINE"
+    printf '[dry-run] Relaunch:     %s\n' "$OPT_RELAUNCH"
+}
 
-    local workdir
-    workdir="$(mktemp -d "${TMPDIR:-/tmp}/swiftedit-install.XXXXXX")"
-    trap 'rm -rf "$workdir"' EXIT
+download_and_verify_archive() {
+    local workdir="$1"
+    local tag="$2"
+    local archive_name="$3"
+    local sha_name="$4"
+    local archive_url="$5"
+    local sha_url="$6"
 
     printf '==> Downloading %s (%s)...\n' "$archive_name" "$tag"
     curl -fsSL -o "${workdir}/${archive_name}" "$archive_url"
@@ -191,14 +228,23 @@ main() {
     mkdir -p "${workdir}/extracted"
     ditto -x -k "${workdir}/${archive_name}" "${workdir}/extracted"
 
-    local extracted_app="${workdir}/extracted/${APP_NAME}"
-    if [[ ! -d "$extracted_app" && -d "${workdir}/extracted/${LEGACY_APP_NAME}" ]]; then
-        extracted_app="${workdir}/extracted/${LEGACY_APP_NAME}"
+    EXTRACTED_APP="${workdir}/extracted/${APP_NAME}"
+    if [[ ! -d "$EXTRACTED_APP" && -d "${workdir}/extracted/${LEGACY_APP_NAME}" ]]; then
+        EXTRACTED_APP="${workdir}/extracted/${LEGACY_APP_NAME}"
     fi
-    [[ -d "$extracted_app" ]] || {
+    if [[ ! -d "$EXTRACTED_APP" ]]; then
         printf 'Error: %s not found inside archive %s\n' "$APP_NAME" "$archive_name" >&2
         exit 1
-    }
+    fi
+}
+
+install_verified_app() {
+    local workdir="$1"
+    local extracted_app="$2"
+    local dest_app="$3"
+    local install_dir="$4"
+    local tag="$5"
+    local relaunch="$6"
 
     quit_running_app
 
@@ -217,7 +263,7 @@ main() {
         exit 1
     fi
 
-    if [[ "$should_strip_quarantine" == "true" ]]; then
+    if [[ "$SHOULD_STRIP_QUARANTINE" == "true" ]]; then
         printf '==> Removing com.apple.quarantine attribute...\n'
         xattr -dr com.apple.quarantine "$dest_app" || true
     fi
@@ -228,6 +274,34 @@ main() {
         printf '==> Launching %s...\n' "$dest_app"
         open "$dest_app"
     fi
+}
+
+main() {
+    parse_args "$@"
+    require_tools
+
+    resolve_release_tag "$OPT_VERSION" "$OPT_DRY_RUN"
+    local tag="$RESOLVED_TAG"
+    local safe_tag="${tag//\//-}"
+    local archive_name="PH.SwiftEdit-${safe_tag}-macOS-arm64.zip"
+    local sha_name="${archive_name}.sha256"
+    local base_url="https://github.com/${REPO}/releases/download/${tag}"
+    local archive_url="${base_url}/${archive_name}"
+    local sha_url="${base_url}/${sha_name}"
+    local dest_app="${OPT_INSTALL_DIR}/${APP_NAME}"
+
+    determine_quarantine_plan "$dest_app" "$OPT_REMOVE_QUARANTINE"
+
+    if [[ "$OPT_DRY_RUN" == "true" ]]; then
+        print_dry_run_plan "$archive_url" "$sha_url" "$sha_name" "$dest_app"
+        return 0
+    fi
+
+    INSTALL_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/swiftedit-install.XXXXXX")"
+    trap cleanup_workdir EXIT
+
+    download_and_verify_archive "$INSTALL_WORKDIR" "$tag" "$archive_name" "$sha_name" "$archive_url" "$sha_url"
+    install_verified_app "$INSTALL_WORKDIR" "$EXTRACTED_APP" "$dest_app" "$OPT_INSTALL_DIR" "$tag" "$OPT_RELAUNCH"
 }
 
 main "$@"

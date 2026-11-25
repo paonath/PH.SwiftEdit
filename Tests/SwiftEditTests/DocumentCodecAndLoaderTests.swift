@@ -88,12 +88,28 @@ struct DocumentCodecAndLoaderTests {
 
     @Test("N2: Malformed non-UTF-8 byte sequence without valid UTF-16 BOM throws DomainError.unsupportedEncoding")
     func n2MalformedByteStreamThrowsUnsupportedEncoding() {
-        // GIVEN an invalid UTF-8 byte sequence [0xC3, 0x28] with no BOM
+        // GIVEN an invalid UTF-8 byte sequence [0xC3, 0x28, 0xFF] with no BOM
         let malformed = Data([0xC3, 0x28, 0xFF])
 
         // WHEN / THEN decoding fails closed with DomainError.unsupportedEncoding
         #expect(throws: DomainError.unsupportedEncoding) {
             _ = try DocumentCodec.decode(malformed)
+        }
+    }
+
+    @Test("N2 [Security]: Malformed UTF-16LE/BE unpaired surrogates and odd byte lengths fail closed with DomainError.unsupportedEncoding")
+    func n2MalformedUTF16SurrogatesAndOddLengthsFailClosed() {
+        // GIVEN UTF-16LE and UTF-16BE payloads with unpaired high/low surrogates, truncated surrogate, and odd length
+        let leUnpairedHigh = Data([0xFF, 0xFE, 0x00, 0xD8, 0x41, 0x00])
+        let leUnpairedLow = Data([0xFF, 0xFE, 0x00, 0xDC])
+        let beTruncatedHigh = Data([0xFE, 0xFF, 0xD8, 0x00])
+        let beOddByteCount = Data([0xFE, 0xFF, 0x00, 0x41, 0x00])
+
+        // WHEN / THEN decoding each malformed UTF-16 stream throws DomainError.unsupportedEncoding
+        for payload in [leUnpairedHigh, leUnpairedLow, beTruncatedHigh, beOddByteCount] {
+            #expect(throws: DomainError.unsupportedEncoding) {
+                _ = try DocumentCodec.decode(payload)
+            }
         }
     }
 
