@@ -21,6 +21,8 @@ struct TextKit2EditorOptionalHooks {
     var onViewportMetricsChange: ((GutterViewportMetrics) -> Void)?
     var onEscape: () -> Bool
     var onSendSelectionToTerminal: ((SwiftEditCore.TextRange, String) -> Void)?
+    var onRevealInFolderNavigator: (() -> Void)?
+    var onStartDictationHere: (() -> Void)?
     var lineIndexProvider: ((DocumentID, BufferRevision) -> MarkdownLineIndex?)?
     var completionProvider: ((String) -> String?)?
 }
@@ -74,6 +76,8 @@ extension TextKit2EditorView {
         onViewportMetricsChange: ((GutterViewportMetrics) -> Void)? = nil,
         onEscape: @escaping () -> Bool = { false },
         onSendSelectionToTerminal: ((SwiftEditCore.TextRange, String) -> Void)? = nil,
+        onRevealInFolderNavigator: (() -> Void)? = nil,
+        onStartDictationHere: (() -> Void)? = nil,
         typography: AppTypography = AppTypography.fallback,
         typographyGeneration: Int = 0,
         lineIndexProvider: ((DocumentID, BufferRevision) -> MarkdownLineIndex?)? = nil,
@@ -107,6 +111,8 @@ extension TextKit2EditorView {
             onViewportMetricsChange: onViewportMetricsChange,
             onEscape: onEscape,
             onSendSelectionToTerminal: onSendSelectionToTerminal,
+            onRevealInFolderNavigator: onRevealInFolderNavigator,
+            onStartDictationHere: onStartDictationHere,
             lineIndexProvider: lineIndexProvider,
             completionProvider: completionProvider
         )
@@ -139,6 +145,8 @@ extension TextKit2EditorView {
                 handler(SwiftEditCore.TextRange(location: nsRange.location, length: nsRange.length), text)
             }
         }
+        textView.onRevealInFolderNavigator = hooks.onRevealInFolderNavigator
+        textView.onStartDictationHere = isEditable ? hooks.onStartDictationHere : nil
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -201,6 +209,8 @@ extension TextKit2EditorView {
             textView.delegate = nil
             textView.onEscape = nil
             textView.onSendSelectionToTerminal = nil
+            textView.onRevealInFolderNavigator = nil
+            textView.onStartDictationHere = nil
             textView.onWordOccurrencesUpdated = nil
             textView.textLayoutManager?.renderingAttributesValidator = nil
         }
@@ -250,6 +260,8 @@ extension TextKit2EditorView {
                 handler(SwiftEditCore.TextRange(location: nsRange.location, length: nsRange.length), text)
             }
         }
+        textView.onRevealInFolderNavigator = hooks.onRevealInFolderNavigator
+        textView.onStartDictationHere = isEditable ? hooks.onStartDictationHere : nil
         textView.isWordOccurrenceHighlightEnabled = isWordOccurrenceHighlightEnabled
         textView.externalWordOccurrenceRanges = highlightProjection.wordOccurrenceRanges
         coordinator.wordOccurrenceRanges = textView.effectiveWordOccurrenceRanges

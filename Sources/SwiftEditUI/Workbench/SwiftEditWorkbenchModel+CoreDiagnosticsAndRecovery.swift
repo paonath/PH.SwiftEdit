@@ -293,6 +293,9 @@ extension SwiftEditWorkbenchModel {
 
         for tab in manifest.tabs {
             if let recovered = try? deps.recoveryStore.loadRecoverySnapshot(for: tab.id) {
+                guard SessionRecoveryEligibility.shouldRestoreRecoveredTab(fileURL: tab.fileURL, text: recovered.text) else {
+                    continue
+                }
                 let session = DocumentSession(
                     id: recovered.id,
                     fileURL: tab.fileURL,
@@ -326,7 +329,10 @@ extension SwiftEditWorkbenchModel {
         }
 
         if !restoredTabs.isEmpty {
-            tabSession = WorkspaceTabSession(tabs: restoredTabs, activeTabID: manifest.activeTabID)
+            let resolvedActiveID = restoredTabs.contains(where: { $0.id == manifest.activeTabID })
+                ? manifest.activeTabID
+                : restoredTabs.first?.id
+            tabSession = WorkspaceTabSession(tabs: restoredTabs, activeTabID: resolvedActiveID)
             sessionsByID = restoredSessions
             savedBaselineByID = restoredBaselines
             for tab in restoredTabs {
@@ -338,18 +344,53 @@ extension SwiftEditWorkbenchModel {
         _ = try? deps.recoveryStore.purgeOrphanedSnapshots(keeping: Set(restoredTabs.map(\.id)))
     }
 
+    /// Persists `session-manifest.json` and eligible `<UUID>.recovery` snapshots while excluding empty/whitespace-only untitled tabs and unlinking cleared untitled snapshots (`REQ-002`, `DATA-005`, `DATA-006`, `SEC-011`).
     func persistRecoveryState() {
         caches.recoveryDebounceTask?.cancel()
-        let manifest = SessionRecoveryManifest(tabs: tabSession.tabs, activeTabID: tabSession.activeTabID)
-        try? deps.recoveryStore.saveManifest(manifest)
+        var eligibleTabs: [TabDescriptor] = []
         for tab in tabSession.tabs {
-            if let session = sessionsByID[tab.id], (session.isDirty || session.fileURL == nil), !session.isBinaryReadOnly {
-                if caches.lastPersistedRecoveryRevisions[tab.id] != session.revision {
-                    if (try? deps.recoveryStore.saveRecoverySnapshot(session.snapshot)) != nil {
-                        caches.lastPersistedRecoveryRevisions[tab.id] = session.revision
-                    }
-                }
+            let session = sessionsByID[tab.id]
+            let fileURL = session?.fileURL ?? tab.fileURL
+            let text = session?.text ?? ""
+            let isBinary = session?.isBinaryReadOnly ?? false
+            if SessionRecoveryEligibility.shouldPersistManifestEntry(
+                fileURL: fileURL,
+                text: text,
+                isBinaryReadOnly: isBinary
+            ) {
+                eligibleTabs.append(tab)
             }
+            persistOrUnlinkRecoverySnapshot(for: tab, session: session, fileURL: fileURL, text: text)
+        }
+        let resolvedActiveID = tabSession.activeTabID.flatMap { activeID in
+            eligibleTabs.contains(where: { $0.id == activeID }) ? activeID : nil
+        } ?? eligibleTabs.last?.id
+        let manifest = SessionRecoveryManifest(tabs: eligibleTabs, activeTabID: resolvedActiveID)
+        try? deps.recoveryStore.saveManifest(manifest)
+    }
+
+    private func persistOrUnlinkRecoverySnapshot(
+        for tab: TabDescriptor,
+        session: DocumentSession?,
+        fileURL: URL?,
+        text: String
+    ) {
+        if let session,
+           SessionRecoveryEligibility.shouldPersistSnapshot(
+               fileURL: fileURL,
+               text: session.text,
+               isDirty: session.isDirty,
+               isBinaryReadOnly: session.isBinaryReadOnly
+           ) {
+            guard caches.lastPersistedRecoveryRevisions[tab.id] != session.revision else { return }
+            if (try? deps.recoveryStore.saveRecoverySnapshot(session.snapshot)) != nil {
+                caches.lastPersistedRecoveryRevisions[tab.id] = session.revision
+            }
+            return
+        }
+        if SessionRecoveryEligibility.isEmptyUntitled(fileURL: fileURL, text: text) {
+            caches.lastPersistedRecoveryRevisions.removeValue(forKey: tab.id)
+            try? deps.recoveryStore.removeRecoverySnapshot(for: tab.id)
         }
     }
 

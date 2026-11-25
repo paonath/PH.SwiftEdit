@@ -16,7 +16,7 @@ public enum AppIcon: String, CaseIterable, Sendable {
     case folder, folderUp, file, fileText, filePlus, fileBinary
     case eye, eyeOff, save, saveAs, duplicate, alignLeft, indent
     case imageOff, warning, error, refresh, typography, download, live, pause
-    case pin, pinOff, diff, sun, moon, monitor, zoomIn, zoomOut, menu
+    case pin, pinOff, diff, sun, moon, monitor, zoomIn, zoomOut, menu, microphone
 }
 
 /// Path builder on the `24×24` icon grid.
@@ -184,6 +184,11 @@ extension AppIcon {
             b.circle(11, 11, 7); b.line([(16, 16), (20.5, 20.5)]); b.line([(8, 11), (14, 11)])
         case .menu:
             b.line([(4, 7), (20, 7)]); b.line([(4, 12), (20, 12)]); b.line([(4, 17), (20, 17)])
+        case .microphone:
+            // Rounded microphone capsule, cradle arc, vertical stand, and horizontal base on the 24x24 grid (`UI-001`, `REQ-031-02`).
+            b.rect(9, 3, 6, 11, r: 3)
+            b.arc(12, 11, 6, start: 0, sweep: 180)
+            b.line([(12, 17), (12, 21)]); b.line([(8, 21), (16, 21)])
         }
         return b
     }

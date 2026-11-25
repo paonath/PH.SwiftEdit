@@ -20,7 +20,44 @@ struct WorkbenchDependencies {
     let savePanelProvider: @MainActor (String) -> URL?
     let openPanelProvider: @MainActor (_ chooseDirectories: Bool, _ prompt: String?) -> URL?
     let clipboardWriter: @MainActor (String) -> Void
+    #if os(macOS)
+    let dictationTrigger: @MainActor (SwiftEditNSTextView) -> Bool
+    #endif
 }
+
+#if os(macOS)
+/// Dispatches native macOS Dictation (`startDictation:`) on an editable `SwiftEditNSTextView` without custom audio capture or entitlements (`REQ-031-02`, `SEC-001`, `SEC-004`, `SEC-012`).
+@MainActor
+enum MacOSDictationDispatcher {
+    private static let startDictationSelector = NSSelectorFromString("startDictation:")
+
+    /// Focuses `textView` in its window and invokes the standard AppKit `startDictation:` responder action, falling back to the system `Edit -> Start Dictation…` menu item.
+    static func startDictation(in textView: SwiftEditNSTextView) -> Bool {
+        guard textView.isEditable else { return false }
+        textView.window?.makeFirstResponder(textView)
+        if NSApp.sendAction(startDictationSelector, to: nil, from: textView) {
+            return true
+        }
+        if let item = locateDictationMenuItem(in: NSApp.mainMenu),
+           let action = item.action {
+            return NSApp.sendAction(action, to: item.target, from: item)
+        }
+        return false
+    }
+
+    private static func locateDictationMenuItem(in mainMenu: NSMenu?) -> NSMenuItem? {
+        guard let mainMenu else { return nil }
+        for topItem in mainMenu.items {
+            if let submenu = topItem.submenu {
+                for item in submenu.items where item.action == startDictationSelector {
+                    return item
+                }
+            }
+        }
+        return nil
+    }
+}
+#endif
 
 #if os(macOS)
 /// Cohesive observable appearance, accessibility, typography, and zoom state owned by `SwiftEditWorkbenchModel` (`UI-001..005`).

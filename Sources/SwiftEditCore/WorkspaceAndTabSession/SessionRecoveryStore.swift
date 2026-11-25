@@ -1,5 +1,36 @@
 import Foundation
 
+/// Pure eligibility predicate excluding empty or whitespace-only untitled tabs (`fileURL == nil`) from `SessionRecovery` persistence and startup restoration while preserving non-empty untitled tabs and disk-backed/pinned files (`REQ-002`, `DATA-005`, `DATA-006`, `SEC-011`).
+public enum SessionRecoveryEligibility: Sendable {
+    /// Returns `true` when `fileURL == nil` and `text` contains only whitespace or newline scalars (or is empty).
+    public static func isEmptyUntitled(fileURL: URL?, text: String) -> Bool {
+        fileURL == nil && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Returns `true` when a tab descriptor should be recorded in `session-manifest.json`.
+    public static func shouldPersistManifestEntry(fileURL: URL?, text: String, isBinaryReadOnly: Bool) -> Bool {
+        !isBinaryReadOnly && !isEmptyUntitled(fileURL: fileURL, text: text)
+    }
+
+    /// Returns `true` when a tab's buffer should be written to `<UUID>.recovery`.
+    public static func shouldPersistSnapshot(
+        fileURL: URL?,
+        text: String,
+        isDirty: Bool,
+        isBinaryReadOnly: Bool
+    ) -> Bool {
+        guard !isBinaryReadOnly, !isEmptyUntitled(fileURL: fileURL, text: text) else {
+            return false
+        }
+        return isDirty || fileURL == nil
+    }
+
+    /// Returns `true` when a recovered snapshot loaded from disk at startup is eligible to reopen as a tab.
+    public static func shouldRestoreRecoveredTab(fileURL: URL?, text: String) -> Bool {
+        !isEmptyUntitled(fileURL: fileURL, text: text)
+    }
+}
+
 /// Serializable `session-manifest.json` payload recording open Notepad++ text tabs, pinned flags, caret offsets, and active tab selection (`DATA-005`).
 public struct SessionRecoveryManifest: Equatable, Codable, Sendable {
     public let tabs: [TabDescriptor]

@@ -68,6 +68,10 @@ final class SwiftEditNSTextView: NSTextView {
     var onEscape: (() -> Bool)?
     /// Context-menu hook invoked by right-click "Send to Terminal" when text is selected.
     var onSendSelectionToTerminal: ((NSRange, String) -> Void)?
+    /// Context-menu hook invoked by right-click "Reveal in Folder Navigator" when available for the active disk-backed document (`REQ-031-01`).
+    var onRevealInFolderNavigator: (() -> Void)?
+    /// Context-menu hook invoked by right-click "Start Dictation Here" when the active document is writable (`REQ-031-02`).
+    var onStartDictationHere: (() -> Void)?
     private(set) var liveWordOccurrenceRanges: [SwiftEditCore.TextRange] = []
     fileprivate var scanState = TextViewScanTrackingState()
 
@@ -79,6 +83,7 @@ final class SwiftEditNSTextView: NSTextView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let selectionBeforeMenu = selectedRange()
         let baseMenu = super.menu(for: event) ?? NSMenu()
+        var customItems: [NSMenuItem] = []
         if selectionBeforeMenu.length > 0, onSendSelectionToTerminal != nil {
             if selectedRange() != selectionBeforeMenu {
                 setSelectedRange(selectionBeforeMenu)
@@ -90,8 +95,31 @@ final class SwiftEditNSTextView: NSTextView {
             )
             item.target = self
             item.representedObject = NSValue(range: selectionBeforeMenu)
+            customItems.append(item)
+        }
+        if onRevealInFolderNavigator != nil {
+            let item = NSMenuItem(
+                title: "Reveal in Folder Navigator",
+                action: #selector(handleRevealInFolderNavigatorMenuAction(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            customItems.append(item)
+        }
+        if isEditable, onStartDictationHere != nil {
+            let item = NSMenuItem(
+                title: "Start Dictation Here",
+                action: #selector(handleStartDictationHereMenuAction(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            customItems.append(item)
+        }
+        if !customItems.isEmpty {
             baseMenu.insertItem(NSMenuItem.separator(), at: 0)
-            baseMenu.insertItem(item, at: 0)
+            for item in customItems.reversed() {
+                baseMenu.insertItem(item, at: 0)
+            }
         }
         return baseMenu
     }
@@ -168,6 +196,15 @@ extension SwiftEditNSTextView {
         let sel = captured?.rangeValue ?? selectedRange()
         guard sel.length > 0 else { return }
         onSendSelectionToTerminal?(sel, textStorage?.string ?? string)
+    }
+
+    @objc fileprivate func handleRevealInFolderNavigatorMenuAction(_ sender: Any?) {
+        onRevealInFolderNavigator?()
+    }
+
+    @objc fileprivate func handleStartDictationHereMenuAction(_ sender: Any?) {
+        guard isEditable else { return }
+        onStartDictationHere?()
     }
 
     func notifyProgrammaticTextOrStyleMutation() {

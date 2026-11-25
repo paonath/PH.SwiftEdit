@@ -84,7 +84,8 @@ public final class SwiftEditWorkbenchModel {
             NSPasteboard.general.setString(text, forType: .string)
         },
         updateFetcher: any HTTPDataFetching = URLSessionHTTPFetcher(),
-        installedTerminalBundleIDsProvider: (@MainActor () -> Set<String>)? = nil
+        installedTerminalBundleIDsProvider: (@MainActor () -> Set<String>)? = nil,
+        dictationTrigger: (@MainActor (NSTextView) -> Bool)? = nil
     ) {
         let nav = DotfileFolderNavigator(fileSystem: fileSystem)
         let resolvedRecentStore: any PreferencesProviding = recentFilesStore
@@ -118,7 +119,13 @@ public final class SwiftEditWorkbenchModel {
             systemDarkDetector: systemDarkDetector,
             savePanelProvider: savePanelProvider,
             openPanelProvider: openPanelProvider,
-            clipboardWriter: clipboardWriter
+            clipboardWriter: clipboardWriter,
+            dictationTrigger: { textView in
+                if let dictationTrigger {
+                    return dictationTrigger(textView)
+                }
+                return MacOSDictationDispatcher.startDictation(in: textView)
+            }
         )
         self.deps = builtDeps
         self.domainControllers = WorkbenchDomainControllers(

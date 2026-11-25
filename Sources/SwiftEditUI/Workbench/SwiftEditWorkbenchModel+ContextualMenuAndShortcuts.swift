@@ -76,13 +76,53 @@ extension SwiftEditWorkbenchModel {
         return currentSelection.upperBound <= session.text.utf16.count
     }
 
+    /// `true` when the active document is writable (not binary read-only, not live log-tail) and eligible for native macOS Dictation (`REQ-031-02`, `SEC-012`).
+    public var canStartDictationHere: Bool {
+        guard activeLogTail == nil,
+              activeBinaryInspection == nil,
+              safetyBanner.canSave,
+              let activeID = tabSession.activeTabID,
+              !logTailOnlyTabIDs.contains(activeID),
+              let session = sessionsByID[activeID],
+              !session.isBinaryReadOnly else {
+            return false
+        }
+        return true
+    }
+
+    /// Focuses the active editable `SwiftEditNSTextView` and dispatches native macOS Dictation (`startDictation:`) via the injected `dictationTrigger` seam (`REQ-031-02`, `SEC-001`, `SEC-004`, `SEC-012`).
+    @discardableResult
+    public func startDictationHere() -> Bool {
+        guard canStartDictationHere,
+              let textView = Self.editableEditorTextView(in: hostWindow?.contentView),
+              textView.isEditable else {
+            return false
+        }
+        textView.window?.makeFirstResponder(textView)
+        requestEditorFocus()
+        let started = deps.dictationTrigger(textView)
+        if !started {
+            statusBannerMessage = "macOS Dictation is unavailable or disabled in System Settings."
+        }
+        return started
+    }
+
     /// Opens the palette for the current selection or caret; returns `false` (key not consumed) on binary/log tabs.
     @discardableResult
     public func presentElementContextualMenu(anchor: CGPoint? = nil) -> Bool {
         guard canPresentElementContextualMenu else { return false }
         headerSubmenu.escapePressed()
         navigatorState = nil
-        elementContextualMenu = ElementContextualMenuState(selection: currentSelection, anchor: anchor)
+        let groups = ElementContextualActionCatalog.groups(
+            hasSelection: currentSelection.length > 0,
+            canRevealInFolderNavigator: canRevealActiveDocumentInFolderNavigator,
+            canStartDictation: canStartDictationHere
+        )
+        elementContextualMenu = ElementContextualMenuState(
+            selection: currentSelection,
+            anchor: anchor,
+            groups: groups
+        )
         return true
     }
 

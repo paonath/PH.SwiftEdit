@@ -77,6 +77,12 @@ extension SwiftEditRootView {
                         onSendSelectionToTerminal: { range, text in
                             model.requestSendSelectionToTerminal(selection: range, sourceText: text)
                         },
+                        onRevealInFolderNavigator: model.canRevealActiveDocumentInFolderNavigator ? {
+                            _ = model.revealActiveDocumentInFolderNavigator()
+                        } : nil,
+                        onStartDictationHere: model.canStartDictationHere ? {
+                            _ = model.startDictationHere()
+                        } : nil,
                         typography: model.typography,
                         typographyGeneration: model.typographyGeneration,
                         lineIndexProvider: { model.lineIndex(for: $0, revision: $1) },

@@ -286,6 +286,67 @@ extension SwiftEditWorkbenchModel {
         isLeftSidebarCollapsed.toggle()
     }
 
+    /// `true` when the active document is disk-backed (`fileURL != nil`) and either the left sidebar is collapsed, no folder is open, or the open folder's canonical path differs from the active document's canonical containing folder (`REQ-031-01`, `SEC-002`, `SEC-003`).
+    public var canRevealActiveDocumentInFolderNavigator: Bool {
+        guard let fileURL = activeDocumentFileURLForReveal else { return false }
+        if isLeftSidebarCollapsed { return true }
+        guard let currentFolder = selectedFolderURL else { return true }
+        let canonicalParent = Self.canonicalDirectoryURL(for: fileURL.deletingLastPathComponent())
+        let canonicalCurrent = Self.canonicalDirectoryURL(for: currentFolder)
+        return canonicalCurrent.path != canonicalParent.path
+    }
+
+    /// Expands the left Folder Navigator, navigates to the active document's containing directory (preserving an ancestor `grantedScopeRootURL` when applicable), refreshes folder entries, and selects the active document (`REQ-031-01`, `SEC-002`, `SEC-003`).
+    @discardableResult
+    public func revealActiveDocumentInFolderNavigator() -> Bool {
+        guard let fileURL = activeDocumentFileURLForReveal else { return false }
+        let parentURL = fileURL.deletingLastPathComponent()
+        let canonicalParent = Self.canonicalDirectoryURL(for: parentURL)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: canonicalParent.path, isDirectory: &isDir),
+              isDir.boolValue,
+              deps.parentPermissionChecker(canonicalParent) else {
+            statusBannerMessage = "Cannot reveal in Folder Navigator: containing folder is missing or unreadable."
+            return false
+        }
+        grantedScopeRootURL = Self.resolvedScopeRoot(preservingAncestor: grantedScopeRootURL, forTargetDirectory: canonicalParent)
+        selectedFolderURL = canonicalParent
+        isLeftSidebarCollapsed = false
+        refreshFolderEntries()
+        selectedSidebarEntryURL = fileURL.standardizedFileURL
+        return true
+    }
+
+    private var activeDocumentFileURLForReveal: URL? {
+        if let binary = activeBinaryInspection {
+            return binary.fileURL
+        }
+        if let activeID = tabSession.activeTabID {
+            if let sessionURL = sessionsByID[activeID]?.fileURL {
+                return sessionURL
+            }
+            return tabSession.tabs.first(where: { $0.id == activeID })?.fileURL
+        }
+        return nil
+    }
+
+    /// Resolves `url` through symbolic links and returns its canonical standardized directory URL (`SEC-002`, `SEC-003`).
+    static func canonicalDirectoryURL(for url: URL) -> URL {
+        url.resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    /// Preserves `existingScopeRoot` when `canonicalTarget` is equal to or nested inside its canonical path so `...` parent navigation remains intact up to the workspace root (`REQ-031-01`, `SEC-002`).
+    static func resolvedScopeRoot(preservingAncestor existingScopeRoot: URL?, forTargetDirectory canonicalTarget: URL) -> URL {
+        guard let existingScopeRoot else { return canonicalTarget }
+        let canonicalScope = canonicalDirectoryURL(for: existingScopeRoot)
+        let scopePath = canonicalScope.path
+        let targetPath = canonicalTarget.path
+        if targetPath == scopePath || targetPath.hasPrefix(scopePath.hasSuffix("/") ? scopePath : scopePath + "/") {
+            return canonicalScope
+        }
+        return canonicalTarget
+    }
+
     /// Creates a new folder inside `parentURL` (or `selectedFolderURL`) within the active workspace scope (`BC-012`, `SEC-003`).
     @discardableResult
     public func sidebarCreateFolder(named name: String, in parentURL: URL? = nil) -> URL? {

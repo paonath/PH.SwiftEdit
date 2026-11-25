@@ -9,6 +9,10 @@ public enum ElementContextualActionKind: Hashable, Sendable {
     case sendToTerminal
     /// Workbench action (not a text edit): duplicate the active document next to itself (`REQ-021-05`).
     case duplicateDocument
+    /// Workbench action (not a text edit): expand the left Folder Navigator, navigate to the active document's containing directory, and select the file (`REQ-031-01`).
+    case revealInFolderNavigator
+    /// Workbench action (not a text edit): focus the active writable editor and dispatch native macOS Dictation (`startDictation:`) (`REQ-031-02`).
+    case startDictationHere
 }
 
 /// Sanitized selection payload ready to be written into an embedded PTY without automatic execution (`CWE-78`, `CWE-150`, `CWE-400`).
@@ -175,12 +179,41 @@ public enum ElementContextualActionCatalog {
         requiresSelection: true
     )
 
+    /// Action descriptor for duplicating the active document (`REQ-021-05`).
+    public static let duplicateDocumentAction = ElementContextualAction(
+        id: "document.duplicate",
+        title: "Duplicate Document",
+        preview: "name copy",
+        iconName: "duplicate",
+        kind: .duplicateDocument
+    )
+
+    /// Action descriptor for revealing the active disk-backed document in the left Folder Navigator (`REQ-031-01`).
+    public static let revealInFolderNavigatorAction = ElementContextualAction(
+        id: "document.revealInFolderNavigator",
+        title: "Reveal in Folder Navigator",
+        preview: "sidebar",
+        iconName: "folder",
+        kind: .revealInFolderNavigator
+    )
+
+    /// Action descriptor for starting native macOS Dictation at the current editor caret (`REQ-031-02`).
+    public static let startDictationHereAction = ElementContextualAction(
+        id: "document.startDictationHere",
+        title: "Start Dictation Here",
+        preview: "macOS",
+        iconName: "microphone",
+        kind: .startDictationHere
+    )
+
     public static let documentGroup = ElementContextualActionGroup(
         id: "document",
         title: "Document",
         iconName: "file",
         actions: [
-            ElementContextualAction(id: "document.duplicate", title: "Duplicate Document", preview: "name copy", iconName: "duplicate", kind: .duplicateDocument),
+            duplicateDocumentAction,
+            revealInFolderNavigatorAction,
+            startDictationHereAction,
         ],
         requiresSelection: false
     )
@@ -188,9 +221,36 @@ public enum ElementContextualActionCatalog {
     /// All groups in display order. Append new groups here to extend the menu.
     public static let groups: [ElementContextualActionGroup] = [surroundGroup, terminalGroup, documentGroup]
 
-    /// Groups available for the current caret: selection-only groups disappear when nothing is selected (`REQ-021-05`).
-    public static func groups(hasSelection: Bool) -> [ElementContextualActionGroup] {
-        groups.filter { hasSelection || !$0.requiresSelection }
+    /// Groups available for the current caret: selection-only groups disappear when nothing is selected, and conditional document actions are filtered by capability flags (`REQ-021-05`, `REQ-031-01`, `REQ-031-02`).
+    public static func groups(
+        hasSelection: Bool,
+        canRevealInFolderNavigator: Bool = false,
+        canStartDictation: Bool = false
+    ) -> [ElementContextualActionGroup] {
+        var resolved: [ElementContextualActionGroup] = []
+        for group in groups where hasSelection || !group.requiresSelection {
+            if group.id == documentGroup.id {
+                var docActions: [ElementContextualAction] = [duplicateDocumentAction]
+                if canRevealInFolderNavigator {
+                    docActions.append(revealInFolderNavigatorAction)
+                }
+                if canStartDictation {
+                    docActions.append(startDictationHereAction)
+                }
+                resolved.append(
+                    ElementContextualActionGroup(
+                        id: group.id,
+                        title: group.title,
+                        iconName: group.iconName,
+                        actions: docActions,
+                        requiresSelection: group.requiresSelection
+                    )
+                )
+            } else {
+                resolved.append(group)
+            }
+        }
+        return resolved
     }
 
     /// Computes the edit for `kind` over `selection`, or `nil` when it does not apply.
@@ -206,7 +266,7 @@ public enum ElementContextualActionCatalog {
         switch kind {
         case .surround(let style):
             return surround(style, in: snapshot.text, range: scalarStart..<scalarEnd, selection: selection)
-        case .sendToTerminal, .duplicateDocument:
+        case .sendToTerminal, .duplicateDocument, .revealInFolderNavigator, .startDictationHere:
             return nil
         }
     }

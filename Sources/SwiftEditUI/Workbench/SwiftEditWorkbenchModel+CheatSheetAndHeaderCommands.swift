@@ -111,6 +111,12 @@ extension SwiftEditWorkbenchModel {
         if case .duplicateDocument = action.kind {
             return duplicateActiveDocument()
         }
+        if case .revealInFolderNavigator = action.kind {
+            return revealActiveDocumentInFolderNavigator()
+        }
+        if case .startDictationHere = action.kind {
+            return startDictationHere()
+        }
         guard activeLogTail == nil, safetyBanner.canSave,
               let activeID = tabSession.activeTabID, logTailOnlyTabIDs.contains(activeID) == false,
               var session = sessionsByID[activeID],
