@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] - 2026-11-25 UTC
+Branch: main | Spec: 029-yaml-outline-empty-line-bounds-fix
+
+### Fixed
+- Fixed `EXC_BREAKPOINT (SIGTRAP)` (`Index out of bounds`) in `YAMLOutlineEngine.outline(index:)` when opening Document Navigator (`Option+\`) on `.yml`/`.yaml` files containing blank lines across `LF`, `CRLF`, or `CR` endings (`YAMLOutlineNavigatorTests`).
+
+### Security
+- Added fail-closed UTF-16 slice-bounds guards in `YAMLLineTokenizer` (`keyEnd(_:from:end:)`, `quotedEnd(_:from:end:)`, and `inspectStructure(line:indent:)`) to prevent out-of-bounds traps (`CWE-125`, `CWE-129`, `YAMLLineTokenizerTests`).
+
+## [Unreleased] - 2026-11-25 UTC
 Branch: main | Spec: 028-tab-close-bulk-actions-zoom-preview-diff-and-gap-analysis
 
 ### Added

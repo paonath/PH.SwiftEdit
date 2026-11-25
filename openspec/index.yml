@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "029-yaml-outline-empty-line-bounds-fix"
+    status: "implemented"
+    date: "2026-11-25"
+    capabilities: ["yaml-native-support-frontmatter-properties-and-perf"]
+    path: "openspec/changes/archive/2026-11-25-029-yaml-outline-empty-line-bounds-fix"
+    summary: "YAML Outline Empty-Line Crash Fix and Tokenizer Bounds Hardening"
   - id: "028-tab-close-bulk-actions-zoom-preview-diff-and-gap-analysis"
     status: "implemented"
     date: "2026-11-25"
