@@ -5,11 +5,11 @@ always_read:
   - "openspec/Constitution.md"
 specs:
   - id: "028-tab-close-bulk-actions-zoom-preview-diff-and-gap-analysis"
-    status: "draft"
+    status: "implemented"
     date: "2026-11-25"
     capabilities: ["tab-close-bulk-actions-zoom-preview-diff-and-gap-analysis"]
-    path: "openspec/changes/028-tab-close-bulk-actions-zoom-preview-diff-and-gap-analysis"
-    summary: "Clean/Bulk Tab Ops, Preview/Diff Zoom, Code Copy, Native Mermaid/Markmap, Disk Watch, Folder Search, JSON & Line Tools"
+    path: "openspec/changes/archive/2026-11-25-028-tab-close-bulk-actions-zoom-preview-diff-and-gap-analysis"
+    summary: "Clean & Bulk Tab Operations, Zoomed Preview & Diff, Code Copy, Native Mermaid/Markmap, Disk Watcher, Folder Search, J..."
   - id: "027-tokensave-zero-cycles-complexity-and-coverage-convergence"
     status: "implemented"
     date: "2026-11-24"

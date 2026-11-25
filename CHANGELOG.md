@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] - 2026-11-25 UTC
+Branch: main | Spec: 028-tab-close-bulk-actions-zoom-preview-diff-and-gap-analysis
+
+### Added
+- Added right-click bulk tab context menu actions (*Close Tabs to the Right*, *Close Other Tabs*, *Close All Unpinned Tabs*, *Close All Tabs*), middle-click tab close, `Shift+Cmd+T` *Reopen Closed Tab* (`<= 20` MRU), and tab cycling shortcuts (`Shift+Cmd+]`/`[`, `Ctrl+Tab`/`Ctrl+Shift+Tab`, `Cmd+1..9`) via `WorkbenchBulkCloseAndHistoryController` and `WorkspaceTabSession` (`TabBulkCloseAndHistoryTests`).
+- Added mandatory top-right **Copy to Clipboard** buttons (`>= 24 pt` target) on all fenced code blocks, structured line-1 YAML frontmatter cards, and native Zero-WebKit SwiftUI `Canvas` diagram rendering (`DiagramSupport/` + `MarkdownDiagramPreviewView`) for `markmap`/`mindmap` and core `mermaid` (`flowchart`/`graph`, `sequenceDiagram`, `stateDiagram`/`stateDiagram-v2`) with `Diagram / Code` toggle (`PreviewZoomCopyAndNativeDiagramsTests`).
+- Added Side-by-Side Diff View `lhsLineNumber`/`rhsLineNumber` gutters, `F7`/`Shift+F7` hunk navigation, and *Only Differences* (`±2` context) filtering (`DiffPaneCoordinator`, `DiffZoomLineNumbersAndHunkNavTests`).
+- Added confined external disk file monitoring (`ExternalFileChangeMonitor`, `O_EVTONLY | O_CLOEXEC`) with automatic clean-tab reload, non-destructive *Reload from Disk / Keep Mine / Compare* conflict banner on dirty tabs, and manual `File → Revert to Saved` (`ExternalFileChangeMonitorTests`).
+- Added `Cmd+T` Quick Open (`<= 10,000` files) and `Ctrl+Shift+F` literal multi-file Find in Folder (`<= 5,000` matches, `WorkspaceFolderSearchEngine`, `QuickOpenAndFolderSearchView`), plus Whole-Word (`Ww`), `1 of N` active match counter, *In Selection* (`In Sel`), and `Opt+Cmd+E` *Use Selection for Find* (`WorkspaceQuickOpenAndEnhancedSearchTests`).
+- Added atomic single-revision line commands (`LineEditCommands`: Move Line Up/Down, Delete Line, Join Lines, Sort Lines Asc/Desc, Trim Trailing Whitespace + `trimTrailingWhitespaceOnSave` setting) and native `.json`/`.jsonl` support (`DocumentLanguage.json`, `JSONSyntaxHighlighter`, `JSONStructureLinter`, `JSONFormatter`, `LineCommandsAndNativeJSONTests`).
+- Added non-destructive Log Tail severity pills (`All`, `Info+`, `Warn+`, `Error`) and `<= 256`-char substring filtering (`LogTail`, `LogTailPanelView`), status-bar selection/Markdown word counters, interactive `UTF-8`/`UTF-16` Encoding menu, confined `.git/HEAD` branch badge (`GitHeadBranchReader`), and `docs/analysis/app-gap-analysis.md` with synchronized `docs/guide/` chapters (`LogFiltersStatusBarGitAndGapAnalysisTests`, `HelpDocumentationTests`).
+
+### Changed
+- Changed `newUntitledTab()` to start clean (`isDirty: false`) and added `DocumentSession.reconcileDirtyState(against:)` so untouched or baseline-reverted tabs (matching `text` and `LineEnding`) close immediately without confirmation.
+- Scaled `MarkdownNativePreviewView` (including diagrams and frontmatter cards), `compareHeader`, and `diffPanel` (`.editor` role, `>= 24 pt` targets) linearly across `50%..300%` editor zoom (`ZoomedChromeMetrics`).
+
+### Security
+- Enforced Zero-WebKit / Zero-Subprocess isolation (`SEC-004`) across native `Canvas` diagram rendering (`<= 256` nodes, `<= 512` edges, `maxDepth <= 12`, `<= 64 KiB`, iterative cycle-breaking `CWE-674`) and `.git/HEAD` reading (`<= 256` bytes, scalar allowlisting).
+- Enforced canonical symlink confinement (`resolvingSymlinksInPath`, `SEC-003`), zero-regex literal search (`CWE-1333`), iterative JSON depth capping (`maxDepth = 128`, `CWE-674`), immediate `.recovery` snapshot unlinking on bulk close (`SEC-007`, `SEC-011`), and dirty-buffer preservation across external disk conflicts and `Reopen with Encoding` (`DATA-006`).
+
 ## [Unreleased] - 2026-11-24 UTC
 Branch: main | Spec: 027-tokensave-zero-cycles-complexity-and-coverage-convergence
 
