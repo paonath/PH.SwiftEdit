@@ -28,7 +28,7 @@ struct UIRenderingCoverageTests {
         window.orderOut(nil)
     }
 
-    @Test("Render all SwiftEditUI sheets, panels, overlays, and views in Light and Black modes without crashing")
+    @Test("Render all SwiftEditUI sheets, panels, overlays, and views in Light and Black modes without crashing", .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func renderAllUIViewsInLightAndBlack() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ui-cov-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -216,7 +216,7 @@ struct UIRenderingCoverageTests {
         #expect(model.tabSession.tabs.count >= 1)
     }
 
-    @Test("Render SwiftEditRootView across active workspace states (sidebar, preview, diff, find, log tail, binary, distraction-free)")
+    @Test("Render SwiftEditRootView across active workspace states (sidebar, preview, diff, find, log tail, binary, distraction-free)", .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func renderSwiftEditRootViewActiveStates() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("root-cov-\(UUID().uuidString)")
         let sub = dir.appendingPathComponent("nested", isDirectory: true)

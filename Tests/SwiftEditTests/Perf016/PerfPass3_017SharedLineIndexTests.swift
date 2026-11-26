@@ -8,7 +8,7 @@ import Testing
 @MainActor
 struct PerfPass3_017SharedLineIndexTests {
 
-    @Test("P10 pass 3: editor and navigator share one per-revision line index instead of building two")
+    @Test("P10 pass 3: editor and navigator share one per-revision line index instead of building two", .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func p10SharedIndexBeatsDuplicateBuilds() {
         // GIVEN a 20k-line tab
         let (model, dir) = YAMLWorkbenchHarness.makeModel(opening: [("big.md", PerfBench016.markdown)])

@@ -21,7 +21,7 @@ struct PerfExtreme3CyclesTests {
         #endif
     }
 
-    @Test("Cycle 1-3: Markdown lint/outline, YAML lint/outline, and index construction stay fast and preserve all 016+017 goldens")
+    @Test("Cycle 1-3: Markdown lint/outline, YAML lint/outline, and index construction stay fast and preserve all 016+017 goldens", .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func allThreeOptimizationCyclesBenchmarkAndGolden() async {
         // GIVEN 20k-line Markdown and YAML fixtures plus pre-computed indices
         let mdSnap = DocumentSession(text: PerfBench016.markdown).snapshot

@@ -6,7 +6,7 @@ import Testing
 @Suite("PerfPass2SharedTextIndexTests", .serialized)
 struct PerfPass2SharedTextIndexTests {
 
-    @Test("P11 pass 2: caret moves answered from the per-revision index are at least 20% faster than full rescans")
+    @Test("P11 pass 2: caret moves answered from the per-revision index are at least 20% faster than full rescans", .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func p11CaretMovesUseSharedIndex() {
         // GIVEN the 20k-line Markdown snapshot, its per-revision index, and 5 caret positions
         let snapshot = DocumentSession(text: PerfBench016.markdown).snapshot

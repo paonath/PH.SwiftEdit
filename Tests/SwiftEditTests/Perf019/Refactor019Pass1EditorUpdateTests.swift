@@ -43,7 +43,7 @@ struct Refactor019Pass1EditorUpdateTests {
         #expect(textView.string.hasSuffix("new 4"))
     }
 
-    @Test("P-R1 [perf]: an appended line replaces only the changed range and is at least 20% faster than a full replacement")
+    @Test("P-R1 [perf]: an appended line replaces only the changed range and is at least 20% faster than a full replacement", .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func pMinimalRangeUpdateIsFaster() {
         // GIVEN a hosted 10k-line tail scrolled to the end
         let (window, textView, coordinator) = Self.makeHostedEditor(editable: false)

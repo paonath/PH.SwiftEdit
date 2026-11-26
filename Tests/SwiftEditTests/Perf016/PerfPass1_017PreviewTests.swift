@@ -13,7 +13,7 @@ struct PerfPass1_017PreviewTests {
         return (model, dir)
     }
 
-    @Test("P10 pass 1: keystrokes with the preview open no longer project the whole document on the main actor")
+    @Test("P10 pass 1: keystrokes with the preview open no longer project the whole document on the main actor", .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func p10PreviewProjectionLeavesMainActor() {
         // GIVEN a 20k-line Markdown tab with the preview open
         let (model, dir) = Self.openLarge()

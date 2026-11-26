@@ -4,6 +4,12 @@
 always_read:
   - "openspec/Constitution.md"
 specs:
+  - id: "042-lean-release-pipeline-functional-tests"
+    status: "implemented"
+    date: "2026-11-26"
+    capabilities: ["release-pipeline-and-test-gating"]
+    path: "openspec/specs/release-pipeline-and-test-gating/spec.md"
+    summary: "Lean release pipeline: gate E2E UI & timing stress tests in release.yml, keep functional/security tests & Release opts"
   - id: "041-complexity-pass-10-codec-fences-and-remaining-scripts"
     status: "implemented"
     date: "2026-11-25"

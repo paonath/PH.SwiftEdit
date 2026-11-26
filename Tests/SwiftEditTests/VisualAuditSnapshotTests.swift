@@ -69,7 +69,7 @@ struct VisualAuditSnapshotTests {
         window.orderOut(nil)
     }
 
-    @Test("Visual audit: render workbench (editor, properties, preview, occurrences) in Light and Black", .enabled(if: outputDirectory != nil))
+    @Test("Visual audit: render workbench (editor, properties, preview, occurrences) in Light and Black", .enabled(if: outputDirectory != nil && ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func renderWorkbenchSnapshots() throws {
         let out = try #require(Self.outputDirectory)
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)

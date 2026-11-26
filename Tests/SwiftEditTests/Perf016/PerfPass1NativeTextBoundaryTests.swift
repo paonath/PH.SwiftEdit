@@ -12,7 +12,7 @@ struct PerfPass1NativeTextBoundaryTests {
         text.utf8.withContiguousStorageIfAvailable { _ in true } ?? false
     }
 
-    @Test("P11 pass 1: normalizing TextKit's bridged buffer at the boundary is at least 20% faster than storing it bridged")
+    @Test("P11 pass 1: normalizing TextKit's bridged buffer at the boundary is at least 20% faster than storing it bridged", .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func p11NativeBoundaryBeatsBridgedStorage() throws {
         // GIVEN the 20k-line Markdown buffer as TextKit hands it over (NSString-bridged) and a session at the previous revision
         let (_, bridged) = PerfBench016.bridgedFromTextView(PerfBench016.markdown + "x")

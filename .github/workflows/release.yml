@@ -28,8 +28,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-${{ hashFiles('Package.resolved', 'Package.swift') }}-
 
-      - name: Run tests
-        run: swift test --parallel
+      - name: Run functional tests (skip E2E UI & timing stress)
+        env:
+          SWIFTEDIT_RELEASE_PIPELINE: "1"
+        run: swift test --no-parallel
 
       - name: Import Developer ID certificate
         env:
@@ -122,3 +124,7 @@ jobs:
               "dist/${ARCHIVE_NAME}.zip.sha256" \
               --generate-notes
           fi
+
+      - name: Clean temporary build artifacts
+        if: always()
+        run: rm -rf .tmp

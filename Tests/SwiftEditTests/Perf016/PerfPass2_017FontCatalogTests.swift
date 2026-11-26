@@ -8,7 +8,7 @@ import Testing
 @MainActor
 struct PerfPass2_017FontCatalogTests {
 
-    @Test("P10 pass 2: opening Settings reads a prewarmed family list instead of enumerating fonts on the main actor")
+    @Test("P10 pass 2: opening Settings reads a prewarmed family list instead of enumerating fonts on the main actor", .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func p10PrewarmedCatalogIsFaster() async {
         // GIVEN the shared family cache prewarmed off the main actor
         await SystemFontFamilyCache.shared.prewarm()

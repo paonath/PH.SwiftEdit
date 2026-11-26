@@ -16,7 +16,7 @@ struct Refactor019Pass3LintCacheTests {
         return (model, dir)
     }
 
-    @Test("P-R3 [perf]: per-render lint reads (underlines, gutter severities, hover details) are at least 20% faster")
+    @Test("P-R3 [perf]: per-render lint reads (underlines, gutter severities, hover details) are at least 20% faster", .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func pPerRenderLintReadsAreCached() async {
         // GIVEN a tab with ~1000 diagnostics
         let (model, dir) = await Self.modelWithManyDiagnostics()

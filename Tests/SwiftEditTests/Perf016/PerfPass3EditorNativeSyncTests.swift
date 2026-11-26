@@ -19,7 +19,7 @@ struct PerfPass3EditorNativeSyncTests {
         return (textView, coordinator, id)
     }
 
-    @Test("P11 pass 3: the editor builds its line index and checks model sync from native text at least 20% faster than via textView.string")
+    @Test("P11 pass 3: the editor builds its line index and checks model sync from native text at least 20% faster than via textView.string", .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
     func p11NativeEditorSyncBeatsBridging() {
         // GIVEN a hosted 20k-line editor and the model's native text for the same revision
         let native = PerfBench016.markdown

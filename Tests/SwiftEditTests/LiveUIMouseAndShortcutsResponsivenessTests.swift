@@ -6,7 +6,7 @@ import Testing
 @testable import SwiftEditCore
 @testable import SwiftEditUI
 
-@Suite("LiveUIMouseAndShortcutsResponsivenessTests", .serialized)
+@Suite("LiveUIMouseAndShortcutsResponsivenessTests", .serialized, .enabled(if: ReleasePipelineTestGate.shouldRunE2EUIAndStressTests))
 @MainActor
 struct LiveUIMouseAndShortcutsResponsivenessTests {
 
