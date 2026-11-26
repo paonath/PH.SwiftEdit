@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.1.9] - 2026-11-26 UTC
+Branch: main | Spec: 042-lean-release-pipeline-functional-tests
+
+### Added
+- Added `ReleasePipelineTestGate` and `ReleasePipelineTestGateTests` (`Tests/SwiftEditTests/ReleasePipelineTestGate.swift`) to gate E2E UI window tests and timing stress benchmarks when `SWIFTEDIT_RELEASE_PIPELINE=1` is set, while enforcing that all functional, golden, architecture fitness, and `[Security]` suites remain ungated.
+
+### Changed
+- Updated `.github/workflows/release.yml` to run `SWIFTEDIT_RELEASE_PIPELINE=1 swift test --no-parallel`, preserve Release bundle optimizations (`wholemodule`, `-Osize`, `GCC_OPTIMIZATION_LEVEL=s`, `DEAD_CODE_STRIPPING=YES`, `LLVM_LTO=YES_THIN`), and clean `.tmp` artifacts (`if: always()`), while keeping `.github/workflows/test.yml` running the full parallel suite (`openspec/specs/release-pipeline-and-test-gating/spec.md`).
+- Bumped application version to `0.1.9` in `version.json` and synchronized `XcodeApp/Info.plist`.
+
 ## [Unreleased] - 2026-11-25 UTC
 Branch: main | Commit: beb2963
 
